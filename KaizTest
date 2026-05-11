@@ -42,7 +42,7 @@ getgenv().KaizAntiAFK = player.Idled:Connect(function()
 
 end)
 
--- movement anti afk backup
+-- jump anti afk backup
 if not getgenv().KaizMoveLoop then
 
     getgenv().KaizMoveLoop = true
@@ -51,23 +51,17 @@ if not getgenv().KaizMoveLoop then
 
         while getgenv().KaizMoveLoop do
 
-            task.wait(20)
+            task.wait(120)
 
             pcall(function()
 
                 local char = player.Character or player.CharacterAdded:Wait()
-                local hrp = char:FindFirstChild("HumanoidRootPart")
+                local humanoid = char:FindFirstChildOfClass("Humanoid")
 
-                if hrp then
-
-                    local old = hrp.CFrame
-
-                    hrp.CFrame = old + Vector3.new(0.05, 0, 0)
-
-                    task.wait(0.1)
-
-                    hrp.CFrame = old
+                if humanoid then
+                    humanoid.Jump = true
                 end
+
             end)
         end
     end)
