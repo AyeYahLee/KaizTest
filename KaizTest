@@ -1,0 +1,653 @@
+-- ==========================================
+-- LATEST KAIZ CUSTOM HUB | MOBILE-OPTIMIZED EDITION | CELESTIAL + ANCIENT DUPE FARM LATEST
+-- ==========================================
+local Players = game:GetService("Players")
+local CoreGui = game:GetService("CoreGui")
+local TweenService = game:GetService("TweenService")
+local UIS = game:GetService("UserInputService")
+local player = Players.LocalPlayer
+local zonesFold = workspace:WaitForChild("Zones")
+
+-- Determine safe GUI parent
+local targetGui = pcall(function() return CoreGui.Name end) and CoreGui or player:WaitForChild("PlayerGui")
+if targetGui:FindFirstChild("KaizCustomUI") then
+    targetGui.KaizCustomUI:Destroy()
+end
+
+-- Globals
+getgenv().Farming = false
+getgenv().Selling = false
+getgenv().PositionCycle = false
+getgenv().ChosenZone = zonesFold:FindFirstChild("Zone1") 
+getgenv().MaxPrice = 0
+getgenv().InputBurst = 20 
+
+local function parseValue(str)
+    local suffixes = { K = 1e3, M = 1e6, B = 1e9, T = 1e12, Q = 1e15 }
+    local num, suffix = str:match("^([%d%.]+)([A-Za-z]*)")
+    if not num then return 0 end
+    num = tonumber(num) or 0
+    if suffixes[suffix:upper()] then
+        return num * suffixes[suffix:upper()]
+    end
+    return num
+end
+
+local function getPromptPosition(prompt)
+    if prompt.Parent then
+        if prompt.Parent:IsA("BasePart") then return prompt.Parent.Position
+        elseif prompt.Parent:IsA("Model") and prompt.Parent.PrimaryPart then return prompt.Parent.PrimaryPart.Position
+        elseif prompt.Parent:IsA("Attachment") then return prompt.Parent.WorldPosition end
+    end
+    return nil
+end
+
+local function FireNearestPrompt()
+    local char = player.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+    
+    local hrp = char.HumanoidRootPart
+    local nearestPrompt, shortestDist = nil, 15 
+    
+    for _, prompt in ipairs(workspace:GetDescendants()) do
+        if prompt:IsA("ProximityPrompt") then
+            local promptPos = getPromptPosition(prompt)
+            if promptPos and (promptPos - hrp.Position).Magnitude <= shortestDist then
+                shortestDist = (promptPos - hrp.Position).Magnitude
+                nearestPrompt = prompt
+            end
+        end
+    end
+    
+    if nearestPrompt then
+        local burstCount = tonumber(getgenv().InputBurst) or 1
+        for i = 1, burstCount do
+            task.spawn(function()
+                fireproximityprompt(nearestPrompt)
+            end)
+        end
+    end
+end
+
+-- ==========================================
+-- CUSTOM UI FRAMEWORK (NO EXTERNAL LIBS)
+-- ==========================================
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "KaizCustomUI"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = targetGui
+
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Size = UDim2.new(0, 400, 0, 300)
+MainFrame.Position = UDim2.new(0.5, -200, 0.5, -150)
+MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+MainFrame.BorderSizePixel = 0
+MainFrame.Parent = ScreenGui
+MainFrame.ClipsDescendants = true
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 10)
+
+local TopBar = Instance.new("Frame")
+TopBar.Size = UDim2.new(1, 0, 0, 40)
+TopBar.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+TopBar.Parent = MainFrame
+Instance.new("UICorner", TopBar).CornerRadius = UDim.new(0, 10)
+
+-- Fix bottom corners of topbar to connect smoothly to main body
+local TopBarFix = Instance.new("Frame")
+TopBarFix.Size = UDim2.new(1, 0, 0, 10)
+TopBarFix.Position = UDim2.new(0, 0, 1, -10)
+TopBarFix.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+TopBarFix.BorderSizePixel = 0
+TopBarFix.Parent = TopBar
+
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, -20, 1, 0)
+Title.Position = UDim2.new(0, 20, 0, 0)
+Title.BackgroundTransparency = 1
+Title.Text = "Kaiz Hub | Pure UI"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 16
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Parent = TopBar
+
+local function MakeDraggable(topbar, object)
+
+	object.Active = true
+	topbar.Active = true
+
+	local dragging = false
+	local dragStart
+	local startPos
+	local dragInput
+
+	topbar.InputBegan:Connect(function(input)
+
+		if input.UserInputType == Enum.UserInputType.Touch
+		or input.UserInputType == Enum.UserInputType.MouseButton1 then
+
+			dragging = true
+			dragStart = input.Position
+			startPos = object.Position
+			dragInput = input
+		end
+	end)
+
+	UIS.InputChanged:Connect(function(input)
+
+		if dragging and input == dragInput then
+
+			local delta = input.Position - dragStart
+
+			object.Position = UDim2.new(
+				startPos.X.Scale,
+				startPos.X.Offset + delta.X,
+				startPos.Y.Scale,
+				startPos.Y.Offset + delta.Y
+			)
+		end
+	end)
+
+	UIS.InputEnded:Connect(function(input)
+
+		if input == dragInput then
+			dragging = false
+		end
+	end)
+end
+MakeDraggable(TopBar, MainFrame)
+
+local TabContainer = Instance.new("Frame")
+TabContainer.Size = UDim2.new(0, 100, 1, -40)
+TabContainer.Position = UDim2.new(0, 0, 0, 40)
+TabContainer.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+TabContainer.BorderSizePixel = 0
+TabContainer.Parent = MainFrame
+
+local TabListLayout = Instance.new("UIListLayout")
+TabListLayout.Parent = TabContainer
+TabListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+local ContentContainer = Instance.new("Frame")
+ContentContainer.Size = UDim2.new(1, -100, 1, -40)
+ContentContainer.Position = UDim2.new(0, 100, 0, 40)
+ContentContainer.BackgroundTransparency = 1
+ContentContainer.Parent = MainFrame
+
+-- MINIMIZE BUTTON HERE
+local MinimizeBtn = Instance.new("TextButton")
+MinimizeBtn.Size = UDim2.new(0, 30, 0, 30)
+MinimizeBtn.Position = UDim2.new(1, -35, 0, 5)
+MinimizeBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
+MinimizeBtn.Text = "-"
+MinimizeBtn.TextColor3 = Color3.fromRGB(255,255,255)
+MinimizeBtn.Font = Enum.Font.GothamBold
+MinimizeBtn.TextSize = 18
+MinimizeBtn.Parent = TopBar
+Instance.new("UICorner", MinimizeBtn).CornerRadius = UDim.new(1,0)
+
+local minimized = false
+local originalSize = MainFrame.Size
+
+MinimizeBtn.MouseButton1Click:Connect(function()
+	minimized = not minimized
+	
+	if minimized then
+		ContentContainer.Visible = false
+		TabContainer.Visible = false
+		
+		TweenService:Create(
+			MainFrame,
+			TweenInfo.new(0.25),
+			{Size = UDim2.new(0, 400, 0, 40)}
+		):Play()
+		
+		MinimizeBtn.Text = "+"
+	else
+		ContentContainer.Visible = true
+		TabContainer.Visible = true
+		
+		TweenService:Create(
+			MainFrame,
+			TweenInfo.new(0.25),
+			{Size = originalSize}
+		):Play()
+		
+		MinimizeBtn.Text = "-"
+	end
+end)
+
+local activeTabButton = nil
+local activeContent = nil
+
+local function CreateTab(name)
+    local TabBtn = Instance.new("TextButton")
+    TabBtn.Size = UDim2.new(1, 0, 0, 35)
+    TabBtn.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+    TabBtn.BorderSizePixel = 0
+    TabBtn.Text = name
+    TabBtn.TextColor3 = Color3.fromRGB(150, 150, 150)
+    TabBtn.Font = Enum.Font.GothamSemibold
+    TabBtn.TextSize = 14
+    TabBtn.Parent = TabContainer
+
+    local ContentScroll = Instance.new("ScrollingFrame")
+    ContentScroll.Size = UDim2.new(1, 0, 1, 0)
+    ContentScroll.BackgroundTransparency = 1
+    ContentScroll.BorderSizePixel = 0
+    ContentScroll.ScrollBarThickness = 4
+    ContentScroll.Visible = false
+    ContentScroll.Parent = ContentContainer
+
+    local UIList = Instance.new("UIListLayout")
+    UIList.Padding = UDim.new(0, 8)
+    UIList.SortOrder = Enum.SortOrder.LayoutOrder
+    UIList.Parent = ContentScroll
+    
+    local UIPadding = Instance.new("UIPadding")
+    UIPadding.PaddingTop = UDim.new(0, 10)
+    UIPadding.PaddingLeft = UDim.new(0, 10)
+    UIPadding.PaddingRight = UDim.new(0, 10)
+    UIPadding.Parent = ContentScroll
+
+    UIList:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+        ContentScroll.CanvasSize = UDim2.new(0, 0, 0, UIList.AbsoluteContentSize.Y + 20)
+    end)
+
+    TabBtn.MouseButton1Click:Connect(function()
+        if activeTabButton then
+            TweenService:Create(activeTabButton, TweenInfo.new(0.2), {TextColor3 = Color3.fromRGB(150, 150, 150)}):Play()
+            activeContent.Visible = false
+        end
+        TweenService:Create(TabBtn, TweenInfo.new(0.2), {TextColor3 = Color3.fromRGB(255, 255, 255)}):Play()
+        ContentScroll.Visible = true
+        activeTabButton = TabBtn
+        activeContent = ContentScroll
+    end)
+
+    if not activeTabButton then
+        TabBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        ContentScroll.Visible = true
+        activeTabButton = TabBtn
+        activeContent = ContentScroll
+    end
+
+    local Elements = {}
+    
+    function Elements:AddToggle(text, default, callback)
+        local state = default
+        local ToggleFrame = Instance.new("Frame")
+        ToggleFrame.Size = UDim2.new(1, 0, 0, 35)
+        ToggleFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+        ToggleFrame.Parent = ContentScroll
+        Instance.new("UICorner", ToggleFrame).CornerRadius = UDim.new(0, 6)
+        
+        local Label = Instance.new("TextLabel")
+        Label.Size = UDim2.new(1, -60, 1, 0)
+        Label.Position = UDim2.new(0, 10, 0, 0)
+        Label.BackgroundTransparency = 1
+        Label.Text = text
+        Label.TextColor3 = Color3.fromRGB(220, 220, 220)
+        Label.Font = Enum.Font.Gotham
+        Label.TextSize = 14
+        Label.TextXAlignment = Enum.TextXAlignment.Left
+        Label.Parent = ToggleFrame
+        
+        local SwitchBtn = Instance.new("TextButton")
+        SwitchBtn.Size = UDim2.new(0, 40, 0, 20)
+        SwitchBtn.Position = UDim2.new(1, -50, 0.5, -10)
+        SwitchBtn.BackgroundColor3 = state and Color3.fromRGB(90, 100, 255) or Color3.fromRGB(60, 60, 65)
+        SwitchBtn.Text = ""
+        SwitchBtn.Parent = ToggleFrame
+        Instance.new("UICorner", SwitchBtn).CornerRadius = UDim.new(1, 0)
+        
+        local Circle = Instance.new("Frame")
+        Circle.Size = UDim2.new(0, 16, 0, 16)
+        Circle.Position = state and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8)
+        Circle.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        Circle.Parent = SwitchBtn
+        Instance.new("UICorner", Circle).CornerRadius = UDim.new(1, 0)
+
+        SwitchBtn.MouseButton1Click:Connect(function()
+            state = not state
+            TweenService:Create(SwitchBtn, TweenInfo.new(0.2), {BackgroundColor3 = state and Color3.fromRGB(90, 100, 255) or Color3.fromRGB(60, 60, 65)}):Play()
+            TweenService:Create(Circle, TweenInfo.new(0.2), {Position = state and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8)}):Play()
+            callback(state)
+        end)
+    end
+
+    function Elements:AddTextbox(text, default, callback)
+        local BoxFrame = Instance.new("Frame")
+        BoxFrame.Size = UDim2.new(1, 0, 0, 35)
+        BoxFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+        BoxFrame.Parent = ContentScroll
+        Instance.new("UICorner", BoxFrame).CornerRadius = UDim.new(0, 6)
+
+        local Label = Instance.new("TextLabel")
+        Label.Size = UDim2.new(0.5, 0, 1, 0)
+        Label.Position = UDim2.new(0, 10, 0, 0)
+        Label.BackgroundTransparency = 1
+        Label.Text = text
+        Label.TextColor3 = Color3.fromRGB(220, 220, 220)
+        Label.Font = Enum.Font.Gotham
+        Label.TextSize = 14
+        Label.TextXAlignment = Enum.TextXAlignment.Left
+        Label.Parent = BoxFrame
+
+        local Input = Instance.new("TextBox")
+       Input.Size = UDim2.new(0.4, 0, 0, 25)
+       Input.AnchorPoint = Vector2.new(1, 0)
+       Input.Position = UDim2.new(0.95, 0, 0.5, -12.5)
+       Input.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+        Input.TextColor3 = Color3.fromRGB(255, 255, 255)
+        Input.Font = Enum.Font.Gotham
+        Input.TextSize = 13
+        Input.Text = tostring(default)
+        Input.Parent = BoxFrame
+        Instance.new("UICorner", Input).CornerRadius = UDim.new(0, 4)
+
+        Input.FocusLost:Connect(function()
+            callback(Input.Text)
+        end)
+    end
+
+    function Elements:AddButton(text, callback)
+        local Btn = Instance.new("TextButton")
+        Btn.Size = UDim2.new(1, 0, 0, 35)
+        Btn.BackgroundColor3 = Color3.fromRGB(90, 100, 255)
+        Btn.Text = text
+        Btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        Btn.Font = Enum.Font.GothamBold
+        Btn.TextSize = 14
+        Btn.Parent = ContentScroll
+        Instance.new("UICorner", Btn).CornerRadius = UDim.new(0, 6)
+
+        Btn.MouseButton1Click:Connect(function()
+            local originalColor = Btn.BackgroundColor3
+            Btn.BackgroundColor3 = Color3.fromRGB(110, 120, 255)
+            task.wait(0.1)
+            Btn.BackgroundColor3 = originalColor
+            callback()
+        end)
+    end
+
+    return Elements
+end
+
+-- ==========================================
+-- FLOATING RED SPAM/DUPE BUTTON (MOBILE)
+-- ==========================================
+local SpamButton = Instance.new("TextButton")
+SpamButton.Size = UDim2.new(0, 60, 0, 60)
+SpamButton.Position = UDim2.new(0.8, 0, 0.7, 0)
+SpamButton.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+SpamButton.Text = "DUPE"
+SpamButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+SpamButton.Font = Enum.Font.GothamBold
+SpamButton.TextScaled = true
+SpamButton.Parent = ScreenGui
+Instance.new("UICorner", SpamButton).CornerRadius = UDim.new(1, 0)
+
+local dragStart, startPos, isDragging = nil, nil, false
+SpamButton.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragStart = input.Position
+        startPos = SpamButton.Position
+        isDragging = false
+    end
+end)
+SpamButton.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        if dragStart then
+            local delta = input.Position - dragStart
+            if delta.Magnitude > 5 then
+                isDragging = true
+                SpamButton.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+            end
+        end
+    end
+end)
+SpamButton.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        if not isDragging then FireNearestPrompt() end
+        dragStart, isDragging = nil, false
+    end
+end)
+
+-- ==========================================
+-- BUILDING THE TABS AND FEATURES
+-- ==========================================
+local AutoTab = CreateTab("Autofarm")
+local MiscTab = CreateTab("Misc")
+
+AutoTab:AddTextbox("Farm Zone (1-13)", "1", function(val)
+    local target = "Zone" .. tostring(val)
+    if zonesFold:FindFirstChild(target) then
+        getgenv().ChosenZone = zonesFold[target]
+    end
+end)
+
+AutoTab:AddToggle("Autofarm", false, function(state)
+    getgenv().Farming = state
+
+    if state then
+        task.spawn(function()
+            while getgenv().Farming do
+                local char = player.Character
+
+                if not char or not getgenv().ChosenZone then
+                    task.wait(1)
+                    continue
+                end
+
+                local objects = getgenv().ChosenZone:FindFirstChild("Objects")
+
+                if objects then
+                    for _, obj in pairs(objects:GetChildren()) do
+                        if not getgenv().Farming then
+                            break
+                        end
+
+                        local name = ""
+
+pcall(function()
+    for _, v in pairs(obj:GetDescendants()) do
+        if v:IsA("TextLabel") then
+            local text = tostring(v.Text):lower()
+
+            if text ~= "" then
+                name = name .. " " .. text
+            end
+
+        elseif v:IsA("StringValue") then
+            local text = tostring(v.Value):lower()
+
+            if text ~= "" then
+                name = name .. " " .. text
+            end
+        end
+    end
+end)
+
+if name == "" then
+    name = tostring(obj.Name):lower()
+end
+
+--------------------------------------------------
+-- CELESTIAL PET NAMES
+-----------------------------------------
+
+local celestialPet =
+    name:find("tung tung tung sahur")
+    or name:find("esok sekolah")
+    or name:find("job job job sahur")
+    or name:find("chillin chili")
+
+--------------------------------------------------
+-- STRICT VARIANTS
+--------------------------------------------------
+
+local isGold =
+    name:find("gold")
+
+local isRainbow =
+    name:find("rainbow")
+
+local isDarkMatter =
+    name:find("darkmatter")
+    or name:find("dark matter")
+
+--------------------------------------------------
+-- STRICT ANCIENT
+--------------------------------------------------
+
+local isAncient =
+    name:find("ancient")
+
+--------------------------------------------------
+-- FINAL FILTER
+--------------------------------------------------
+
+local shouldFarm = false
+
+-- ONLY celestial variants
+if celestialPet and (isGold or isRainbow or isDarkMatter) then
+    shouldFarm = true
+end
+
+-- ONLY rainbow ancient
+if isAncient and isRainbow then
+    shouldFarm = true
+end
+
+-- NEVER cosmic
+if name:find("cosmic") then
+    shouldFarm = false
+end
+
+                        if shouldFarm then
+    if obj:IsA("Model") and obj.PrimaryPart then
+
+        -- TELEPORT TO ITEM
+        char.HumanoidRootPart.CFrame =
+            obj.PrimaryPart.CFrame + Vector3.new(0,3,0)
+
+        -- START DUPE SPAM THREAD
+        local keepSpamming = true
+
+        task.spawn(function()
+            while keepSpamming do
+                local prompt =
+                    obj:FindFirstChildWhichIsA("ProximityPrompt", true)
+
+                if prompt then
+                    for i = 1, 25 do
+                        pcall(function()
+                            fireproximityprompt(prompt)
+                        end)
+                    end
+                end
+
+                task.wait(0.01)
+            end
+        end)
+
+        -- STAY AT ITEM FOR 3 SECONDS
+        task.wait(3)
+
+        -- TELEPORT BACK TO BASE
+        local base = workspace.Bases:FindFirstChild(player.Name)
+
+        if base and base:FindFirstChild("Root") then
+            char.HumanoidRootPart.CFrame =
+                base.Root.CFrame + Vector3.new(0,3,0)
+        end
+
+        -- KEEP SPAMMING FOR 1 SECOND AFTER TP BACK
+        task.wait(1)
+
+        -- STOP SPAMMING
+        keepSpamming = false
+
+        task.wait(0.1)
+    end
+end
+                    end
+                end
+
+                task.wait(1)
+            end
+        end)
+    end
+end)
+
+AutoTab:AddTextbox("Max Price (Autosell)", "0", function(val)
+    getgenv().MaxPrice = tonumber(val) or 0
+end)
+
+AutoTab:AddToggle("Autosell", false, function(state)
+    getgenv().Selling = state
+    if state then
+        task.spawn(function()
+            while getgenv().Selling do
+                local char = player.Character
+                if not char then task.wait(1) continue end
+                for _, item in pairs(player.Backpack:GetChildren()) do
+                    if item.Name == "Bat" then continue end
+                    task.spawn(function()
+                        pcall(function()
+                            if parseValue(item.Handle.ObjectInfo.Value.ValueLabel.Text) <= getgenv().MaxPrice then
+                                game:GetService("ReplicatedStorage").Shared.Classes.RemoteFunction.Remotes.EntityShared_SellEntity:InvokeServer(item.Name)
+                            end
+                        end)
+                    end)
+                end
+                task.wait(3)
+            end
+        end)
+    end
+end)
+
+AutoTab:AddTextbox("Input Burst (Dupe Amount)", "20", function(val)
+    getgenv().InputBurst = tonumber(val) or 1
+end)
+
+AutoTab:AddToggle("Position Cycle (Teleport + Dupe)", false, function(state)
+    getgenv().PositionCycle = state
+    if state then
+        task.spawn(function()
+            while getgenv().PositionCycle do
+                local char = player.Character
+                if not char or not char:FindFirstChild("HumanoidRootPart") or not getgenv().ChosenZone then task.wait(1) continue end
+                local hrp = char.HumanoidRootPart
+                local objects = getgenv().ChosenZone:FindFirstChild("Objects")
+                if objects then
+                    for _, obj in pairs(objects:GetChildren()) do
+                        if not getgenv().PositionCycle then break end
+                        if obj:IsA("Model") and obj.PrimaryPart then
+                            hrp.CFrame = obj.PrimaryPart.CFrame
+                            task.wait(0.2)
+                            FireNearestPrompt()
+                        end
+                    end
+                end
+                task.wait(0.1)
+            end
+        end)
+    end
+end)
+
+MiscTab:AddButton("Redeem Codes", function()
+    task.spawn(function()
+        local codes = {"Stop Looking", "TommysHouse", "Phew", "GoldStatue", "FreeSpin"}
+        for _, v in pairs(codes) do
+            pcall(function()
+                game:GetService("ReplicatedStorage").Shared.Classes.RemoteFunction.Remotes.CodeShared_Redeem:InvokeServer(v)
+            end)
+            task.wait(0.2)
+        end
+    end)
+end)
