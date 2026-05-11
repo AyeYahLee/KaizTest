@@ -374,7 +374,9 @@ local function CreateTab(name)
         end)
     end
 
-    return Elements
+    Elements.Content = ContentScroll
+
+return Elements
 end
 
 -- ==========================================
@@ -848,7 +850,7 @@ TrackerTab:AddToggle("Enable Live Tracker", false, function(state)
                         local holder = Instance.new("Frame")
                         holder.Size = UDim2.new(1,0,0,65)
                         holder.BackgroundColor3 = Color3.fromRGB(35,35,40)
-                        holder.Parent = activeContent
+                        holder.Parent = TrackerTab.Content
                         Instance.new("UICorner", holder).CornerRadius = UDim.new(0,6)
 
                         local nameLabel = Instance.new("TextLabel")
