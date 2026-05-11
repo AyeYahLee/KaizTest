@@ -6,6 +6,14 @@ local CoreGui = game:GetService("CoreGui")
 local TweenService = game:GetService("TweenService")
 local UIS = game:GetService("UserInputService")
 local player = Players.LocalPlayer
+
+local VirtualUser = game:GetService("VirtualUser")
+
+player.Idled:Connect(function()
+    VirtualUser:CaptureController()
+    VirtualUser:ClickButton2(Vector2.new())
+end)
+
 local zonesFold = workspace:WaitForChild("Zones")
 
 -- Determine safe GUI parent
