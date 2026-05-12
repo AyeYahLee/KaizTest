@@ -519,7 +519,7 @@ if celestialPet and (isRainbow or isDarkMatter) then
 end
 
 -- ONLY rainbow ancient
-if isAncient and isRainbow then
+if isAncient and (isRainbow or isDarkmatter) then
     shouldFarm = true
 end
 
