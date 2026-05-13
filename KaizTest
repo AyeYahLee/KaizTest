@@ -477,8 +477,40 @@ if name == "" then
 end
 
 --------------------------------------------------
+-- VALUE DETECTION
+--------------------------------------------------
+
+local detectedValue = 0
+
+pcall(function()
+
+    local raw =
+        name:match("(%d+%.?%d*[kmbtq])")
+        or name:match("(%d+%.?%d*)")
+
+    if raw then
+
+        local num, suffix =
+            raw:match("([%d%.]+)([kmbtq]?)")
+
+        num = tonumber(num) or 0
+
+        local multipliers = {
+            k = 1e3,
+            m = 1e6,
+            b = 1e9,
+            t = 1e12,
+            q = 1e15
+        }
+
+        detectedValue =
+            num * (multipliers[suffix] or 1)
+    end
+end)
+
+--------------------------------------------------
 -- CELESTIAL PET NAMES
------------------------------------------
+--------------------------------------------------
 
 local celestialPet =
     name:find("tung tung tung sahur")
@@ -510,12 +542,24 @@ local isAncient =
 
 local shouldFarm = false
 
--- ONLY celestial variants
+-- ONLY celestial rainbow/darkmatter
 if celestialPet and (isRainbow or isDarkMatter) then
     shouldFarm = true
 end
 
--- ONLY rainbow ancient
+-- fallback:
+-- if celestial but NOT rainbow/dm
+-- only farm if value above 1m
+
+if celestialPet
+and not isRainbow
+and not isDarkMatter
+and detectedValue >= 1000000 then
+
+    shouldFarm = true
+end
+
+-- ancient rainbow/dm
 if isAncient and (isRainbow or isDarkMatter) then
     shouldFarm = true
 end
