@@ -514,7 +514,7 @@ local isAncient =
 local shouldFarm = false
 
 -- ONLY celestial variants
-if celestialPet and (isRainbow or isDarkMatter) then
+if celestialPet and (isGold or isRainbow or isDarkMatter) then
     shouldFarm = true
 end
 
