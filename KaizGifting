@@ -1,0 +1,368 @@
+--// RELIABLE AUTO GIFT + PET TAB FIXED (FULL WORKING)
+--// MOBILE READY
+
+local Players = game:GetService("Players")
+local CoreGui = game:GetService("CoreGui")
+
+local LocalPlayer = Players.LocalPlayer
+
+--// REMOTE
+local GiftRemote = game:GetService("ReplicatedStorage")
+    :WaitForChild("Shared")
+    :WaitForChild("Classes")
+    :WaitForChild("Remote")
+    :WaitForChild("Remotes")
+    :WaitForChild("GiftingShared_RequestGifting")
+
+pcall(function()
+    local old = CoreGui:FindFirstChild("ReliableGiftGUI")
+    if old then old:Destroy() end
+end)
+
+--// GUI
+local gui = Instance.new("ScreenGui")
+gui.Name = "ReliableGiftGUI"
+gui.Parent = CoreGui
+
+local frame = Instance.new("Frame")
+frame.Parent = gui
+frame.Size = UDim2.new(0,330,0,400)
+frame.Position = UDim2.new(0.5,-165,0.5,-200)
+frame.BackgroundColor3 = Color3.fromRGB(25,25,25)
+frame.Active = true
+frame.Draggable = true
+
+local title = Instance.new("TextLabel")
+title.Parent = frame
+title.Size = UDim2.new(1,0,0,30)
+title.BackgroundColor3 = Color3.fromRGB(35,35,35)
+title.Text = "RELIABLE AUTO GIFT"
+title.TextScaled = true
+title.TextColor3 = Color3.new(1,1,1)
+
+--// TAB BUTTONS
+local giftTab = Instance.new("TextButton")
+giftTab.Parent = frame
+giftTab.Size = UDim2.new(0.5,0,0,30)
+giftTab.Position = UDim2.new(0,0,0,30)
+giftTab.Text = "GIFT"
+giftTab.BackgroundColor3 = Color3.fromRGB(0,120,255)
+
+local petsTab = Instance.new("TextButton")
+petsTab.Parent = frame
+petsTab.Size = UDim2.new(0.5,0,0,30)
+petsTab.Position = UDim2.new(0.5,0,0,30)
+petsTab.Text = "PETS"
+petsTab.BackgroundColor3 = Color3.fromRGB(60,60,60)
+
+--// PAGES
+local giftPage = Instance.new("Frame")
+giftPage.Parent = frame
+giftPage.Size = UDim2.new(1,0,1,-60)
+giftPage.Position = UDim2.new(0,0,0,60)
+giftPage.BackgroundTransparency = 1
+
+local petPage = Instance.new("Frame")
+petPage.Parent = frame
+petPage.Size = UDim2.new(1,0,1,-60)
+petPage.Position = UDim2.new(0,0,0,60)
+petPage.Visible = false
+petPage.BackgroundTransparency = 1
+
+--// GIFT UI
+local userBox = Instance.new("TextBox")
+userBox.Parent = giftPage
+userBox.Size = UDim2.new(1,-20,0,35)
+userBox.Position = UDim2.new(0,10,0,10)
+userBox.PlaceholderText = "Username"
+userBox.TextScaled = true
+
+--// MODE SELECT BUTTON
+--// MODE STATE
+local mode = "ALL"
+
+--// MODE SELECT BUTTON (CLEAN DROPDOWN)
+local modeBtn = Instance.new("TextButton")
+modeBtn.ZIndex = 10
+modeBtn.Parent = giftPage
+modeBtn.Size = UDim2.new(1,-20,0,35)
+modeBtn.Position = UDim2.new(0,10,0,50)
+modeBtn.Text = "Mode: ALL ▼"
+modeBtn.BackgroundColor3 = Color3.fromRGB(60,60,60)
+modeBtn.TextColor3 = Color3.new(1,1,1)
+modeBtn.TextScaled = true
+
+--// DROPDOWN MENU
+local menu = Instance.new("Frame")
+menu.Parent = giftPage
+menu.Size = UDim2.new(1,-20,0,0)
+menu.Position = UDim2.new(0,10,0,85)
+menu.BackgroundColor3 = Color3.fromRGB(25,25,25)
+menu.Visible = false
+menu.ClipsDescendants = true
+
+local menuLayout = Instance.new("UIListLayout")
+menuLayout.Parent = menu
+
+local function makeOption(text, yMode)
+    local b = Instance.new("TextButton")
+    b.Parent = menu
+    b.Size = UDim2.new(1,0,0,40)
+    b.Text = text
+    b.BackgroundColor3 = Color3.fromRGB(45,45,45)
+    b.TextColor3 = Color3.new(1,1,1)
+    b.TextScaled = true
+
+    b.MouseButton1Click:Connect(function()
+        mode = yMode
+        modeBtn.Text = "Mode: "..yMode.." ▼"
+        menu.Visible = false
+    end)
+end
+
+makeOption("ALL PETS", "ALL")
+makeOption("SINGLE UUID", "UUID")
+
+--// TOGGLE OPEN/CLOSE
+modeBtn.MouseButton1Click:Connect(function()
+    menu.Visible = not menu.Visible
+end)
+
+--// CLOSE WHEN CLICKING OUTSIDE
+giftPage.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+        menu.Visible = false
+    end
+end)
+
+--// POPUP FRAME (FIXED)
+local popup = Instance.new("Frame")
+popup.ZIndex = 20
+popup.Parent = giftPage
+popup.Size = UDim2.new(0.6,0,0,100)
+popup.Position = UDim2.new(0.2,0,0.35,0)
+popup.BackgroundColor3 = Color3.fromRGB(20,20,20)
+popup.Visible = false
+
+local layout = Instance.new("UIListLayout")
+layout.Parent = popup
+layout.Padding = UDim.new(0,5)
+layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+layout.VerticalAlignment = Enum.VerticalAlignment.Center
+
+local layout = Instance.new("UIListLayout")
+layout.Parent = popup
+
+--// ALL BUTTON
+local allBtn = Instance.new("TextButton")
+allBtn.Parent = popup
+allBtn.Size = UDim2.new(1,0,0,45)
+allBtn.Text = "ALL PETS"
+allBtn.BackgroundColor3 = Color3.fromRGB(0,170,0)
+allBtn.TextColor3 = Color3.new(1,1,1)
+allBtn.TextScaled = true
+
+allBtn.ZIndex = 21
+
+--// UUID BUTTON
+local uuidModeBtn = Instance.new("TextButton")
+uuidModeBtn.Parent = popup
+uuidModeBtn.Size = UDim2.new(1,0,0,45)
+uuidModeBtn.Text = "SINGLE UUID"
+uuidModeBtn.BackgroundColor3 = Color3.fromRGB(0,120,255)
+uuidModeBtn.TextColor3 = Color3.new(1,1,1)
+uuidModeBtn.TextScaled = true
+
+uuidModeBtn.ZIndex = 21
+
+modeBtn.MouseButton1Click:Connect(function()
+    popup.Visible = not popup.Visible
+end)
+
+allBtn.MouseButton1Click:Connect(function()
+    mode = "ALL"
+    modeBtn.Text = "Mode: ALL (tap to change)"
+    popup.Visible = false
+end)
+
+uuidModeBtn.MouseButton1Click:Connect(function()
+    mode = "UUID"
+    modeBtn.Text = "Mode: UUID (tap to change)"
+    popup.Visible = false
+end)
+
+local uuidBox = Instance.new("TextBox")
+uuidBox.Parent = giftPage
+uuidBox.Size = UDim2.new(1,-20,0,60)
+uuidBox.Position = UDim2.new(0,10,0,100)
+uuidBox.PlaceholderText = "UUID (if UUID mode)"
+uuidBox.TextScaled = true
+
+local status = Instance.new("TextLabel")
+status.Parent = giftPage
+status.Size = UDim2.new(1,-20,0,20)
+status.Position = UDim2.new(0,10,1,-70)
+status.BackgroundTransparency = 1
+status.Text = "Idle"
+status.TextColor3 = Color3.new(1,1,1)
+status.TextScaled = true
+
+local startBtn = Instance.new("TextButton")
+startBtn.Parent = giftPage
+startBtn.Size = UDim2.new(1,-20,0,35)
+startBtn.Position = UDim2.new(0,10,1,-110)
+startBtn.Text = "START"
+startBtn.BackgroundColor3 = Color3.fromRGB(0,170,0)
+
+local stopBtn = Instance.new("TextButton")
+stopBtn.Parent = giftPage
+stopBtn.Size = UDim2.new(1,-20,0,35)
+stopBtn.Position = UDim2.new(0,10,1,-150)
+stopBtn.Text = "STOP"
+stopBtn.BackgroundColor3 = Color3.fromRGB(170,0,0)
+
+--// PET LIST
+local scroll = Instance.new("ScrollingFrame")
+scroll.Parent = petPage
+scroll.Size = UDim2.new(1,-10,1,-10)
+scroll.Position = UDim2.new(0,5,0,5)
+scroll.BackgroundColor3 = Color3.fromRGB(30,30,30)
+
+local layout = Instance.new("UIListLayout")
+layout.Parent = scroll
+
+--// TAB SWITCH
+giftTab.MouseButton1Click:Connect(function()
+    giftPage.Visible = true
+    petPage.Visible = false
+end)
+
+petsTab.MouseButton1Click:Connect(function()
+    giftPage.Visible = false
+    petPage.Visible = true
+end)
+
+--// STOP FLAG
+local StopGift = false
+
+--// STRICT PET SCAN (NO RANDOM WORLD STUFF)
+local function GetPets()
+    local found = {}
+
+    local roots = {
+        LocalPlayer:FindFirstChild("Backpack"),
+        LocalPlayer:FindFirstChild("Inventory"),
+        LocalPlayer:FindFirstChild("PlayerGui")
+    }
+
+    for _,root in pairs(roots) do
+        if root then
+            for _,obj in pairs(root:GetDescendants()) do
+
+                local name = obj.Name
+
+                local isUUID = typeof(name) == "string"
+                    and string.match(name,
+                    "%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x")
+
+                if isUUID then
+                    table.insert(found, name)
+                end
+            end
+        end
+    end
+
+    return found
+end
+
+--// LOAD PET TAB
+local function LoadPets()
+
+    for _,v in pairs(scroll:GetChildren()) do
+        if v:IsA("TextButton") then v:Destroy() end
+    end
+
+    local pets = GetPets()
+
+    if #pets == 0 then
+        local t = Instance.new("TextLabel")
+        t.Parent = scroll
+        t.Size = UDim2.new(1,0,0,40)
+        t.BackgroundTransparency = 1
+        t.Text = "No pets found"
+        t.TextColor3 = Color3.new(1,1,1)
+        return
+    end
+
+    for _,uuid in ipairs(pets) do
+        local btn = Instance.new("TextButton")
+        btn.Parent = scroll
+        btn.Size = UDim2.new(1,-10,0,40)
+        btn.Text = uuid
+        btn.BackgroundColor3 = Color3.fromRGB(45,45,45)
+        btn.TextColor3 = Color3.new(1,1,1)
+        btn.TextScaled = true
+
+        btn.MouseButton1Click:Connect(function()
+            uuidBox.Text = uuid
+            status.Text = "Selected"
+        end)
+    end
+
+    task.wait()
+    scroll.CanvasSize = UDim2.new(0,0,0,layout.AbsoluteContentSize.Y + 10)
+end
+
+LoadPets()
+
+--// STOP
+stopBtn.MouseButton1Click:Connect(function()
+    StopGift = true
+    status.Text = "Stopped"
+end)
+
+--// START
+startBtn.MouseButton1Click:Connect(function()
+
+    StopGift = false
+
+    local username = userBox.Text
+    local target = Players:FindFirstChild(username)
+
+    if not target then
+        status.Text = "Player not found"
+        return
+    end
+
+    --// ALL MODE
+    if mode == "ALL" then
+
+        local pets = GetPets()
+        status.Text = "Found "..#pets
+
+        for i,uuid in ipairs(pets) do
+            if StopGift then break end
+
+            pcall(function()
+                GiftRemote:FireServer(target, "Entity", uuid)
+            end)
+
+            status.Text = "Gifted "..i.."/"..#pets
+            task.wait(0.3)
+        end
+
+        status.Text = "Done"
+
+    else
+        --// UUID MODE
+
+        local uuid = uuidBox.Text
+        if uuid == "" then
+            status.Text = "No UUID"
+            return
+        end
+
+        GiftRemote:FireServer(target, "Entity", uuid)
+        status.Text = "UUID gifted"
+    end
+end)
