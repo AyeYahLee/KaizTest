@@ -31,6 +31,7 @@ getgenv().AutoAcceptGift    = false
 getgenv().StopGift          = false
 getgenv().ChosenZone        = zonesFold:FindFirstChild("Zone1")
 getgenv().MaxPrice          = 0
+getgenv().MinFarmValue      = 0
 getgenv().InputBurst        = 20
 getgenv().ClaimSlots        = {}
 getgenv().UpgradeSlots      = {}
@@ -61,30 +62,28 @@ local function isPetUUID(name)
 end
 
 local function getItemValue(item)
-    -- 1. Check NumberValue/IntValue descendants
+    -- Single-pass over descendants (avoids 3x full tree walks per item)
+    local fallbackLabel = nil
     for _, desc in ipairs(item:GetDescendants()) do
         if desc:IsA("NumberValue") or desc:IsA("IntValue") then
             local n = desc.Name:lower()
-            if n == "value" or n == "worth" or n == "price" or n == "cash" then
-                if desc.Value > 0 then return desc.Value end
+            if (n == "value" or n == "worth" or n == "price" or n == "cash") and desc.Value > 0 then
+                return desc.Value
+            end
+        elseif desc:IsA("TextLabel") then
+            if desc.Name == "ValueLabel" then
+                local val = parseValue(desc.Text)
+                if val > 0 then return val end
+            elseif not fallbackLabel then
+                fallbackLabel = desc
             end
         end
     end
-    -- 2. Try TextLabel named ValueLabel
-    for _, desc in ipairs(item:GetDescendants()) do
-        if desc:IsA("TextLabel") and desc.Name == "ValueLabel" then
-            local val = parseValue(desc.Text)
-            if val > 0 then return val end
-        end
+    if fallbackLabel then
+        local val = parseValue(fallbackLabel.Text)
+        if val > 0 then return val end
     end
-    -- 3. Any TextLabel with parseable value
-    for _, desc in ipairs(item:GetDescendants()) do
-        if desc:IsA("TextLabel") then
-            local val = parseValue(desc.Text)
-            if val > 0 then return val end
-        end
-    end
-    -- 4. Item attributes
+    -- Item attributes
     for _, attrName in ipairs({"Value","Worth","Price","Cash","value","worth"}) do
         local attr = item:GetAttribute(attrName)
         if attr and type(attr) == "number" and attr > 0 then return attr end
@@ -116,9 +115,10 @@ local function FireNearestPrompt()
         end
     end
     if nearestPrompt then
+        -- Fire inline: no need to spawn a new thread per burst shot
         local burst = tonumber(getgenv().InputBurst) or 1
         for i = 1, burst do
-            task.spawn(function() fireproximityprompt(nearestPrompt) end)
+            pcall(fireproximityprompt, nearestPrompt)
         end
     end
 end
@@ -236,14 +236,20 @@ local function MakeDraggable(topbar, object)
             dragInput = input
         end
     end)
-    UIS.InputChanged:Connect(function(input)
+    -- UIS is required for touch move tracking on mobile (touch events dont bubble to frames)
+    -- Connections are stored and disconnected when the GUI is destroyed to prevent leaking
+    local moveConn = UIS.InputChanged:Connect(function(input)
         if dragging and input == dragInput then
             local delta = input.Position - dragStart
             object.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
         end
     end)
-    UIS.InputEnded:Connect(function(input)
-        if input == dragInput then dragging = false end
+    local endConn = UIS.InputEnded:Connect(function(input)
+        if input == dragInput then dragging = false; dragInput = nil end
+    end)
+    ScreenGui.Destroying:Connect(function()
+        moveConn:Disconnect()
+        endConn:Disconnect()
     end)
 end
 MakeDraggable(TopBar, MainFrame)
@@ -275,14 +281,18 @@ Divider.Parent = MainFrame
 
 local minimized = false
 local originalSize = MainFrame.Size
+local minimizeTweenInfo = TweenInfo.new(0.25)
+local activeSizeTween = nil
 MinimizeBtn.MouseButton1Click:Connect(function()
     minimized = not minimized
     ContentContainer.Visible = not minimized
     TabContainer.Visible = not minimized
     Divider.Visible = not minimized
-    TweenService:Create(MainFrame, TweenInfo.new(0.25), {
+    if activeSizeTween then activeSizeTween:Cancel() end
+    activeSizeTween = TweenService:Create(MainFrame, minimizeTweenInfo, {
         Size = minimized and UDim2.new(0.94, 0, 0, 52) or originalSize
-    }):Play()
+    })
+    activeSizeTween:Play()
     MinimizeBtn.Text = minimized and "▲" or "—"
 end)
 
@@ -327,18 +337,23 @@ local function CreateTab(name, icon)
         ContentScroll.CanvasSize = UDim2.new(0, 0, 0, UIList.AbsoluteContentSize.Y + 20)
     end)
 
+    local tabTweenInfo = TweenInfo.new(0.2)
+    local activeTabTween = nil
     local function SelectTab()
         if activeTabButton then
-            TweenService:Create(activeTabButton, TweenInfo.new(0.2), {
+            if activeTabTween then activeTabTween:Cancel() end
+            activeTabTween = TweenService:Create(activeTabButton, tabTweenInfo, {
                 BackgroundColor3 = Color3.fromRGB(20, 20, 28),
                 TextColor3 = Color3.fromRGB(120, 120, 140)
-            }):Play()
+            })
+            activeTabTween:Play()
             activeContent.Visible = false
         end
-        TweenService:Create(TabBtn, TweenInfo.new(0.2), {
+        local t = TweenService:Create(TabBtn, tabTweenInfo, {
             BackgroundColor3 = Color3.fromRGB(30, 30, 45),
             TextColor3 = Color3.fromRGB(255, 200, 50)
-        }):Play()
+        })
+        t:Play()
         ContentScroll.Visible = true
         activeTabButton = TabBtn
         activeContent = ContentScroll
@@ -399,10 +414,11 @@ local function CreateTab(name, icon)
         Circle.Parent = SwitchBtn
         Instance.new("UICorner", Circle).CornerRadius = UDim.new(1, 0)
 
+        local toggleTweenInfo = TweenInfo.new(0.2)
         SwitchBtn.MouseButton1Click:Connect(function()
             state = not state
-            TweenService:Create(SwitchBtn, TweenInfo.new(0.2), {BackgroundColor3 = state and Color3.fromRGB(90, 100, 255) or Color3.fromRGB(55, 55, 65)}):Play()
-            TweenService:Create(Circle, TweenInfo.new(0.2), {Position = state and UDim2.new(1, -20, 0.5, -9) or UDim2.new(0, 3, 0.5, -9)}):Play()
+            TweenService:Create(SwitchBtn, toggleTweenInfo, {BackgroundColor3 = state and Color3.fromRGB(90, 100, 255) or Color3.fromRGB(55, 55, 65)}):Play()
+            TweenService:Create(Circle, toggleTweenInfo, {Position = state and UDim2.new(1, -20, 0.5, -9) or UDim2.new(0, 3, 0.5, -9)}):Play()
             callback(state)
         end)
 
@@ -461,11 +477,12 @@ local function CreateTab(name, icon)
         Btn.Parent = ContentScroll
         Instance.new("UICorner", Btn).CornerRadius = UDim.new(0, 8)
 
+        local btnFlashInfo = TweenInfo.new(0.1)
         Btn.MouseButton1Click:Connect(function()
             local c = Btn.BackgroundColor3
-            TweenService:Create(Btn, TweenInfo.new(0.1), {BackgroundColor3 = Color3.fromRGB(110, 120, 255)}):Play()
+            TweenService:Create(Btn, btnFlashInfo, {BackgroundColor3 = Color3.fromRGB(110, 120, 255)}):Play()
             task.wait(0.1)
-            TweenService:Create(Btn, TweenInfo.new(0.1), {BackgroundColor3 = c}):Play()
+            TweenService:Create(Btn, btnFlashInfo, {BackgroundColor3 = c}):Play()
             callback()
         end)
         return Btn
@@ -751,6 +768,10 @@ AutoTab:AddTextbox("Farm Zone (1-13)", "1", function(val)
     end
 end)
 
+AutoTab:AddTextbox("Min Value Fallback (e.g. 1m, 500k)", "0", function(val)
+    getgenv().MinFarmValue = parseValue(val) or 0
+end)
+
 AutoTab:AddToggle("Autofarm", false, function(state)
     getgenv().Farming = state
     if state then
@@ -762,19 +783,20 @@ AutoTab:AddToggle("Autofarm", false, function(state)
                 if objects then
                     for _, obj in pairs(objects:GetChildren()) do
                         if not getgenv().Farming then break end
-                        local name = ""
+                        -- Use a table + concat once to avoid O(n^2) string allocs
+                        local nameParts = {}
                         pcall(function()
                             for _, v in pairs(obj:GetDescendants()) do
                                 if v:IsA("TextLabel") then
                                     local t = tostring(v.Text):lower()
-                                    if t ~= "" then name = name .. " " .. t end
+                                    if t ~= "" then nameParts[#nameParts+1] = t end
                                 elseif v:IsA("StringValue") then
                                     local t = tostring(v.Value):lower()
-                                    if t ~= "" then name = name .. " " .. t end
+                                    if t ~= "" then nameParts[#nameParts+1] = t end
                                 end
                             end
                         end)
-                        if name == "" then name = tostring(obj.Name):lower() end
+                        local name = #nameParts > 0 and table.concat(nameParts, " ") or tostring(obj.Name):lower()
 
                         local detectedValue = 0
                         pcall(function()
@@ -796,29 +818,33 @@ AutoTab:AddToggle("Autofarm", false, function(state)
                         if celestialPet and (isRainbow or isDarkMatter) then shouldFarm = true end
                         if celestialPet and not isRainbow and not isDarkMatter and detectedValue >= 1000000 then shouldFarm = true end
                         if isAncient and (isRainbow or isDarkMatter) then shouldFarm = true end
+                        -- Fallback: farm any pet that meets the min value threshold if no specific variant matched
+                        local minVal = getgenv().MinFarmValue or 0
+                        if not shouldFarm and minVal > 0 and detectedValue >= minVal then shouldFarm = true end
                         if name:find("cosmic") then shouldFarm = false end
 
                         if shouldFarm then
                             if obj:IsA("Model") and obj.PrimaryPart then
                                 char.HumanoidRootPart.CFrame = obj.PrimaryPart.CFrame + Vector3.new(0, 3, 0)
                                 local keepSpamming = true
+                                -- Cache prompt once; re-check each tick in case it despawns
                                 task.spawn(function()
-                                    while keepSpamming do
+                                    while keepSpamming and getgenv().Farming do
                                         local prompt = obj:FindFirstChildWhichIsA("ProximityPrompt", true)
                                         if prompt then
-                                            for i = 1, 25 do pcall(function() fireproximityprompt(prompt) end) end
+                                            for i = 1, 25 do pcall(fireproximityprompt, prompt) end
                                         end
                                         task.wait(0.01)
                                     end
                                 end)
                                 task.wait(3)
+                                -- Kill spam thread before teleporting away
+                                keepSpamming = false
                                 local base = workspace.Bases:FindFirstChild(player.Name)
                                 if base and base:FindFirstChild("Root") then
                                     char.HumanoidRootPart.CFrame = base.Root.CFrame + Vector3.new(0, 3, 0)
                                 end
-                                task.wait(1)
-                                keepSpamming = false
-                                task.wait(0.1)
+                                task.wait(0.5)
                             end
                         end
                     end
@@ -842,27 +868,27 @@ AutoTab:AddToggle("Autosell", false, function(state)
     getgenv().Selling = state
     if state then
         task.spawn(function()
+            -- Cache remote once per session, not per cycle
+            local sellRemote = game:GetService("ReplicatedStorage").Shared.Classes.RemoteFunction.Remotes.EntityShared_SellEntity
             while getgenv().Selling do
                 local char = player.Character
-                if not char then task.wait(1) continue end
+                if not char then task.wait(0.05) continue end
 
                 local backpack = player.Backpack
                 if backpack then
                     local soldCount = 0
                     local maxP = getgenv().MaxPrice or 0
                     local items = backpack:GetChildren()
-                    -- Check value first (sync), then fire all qualifying sells simultaneously
                     local toSell = {}
                     for _, item in ipairs(items) do
+                        if not getgenv().Selling then break end -- stop mid-scan instantly on toggle off
                         if not isPetUUID(item.Name) then continue end
                         if not item:IsA("Tool") then continue end
-                        -- Read value from ValueLabel the same way the original working script did
                         local val = 0
                         pcall(function()
                             local text = item.Handle.ObjectInfo.Value.ValueLabel.Text
                             val = parseValue(text)
                         end)
-                        -- Fallback: search all descendants for ValueLabel
                         if val == 0 then
                             pcall(function()
                                 for _, desc in ipairs(item:GetDescendants()) do
@@ -873,20 +899,14 @@ AutoTab:AddToggle("Autosell", false, function(state)
                                 end
                             end)
                         end
-                        -- Only queue for selling if value is within max price
                         if maxP == 0 or val <= maxP then
                             table.insert(toSell, item.Name)
                         end
                     end
-                    -- Fire all at once
                     soldCount = #toSell
-                    for _, name in ipairs(toSell) do
-                        local n = name
-                        task.spawn(function()
-                            pcall(function()
-                                game:GetService("ReplicatedStorage").Shared.Classes.RemoteFunction.Remotes.EntityShared_SellEntity:InvokeServer(n)
-                            end)
-                        end)
+                    for _, n in ipairs(toSell) do
+                        if not getgenv().Selling then break end -- stop mid-sell instantly on toggle off
+                        pcall(function() sellRemote:InvokeServer(n) end)
                     end
                     if soldCount > 0 then
                         sellStatus.Text = "💰 Sold " .. soldCount .. " pet(s)"
@@ -897,7 +917,7 @@ AutoTab:AddToggle("Autosell", false, function(state)
                     end
                 end
 
-                task.wait(1)
+                task.wait(0.05)
             end
             sellStatus.Text = "⏹ Autosell stopped"
             sellStatus.TextColor3 = Color3.fromRGB(180, 180, 180)
@@ -1023,8 +1043,13 @@ local function refreshGiftPlayerList()
 end
 
 refreshGiftPlayerList()
-Players.PlayerAdded:Connect(function() refreshGiftPlayerList() end)
-Players.PlayerRemoving:Connect(function() task.wait(0.1) refreshGiftPlayerList() end)
+local playerAddedConn = Players.PlayerAdded:Connect(function() refreshGiftPlayerList() end)
+local playerRemovingConn = Players.PlayerRemoving:Connect(function() task.wait(0.1) refreshGiftPlayerList() end)
+-- Clean up player list connections when the GUI is destroyed
+ScreenGui.Destroying:Connect(function()
+    playerAddedConn:Disconnect()
+    playerRemovingConn:Disconnect()
+end)
 
 GiftTab:AddButton("\240\159\148\132 Refresh List", Color3.fromRGB(55, 55, 70), function()
     refreshGiftPlayerList()
@@ -1201,7 +1226,7 @@ GiftTab:AddToggle("Auto Accept Gift", false, function(state)
                         end)
                     end
                 end
-                task.wait(1)
+                task.wait(0.1)
             end
         end)
     end
@@ -1220,19 +1245,18 @@ BaseTab:AddToggle("Auto Claim", false, function(state)
     getgenv().AutoClaim = state
     if state then
         task.spawn(function()
+            local claimRemote = Remotes.BaseShared_ClaimSlotBalance
             while getgenv().AutoClaim do
                 local slots = getgenv().ClaimSlots
                 if slots and #slots > 0 then
                     for _, slot in ipairs(slots) do
                         if not getgenv().AutoClaim then break end
-                        pcall(function()
-                            Remotes.BaseShared_ClaimSlotBalance:FireServer(slot)
-                        end)
-                        claimStatusLabel.Text = "✅ Claimed slot " .. slot
-                        claimStatusLabel.TextColor3 = Color3.fromRGB(100, 220, 100)
+                        pcall(function() claimRemote:FireServer(slot) end)
                         task.wait(0.1)
                     end
-                    claimStatusLabel.Text = "✅ Done — waiting 3s..."
+                    -- Only update label once per full cycle, not per slot
+                    claimStatusLabel.Text = "✅ Claimed " .. #slots .. " slot(s)"
+                    claimStatusLabel.TextColor3 = Color3.fromRGB(100, 220, 100)
                 else
                     claimStatusLabel.Text = "⚠️ No slots selected"
                     claimStatusLabel.TextColor3 = Color3.fromRGB(255, 180, 0)
@@ -1276,24 +1300,30 @@ BaseTab:AddToggle("Auto Upgrade", false, function(state)
     getgenv().AutoUpgrade = state
     if state then
         task.spawn(function()
+            -- Cache remote once, fire inline (no per-slot task.spawn threads)
+            local upgradeRemote = Remotes.BaseShared_UpgradeSlot
+            local lastSlotCount = -1
             while getgenv().AutoUpgrade do
                 local slots = getgenv().UpgradeSlots
                 if slots and #slots > 0 then
-                    -- Fire all slots simultaneously, no wait between them
                     for _, slot in ipairs(slots) do
                         if not getgenv().AutoUpgrade then break end
-                        local s = slot
-                        task.spawn(function()
-                            pcall(function() Remotes.BaseShared_UpgradeSlot:FireServer(s) end)
-                        end)
+                        pcall(function() upgradeRemote:FireServer(slot) end)
                     end
-                    upgradeStatusLabel.Text = "⬆️ Upgraded " .. #slots .. " slot(s)"
-                    upgradeStatusLabel.TextColor3 = Color3.fromRGB(100, 220, 100)
+                    -- Only update label when slot count changes, not every 0.5s
+                    if #slots ~= lastSlotCount then
+                        upgradeStatusLabel.Text = "⬆️ Upgrading " .. #slots .. " slot(s)"
+                        upgradeStatusLabel.TextColor3 = Color3.fromRGB(100, 220, 100)
+                        lastSlotCount = #slots
+                    end
                 else
-                    upgradeStatusLabel.Text = "⚠️ No slots selected"
-                    upgradeStatusLabel.TextColor3 = Color3.fromRGB(255, 180, 0)
+                    if lastSlotCount ~= 0 then
+                        upgradeStatusLabel.Text = "⚠️ No slots selected"
+                        upgradeStatusLabel.TextColor3 = Color3.fromRGB(255, 180, 0)
+                        lastSlotCount = 0
+                    end
                 end
-                task.wait(0.5) -- 0.5s cycle: fast enough to keep up, light enough for long sessions
+                task.wait(0.5)
             end
             upgradeStatusLabel.Text = "⏹ Stopped"
             upgradeStatusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
