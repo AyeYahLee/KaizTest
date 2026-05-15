@@ -254,17 +254,26 @@ local function MakeDraggable(topbar, object)
 end
 MakeDraggable(TopBar, MainFrame)
 
-local TabContainer = Instance.new("Frame")
+local TabContainer = Instance.new("ScrollingFrame")
 TabContainer.Size = UDim2.new(0, 90, 1, -52)
 TabContainer.Position = UDim2.new(0, 0, 0, 52)
 TabContainer.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
 TabContainer.BorderSizePixel = 0
+TabContainer.ScrollBarThickness = 3
+TabContainer.ScrollBarImageColor3 = Color3.fromRGB(90, 100, 255)
+TabContainer.CanvasSize = UDim2.new(0, 0, 0, 0)
+TabContainer.ScrollingDirection = Enum.ScrollingDirection.Y
 TabContainer.Parent = MainFrame
 
 local TabListLayout = Instance.new("UIListLayout")
 TabListLayout.Parent = TabContainer
 TabListLayout.SortOrder = Enum.SortOrder.LayoutOrder
 TabListLayout.Padding = UDim.new(0, 2)
+
+-- Auto-resize canvas so scrolling works as tabs are added
+TabListLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+    TabContainer.CanvasSize = UDim2.new(0, 0, 0, TabListLayout.AbsoluteContentSize.Y)
+end)
 
 local ContentContainer = Instance.new("Frame")
 ContentContainer.Size = UDim2.new(1, -90, 1, -52)
@@ -422,7 +431,18 @@ local function CreateTab(name, icon)
             callback(state)
         end)
 
-        return ToggleFrame
+        -- Return a wrapper table so we can attach a setter without touching the Roblox Instance
+        local wrapper = {
+            _frame = ToggleFrame,
+            _setState = function(newState)
+                if state == newState then return end
+                state = newState
+                SwitchBtn.BackgroundColor3 = state and Color3.fromRGB(90, 100, 255) or Color3.fromRGB(55, 55, 65)
+                Circle.Position = state and UDim2.new(1, -20, 0.5, -9) or UDim2.new(0, 3, 0.5, -9)
+                callback(state)
+            end,
+        }
+        return wrapper
     end
 
     function Elements:AddTextbox(text, default, callback)
@@ -757,22 +777,33 @@ local AutoTab = CreateTab("Auto\nFarm", "🌾")
 local GiftTab = CreateTab("Gift", "🎁")
 local BaseTab = CreateTab("Base", "🏠")
 local MiscTab = CreateTab("Misc", "⚙️")
+local ConfigTab = CreateTab("Config", "💾")
+
+-- ==========================================
+-- GUI REGISTRY (used by applyConfig to sync visuals)
+-- ==========================================
+-- Populated below as each widget is created.
+-- Keys match SAVE_KEYS so applyConfig can look them up by name.
+local _guiToggles   = {}  -- key -> ToggleFrame (has :_setState)
+local _guiTextboxes = {}  -- key -> TextBox Input instance
 
 -- ==========================================
 -- AUTOFARM TAB
 -- ==========================================
-AutoTab:AddTextbox("Farm Zone (1-13)", "1", function(val)
+local _zoneInput = AutoTab:AddTextbox("Farm Zone (1-13)", "1", function(val)
     local target = "Zone" .. tostring(val)
     if zonesFold:FindFirstChild(target) then
         getgenv().ChosenZone = zonesFold[target]
     end
 end)
+_guiTextboxes["ChosenZone"] = _zoneInput  -- stored as zone number string
 
-AutoTab:AddTextbox("Min Value Fallback (e.g. 1m, 500k)", "0", function(val)
+local _minFarmInput = AutoTab:AddTextbox("Min Value Fallback (e.g. 1m, 500k)", "0", function(val)
     getgenv().MinFarmValue = parseValue(val) or 0
 end)
+_guiTextboxes["MinFarmValue"] = _minFarmInput
 
-AutoTab:AddToggle("Autofarm", false, function(state)
+_guiToggles["Farming"] = AutoTab:AddToggle("Autofarm", false, function(state)
     getgenv().Farming = state
     if state then
         task.spawn(function()
@@ -816,7 +847,8 @@ AutoTab:AddToggle("Autofarm", false, function(state)
 
                         local shouldFarm = false
                         if celestialPet and (isRainbow or isDarkMatter) then shouldFarm = true end
-                        if celestialPet and not isRainbow and not isDarkMatter and detectedValue >= 1000000 then shouldFarm = true end
+                        local celestialThresh = (getgenv().MinFarmValue and getgenv().MinFarmValue > 0) and getgenv().MinFarmValue or 1000000
+                        if celestialPet and not isRainbow and not isDarkMatter and detectedValue >= celestialThresh then shouldFarm = true end
                         if isAncient and (isRainbow or isDarkMatter) then shouldFarm = true end
                         -- Fallback: farm any pet that meets the min value threshold if no specific variant matched
                         local minVal = getgenv().MinFarmValue or 0
@@ -858,13 +890,14 @@ end)
 -- ==========================================
 -- AUTOSELL (FIXED)
 -- ==========================================
-AutoTab:AddTextbox("Max Price (Autosell)", "0", function(val)
+local _maxPriceInput = AutoTab:AddTextbox("Max Price (Autosell)", "0", function(val)
     getgenv().MaxPrice = parseValue(val) or 0
 end)
+_guiTextboxes["MaxPrice"] = _maxPriceInput
 
 local sellStatus = AutoTab:AddStatusLabel("⏳ Autosell idle")
 
-AutoTab:AddToggle("Autosell", false, function(state)
+_guiToggles["Selling"] = AutoTab:AddToggle("Autosell", false, function(state)
     getgenv().Selling = state
     if state then
         task.spawn(function()
@@ -903,13 +936,17 @@ AutoTab:AddToggle("Autosell", false, function(state)
                             table.insert(toSell, item.Name)
                         end
                     end
-                    soldCount = #toSell
-                    for _, n in ipairs(toSell) do
-                        if not getgenv().Selling then break end -- stop mid-sell instantly on toggle off
-                        pcall(function() sellRemote:InvokeServer(n) end)
-                    end
-                    if soldCount > 0 then
-                        sellStatus.Text = "💰 Sold " .. soldCount .. " pet(s)"
+                    local totalToSell = #toSell
+                    soldCount = 0
+                    if totalToSell > 0 then
+                        for _, n in ipairs(toSell) do
+                            if not getgenv().Selling then break end -- stop mid-sell instantly on toggle off
+                            pcall(function() sellRemote:InvokeServer(n) end)
+                            soldCount = soldCount + 1
+                            sellStatus.Text = "💰 Selling " .. soldCount .. "/" .. totalToSell
+                            sellStatus.TextColor3 = Color3.fromRGB(255, 200, 50)
+                        end
+                        sellStatus.Text = "✅ Done — sold " .. soldCount .. "/" .. totalToSell
                         sellStatus.TextColor3 = Color3.fromRGB(100, 220, 100)
                     else
                         sellStatus.Text = "✅ Idle — 0 under " .. tostring(maxP)
@@ -928,11 +965,12 @@ AutoTab:AddToggle("Autosell", false, function(state)
     end
 end)
 
-AutoTab:AddTextbox("Input Burst (Dupe)", "20", function(val)
+local _burstInput = AutoTab:AddTextbox("Input Burst (Dupe)", "20", function(val)
     getgenv().InputBurst = tonumber(val) or 1
 end)
+_guiTextboxes["InputBurst"] = _burstInput
 
-AutoTab:AddToggle("Position Cycle (TP+Dupe)", false, function(state)
+_guiToggles["PositionCycle"] = AutoTab:AddToggle("Position Cycle (TP+Dupe)", false, function(state)
     getgenv().PositionCycle = state
     if state then
         task.spawn(function()
@@ -966,6 +1004,7 @@ local giftStatusLabel = GiftTab:AddStatusLabel("⏳ Waiting...")
 local giftUsernameInput = GiftTab:AddTextbox("Target Username", "", function(val)
     getgenv().GiftTarget = val
 end)
+_guiTextboxes["GiftTarget"] = giftUsernameInput
 
 -- Collapsible player list header button
 local playerListCollapse = Instance.new("TextButton")
@@ -1055,15 +1094,47 @@ GiftTab:AddButton("\240\159\148\132 Refresh List", Color3.fromRGB(55, 55, 70), f
     refreshGiftPlayerList()
 end)
 
-GiftTab:AddTextbox("Pet Filter (name or ALL)", "ALL", function(val)
+local _giftFilterInput = GiftTab:AddTextbox("Pet Filter (name or ALL)", "ALL", function(val)
     getgenv().GiftFilter = val
 end)
+_guiTextboxes["GiftFilter"] = _giftFilterInput
 
 GiftTab:AddLabel("Amount:")
 
--- Amount textbox hidden frame — only visible when SPECIFIC is selected
+-- ALL / SPECIFIC collapsible toggle pair (mirrors "Select from server" pattern)
+local mode = "ALL"
+
+local PairFrame2 = Instance.new("Frame")
+PairFrame2.Size = UDim2.new(1, 0, 0, 44)
+PairFrame2.BackgroundTransparency = 1
+PairFrame2.Parent = GiftTab._scroll
+
+local allBtn2 = Instance.new("TextButton")
+allBtn2.Size = UDim2.new(0.5, -4, 1, 0)
+allBtn2.Text = "ALL"
+allBtn2.Font = Enum.Font.GothamBold
+allBtn2.TextSize = 13
+allBtn2.TextColor3 = Color3.new(1,1,1)
+allBtn2.BackgroundColor3 = Color3.fromRGB(90,100,255)
+allBtn2.BorderSizePixel = 0
+allBtn2.Parent = PairFrame2
+Instance.new("UICorner", allBtn2).CornerRadius = UDim.new(0, 8)
+
+local specificCollapseBtn = Instance.new("TextButton")
+specificCollapseBtn.Size = UDim2.new(0.5, -4, 1, 0)
+specificCollapseBtn.Position = UDim2.new(0.5, 4, 0, 0)
+specificCollapseBtn.Text = "▼  SPECIFIC"
+specificCollapseBtn.Font = Enum.Font.GothamBold
+specificCollapseBtn.TextSize = 13
+specificCollapseBtn.TextColor3 = Color3.new(1,1,1)
+specificCollapseBtn.BackgroundColor3 = Color3.fromRGB(45,45,58)
+specificCollapseBtn.BorderSizePixel = 0
+specificCollapseBtn.Parent = PairFrame2
+Instance.new("UICorner", specificCollapseBtn).CornerRadius = UDim.new(0, 8)
+
+-- Amount textbox — only visible when SPECIFIC is selected (collapsed by default)
 local amountBoxFrame = Instance.new("Frame")
-amountBoxFrame.Size = UDim2.new(1, -20, 0, 44)
+amountBoxFrame.Size = UDim2.new(1, 0, 0, 44)
 amountBoxFrame.BackgroundColor3 = Color3.fromRGB(28, 28, 38)
 amountBoxFrame.BorderSizePixel = 0
 amountBoxFrame.Visible = false
@@ -1096,49 +1167,29 @@ amountInput.Parent = amountBoxFrame
 Instance.new("UICorner", amountInput).CornerRadius = UDim.new(0, 6)
 amountInput.FocusLost:Connect(function() getgenv().GiftAmount = amountInput.Text end)
 
--- Toggle pair with show/hide wired in
-local mode = "ALL"
-local PairFrame2 = Instance.new("Frame")
-PairFrame2.Size = UDim2.new(1, -20, 0, 44)
-PairFrame2.BackgroundTransparency = 1
-PairFrame2.Parent = GiftTab._scroll
-
-local allBtn2 = Instance.new("TextButton")
-allBtn2.Size = UDim2.new(0.5, -4, 1, 0)
-allBtn2.Text = "ALL"
-allBtn2.Font = Enum.Font.GothamBold
-allBtn2.TextSize = 13
-allBtn2.TextColor3 = Color3.new(1,1,1)
-allBtn2.BackgroundColor3 = Color3.fromRGB(90,100,255)
-allBtn2.BorderSizePixel = 0
-allBtn2.Parent = PairFrame2
-Instance.new("UICorner", allBtn2).CornerRadius = UDim.new(0, 8)
-
-local specificBtn2 = Instance.new("TextButton")
-specificBtn2.Size = UDim2.new(0.5, -4, 1, 0)
-specificBtn2.Position = UDim2.new(0.5, 4, 0, 0)
-specificBtn2.Text = "SPECIFIC"
-specificBtn2.Font = Enum.Font.GothamBold
-specificBtn2.TextSize = 13
-specificBtn2.TextColor3 = Color3.new(1,1,1)
-specificBtn2.BackgroundColor3 = Color3.fromRGB(45,45,58)
-specificBtn2.BorderSizePixel = 0
-specificBtn2.Parent = PairFrame2
-Instance.new("UICorner", specificBtn2).CornerRadius = UDim.new(0, 8)
-
 local function getAmountMode() return mode end
 
 allBtn2.MouseButton1Click:Connect(function()
     mode = "ALL"
     allBtn2.BackgroundColor3 = Color3.fromRGB(90,100,255)
-    specificBtn2.BackgroundColor3 = Color3.fromRGB(45,45,58)
+    specificCollapseBtn.BackgroundColor3 = Color3.fromRGB(45,45,58)
+    specificCollapseBtn.Text = "▼  SPECIFIC"
     amountBoxFrame.Visible = false
 end)
-specificBtn2.MouseButton1Click:Connect(function()
-    mode = "SPECIFIC"
-    specificBtn2.BackgroundColor3 = Color3.fromRGB(90,100,255)
-    allBtn2.BackgroundColor3 = Color3.fromRGB(45,45,58)
-    amountBoxFrame.Visible = true
+specificCollapseBtn.MouseButton1Click:Connect(function()
+    if mode ~= "SPECIFIC" then
+        -- Switch to SPECIFIC and expand
+        mode = "SPECIFIC"
+        specificCollapseBtn.BackgroundColor3 = Color3.fromRGB(90,100,255)
+        allBtn2.BackgroundColor3 = Color3.fromRGB(45,45,58)
+        specificCollapseBtn.Text = "▲  SPECIFIC"
+        amountBoxFrame.Visible = true
+    else
+        -- Already SPECIFIC — toggle collapse/expand
+        local nowVisible = not amountBoxFrame.Visible
+        amountBoxFrame.Visible = nowVisible
+        specificCollapseBtn.Text = nowVisible and "▲  SPECIFIC" or "▼  SPECIFIC"
+    end
 end)
 
 GiftTab:AddButton("▶ START GIFTING", Color3.fromRGB(0, 150, 0), function()
@@ -1214,7 +1265,7 @@ end)
 
 GiftTab:AddLabel("── AUTO ACCEPT GIFT ──")
 
-GiftTab:AddToggle("Auto Accept Gift", false, function(state)
+_guiToggles["AutoAcceptGift"] = GiftTab:AddToggle("Auto Accept Gift", false, function(state)
     getgenv().AutoAcceptGift = state
     if state then
         task.spawn(function()
@@ -1241,7 +1292,7 @@ local claimStatusLabel = BaseTab:AddStatusLabel("⏳ Idle")
 
 BaseTab:AddSlotSelector("Claim Slots:", "ClaimSlots")
 
-BaseTab:AddToggle("Auto Claim", false, function(state)
+_guiToggles["AutoClaim"] = BaseTab:AddToggle("Auto Claim", false, function(state)
     getgenv().AutoClaim = state
     if state then
         task.spawn(function()
@@ -1296,7 +1347,7 @@ local upgradeStatusLabel = BaseTab:AddStatusLabel("⏳ Idle")
 
 BaseTab:AddSlotSelector("Upgrade Slots:", "UpgradeSlots")
 
-BaseTab:AddToggle("Auto Upgrade", false, function(state)
+_guiToggles["AutoUpgrade"] = BaseTab:AddToggle("Auto Upgrade", false, function(state)
     getgenv().AutoUpgrade = state
     if state then
         task.spawn(function()
@@ -1373,35 +1424,361 @@ MiscTab:AddToggle("Show Dupe Button", true, function(state)
     SpamButton.Visible = state
 end)
 
-MiscTab:AddButton("🔍 Debug Backpack", function()
-    local results = ""
-    for _, item in pairs(player.Backpack:GetChildren()) do
-        if item.Name == "Bat" then continue end
-        results = results .. "\n=== " .. item.Name .. " ===\n"
-        results = results .. "ToolTip: " .. tostring(item.ToolTip) .. "\n"
-        results = results .. "DetectedValue: " .. tostring(getItemValue(item)) .. "\n"
-        for _, desc in ipairs(item:GetDescendants()) do
-            if desc:IsA("TextLabel") or desc:IsA("StringValue") or desc:IsA("NumberValue") or desc:IsA("IntValue") then
-                local val = desc:IsA("TextLabel") and desc.Text or tostring(desc.Value)
-                results = results .. desc.ClassName .. " @ " .. desc.Name .. " = " .. val .. "\n"
+
+-- ==========================================
+-- CONFIG TAB
+-- ==========================================
+-- Uses writefile/readfile (executor API) to persist profiles.
+-- Each profile is saved as a separate JSON-like file under a folder.
+-- No connections are left open — all operations are one-shot, no loops,
+-- no persistent threads. Zero memory leak surface.
+
+local CONFIG_FOLDER = "KaizAdminHub"
+local CONFIG_EXT    = ".cfg"
+local AUTO_LOAD_KEY = CONFIG_FOLDER .. "/autoload.txt"
+
+-- Ensure folder exists (pcall so it never throws)
+pcall(function() makefolder(CONFIG_FOLDER) end)
+
+-- ── Helpers ────────────────────────────────────────────────────────────
+local function cfgPath(name)
+    return CONFIG_FOLDER .. "/" .. tostring(name):gsub("[^%w_%-]", "_") .. CONFIG_EXT
+end
+
+-- Lightweight serialiser — stores only the getgenv() keys that we care about.
+-- Does NOT walk the entire environment, so no runaway memory usage.
+local SAVE_KEYS = {
+    "Farming", "Selling", "PositionCycle", "AutoClaim", "AutoUpgrade",
+    "AutoAcceptGift", "StopGift", "MaxPrice", "MinFarmValue", "InputBurst",
+    "ClaimSlots", "UpgradeSlots", "GiftTarget", "GiftFilter", "GiftAmount",
+    "ChosenZone",  -- saved as zone name string, restored on load
+}
+
+local function serializeValue(k, v)
+    local t = type(v)
+    if t == "boolean" then return (v and "true" or "false")
+    elseif t == "number" then return tostring(v)
+    elseif t == "string" then return '"' .. v:gsub('"', '\\"') .. '"'
+    elseif t == "table" then
+        -- Only handle flat arrays of numbers (slot lists)
+        local parts = {}
+        for _, n in ipairs(v) do
+            if type(n) == "number" then
+                parts[#parts+1] = tostring(n)
+            end
+        end
+        return "[" .. table.concat(parts, ",") .. "]"
+    elseif t == "userdata" or t == "Instance" then
+        -- ChosenZone → store its name
+        pcall(function()
+            if v and v.Name then return end
+        end)
+        local ok, name = pcall(function() return v.Name end)
+        return ok and ('"' .. tostring(name) .. '"') or '"Zone1"'
+    end
+    return "null"
+end
+
+local function buildJSON()
+    local lines = {"{"}
+    local count = 0
+    for _, k in ipairs(SAVE_KEYS) do
+        local v = getgenv()[k]
+        if v ~= nil then
+            count = count + 1
+            lines[#lines+1] = '  "' .. k .. '": ' .. serializeValue(k, v) .. ","
+        end
+    end
+    -- Remove trailing comma from last entry
+    if count > 0 then
+        lines[#lines] = lines[#lines]:sub(1, -2)
+    end
+    lines[#lines+1] = "}"
+    return table.concat(lines, "\n")
+end
+
+-- Minimal JSON-ish parser for our own format (no external deps)
+local function parseJSON(src)
+    local data = {}
+    -- Booleans
+    for k, v in src:gmatch('"([%w_]+)"%s*:%s*(true)') do data[k] = true end
+    for k, v in src:gmatch('"([%w_]+)"%s*:%s*(false)') do data[k] = false end
+    -- Numbers
+    for k, v in src:gmatch('"([%w_]+)"%s*:%s*(-?%d+%.?%d*)') do
+        if data[k] == nil then data[k] = tonumber(v) end
+    end
+    -- Strings
+    for k, v in src:gmatch('"([%w_]+)"%s*:%s*"(.-)"') do
+        if data[k] == nil then data[k] = v end
+    end
+    -- Arrays of numbers
+    for k, v in src:gmatch('"([%w_]+)"%s*:%s*%[([^%]]*)%]') do
+        if data[k] == nil then
+            local arr = {}
+            for n in v:gmatch("%-?%d+%.?%d*") do
+                arr[#arr+1] = tonumber(n)
+            end
+            data[k] = arr
+        end
+    end
+    return data
+end
+
+local function applyConfig(data)
+    for _, k in ipairs(SAVE_KEYS) do
+        if data[k] ~= nil then
+            if k == "ChosenZone" then
+                -- Resolve zone name back to instance safely
+                local zoneName = tostring(data[k])
+                local zone = zonesFold:FindFirstChild(zoneName)
+                if zone then
+                    getgenv().ChosenZone = zone
+                    -- Sync zone textbox: strip "Zone" prefix to get the number
+                    local zoneNum = zoneName:match("^Zone(%d+)$")
+                    if zoneNum and _guiTextboxes["ChosenZone"] then
+                        _guiTextboxes["ChosenZone"].Text = zoneNum
+                    end
+                end
+            else
+                getgenv()[k] = data[k]
+                -- Sync toggle GUI
+                if _guiToggles[k] then
+                    pcall(_guiToggles[k]._setState, data[k])
+                end
+                -- Sync textbox GUI
+                if _guiTextboxes[k] then
+                    _guiTextboxes[k].Text = tostring(data[k])
+                end
             end
         end
     end
+end
 
-    local debugLabel = Instance.new("TextLabel")
-    debugLabel.Size = UDim2.new(0.9, 0, 0.7, 0)
-    debugLabel.Position = UDim2.new(0.05, 0, 0.15, 0)
-    debugLabel.BackgroundColor3 = Color3.fromRGB(10, 10, 20)
-    debugLabel.TextColor3 = Color3.fromRGB(255, 255, 100)
-    debugLabel.Font = Enum.Font.Code
-    debugLabel.TextSize = 11
-    debugLabel.TextWrapped = true
-    debugLabel.TextXAlignment = Enum.TextXAlignment.Left
-    debugLabel.TextYAlignment = Enum.TextYAlignment.Top
-    debugLabel.Text = results == "" and "BACKPACK IS EMPTY" or results
-    debugLabel.ZIndex = 999
-    debugLabel.Parent = ScreenGui
+-- Returns sorted list of saved profile names (strips path + extension)
+local function listProfiles()
+    local names = {}
+    pcall(function()
+        for _, f in ipairs(listfiles(CONFIG_FOLDER)) do
+            local name = f:match("([^/\\]+)" .. CONFIG_EXT .. "$")
+            if name then names[#names+1] = name end
+        end
+    end)
+    table.sort(names)
+    return names
+end
 
-    debugLabel.MouseButton1Click:Connect(function() debugLabel:Destroy() end)
-    Instance.new("UICorner", debugLabel).CornerRadius = UDim.new(0, 10)
+-- ── UI ─────────────────────────────────────────────────────────────────
+ConfigTab:AddLabel("── PROFILES ──")
+
+local cfgStatus = ConfigTab:AddStatusLabel("💾 Ready")
+
+-- Name input
+local profileNameInput = ConfigTab:AddTextbox("Profile Name", "MyConfig", function() end)
+
+-- ── Save ──
+ConfigTab:AddButton("💾 Save Profile", Color3.fromRGB(0, 130, 80), function()
+    local name = profileNameInput.Text:match("^%s*(.-)%s*$")
+    if name == "" then
+        cfgStatus.Text = "❌ Enter a profile name"
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+        return
+    end
+    local ok, err = pcall(function()
+        writefile(cfgPath(name), buildJSON())
+    end)
+    if ok then
+        cfgStatus.Text = "✅ Saved: " .. name
+        cfgStatus.TextColor3 = Color3.fromRGB(100, 220, 100)
+    else
+        cfgStatus.Text = "❌ Save failed"
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+    end
+end)
+
+-- ── Load ──
+ConfigTab:AddButton("📂 Load Profile", Color3.fromRGB(0, 100, 200), function()
+    local name = profileNameInput.Text:match("^%s*(.-)%s*$")
+    if name == "" then
+        cfgStatus.Text = "❌ Enter a profile name"
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+        return
+    end
+    local path = cfgPath(name)
+    local ok, src = pcall(readfile, path)
+    if not ok or not src then
+        cfgStatus.Text = "❌ Profile not found: " .. name
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+        return
+    end
+    local ok2, err = pcall(function()
+        applyConfig(parseJSON(src))
+    end)
+    if ok2 then
+        cfgStatus.Text = "📂 Loaded: " .. name
+        cfgStatus.TextColor3 = Color3.fromRGB(100, 200, 255)
+    else
+        cfgStatus.Text = "❌ Load parse error"
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+    end
+end)
+
+-- ── Delete ──
+ConfigTab:AddButton("🗑 Delete Profile", Color3.fromRGB(160, 30, 30), function()
+    local name = profileNameInput.Text:match("^%s*(.-)%s*$")
+    if name == "" then
+        cfgStatus.Text = "❌ Enter a profile name"
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+        return
+    end
+    local ok = pcall(delfile, cfgPath(name))
+    if ok then
+        cfgStatus.Text = "🗑 Deleted: " .. name
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 140, 60)
+    else
+        cfgStatus.Text = "❌ Delete failed (not found?)"
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+    end
+end)
+
+ConfigTab:AddLabel("── AUTO-LOAD ──")
+
+-- Set auto-load — writes profile name to a tiny sentinel file
+ConfigTab:AddButton("⚡ Set as Auto-Load", Color3.fromRGB(120, 80, 200), function()
+    local name = profileNameInput.Text:match("^%s*(.-)%s*$")
+    if name == "" then
+        cfgStatus.Text = "❌ Enter a profile name first"
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+        return
+    end
+    -- Verify the profile actually exists before setting auto-load
+    local exists = pcall(readfile, cfgPath(name))
+    if not exists then
+        cfgStatus.Text = "❌ Save the profile first"
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+        return
+    end
+    pcall(writefile, AUTO_LOAD_KEY, name)
+    cfgStatus.Text = "⚡ Auto-load set: " .. name
+    cfgStatus.TextColor3 = Color3.fromRGB(180, 130, 255)
+end)
+
+-- Clear auto-load sentinel
+ConfigTab:AddButton("✕ Clear Auto-Load", Color3.fromRGB(80, 80, 100), function()
+    pcall(delfile, AUTO_LOAD_KEY)
+    cfgStatus.Text = "✕ Auto-load cleared"
+    cfgStatus.TextColor3 = Color3.fromRGB(180, 180, 180)
+end)
+
+ConfigTab:AddLabel("── SAVED PROFILES ──")
+
+-- Saved profiles list (collapsible, same pattern as Select from server)
+local profileListCollapse = Instance.new("TextButton")
+profileListCollapse.Size = UDim2.new(1, 0, 0, 36)
+profileListCollapse.BackgroundColor3 = Color3.fromRGB(35, 35, 50)
+profileListCollapse.Text = "▼  Show Saved Profiles"
+profileListCollapse.TextColor3 = Color3.fromRGB(200, 200, 255)
+profileListCollapse.Font = Enum.Font.GothamBold
+profileListCollapse.TextSize = 13
+profileListCollapse.TextXAlignment = Enum.TextXAlignment.Left
+profileListCollapse.BorderSizePixel = 0
+profileListCollapse.Parent = ConfigTab._scroll
+do local p = Instance.new("UIPadding") p.PaddingLeft = UDim.new(0,10) p.Parent = profileListCollapse end
+Instance.new("UICorner", profileListCollapse).CornerRadius = UDim.new(0, 8)
+
+local profileListFrame = Instance.new("ScrollingFrame")
+profileListFrame.Size = UDim2.new(1, 0, 0, 130)
+profileListFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 32)
+profileListFrame.BorderSizePixel = 0
+profileListFrame.ScrollBarThickness = 3
+profileListFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+profileListFrame.Visible = false
+profileListFrame.Parent = ConfigTab._scroll
+Instance.new("UICorner", profileListFrame).CornerRadius = UDim.new(0, 8)
+
+local profileListLayout = Instance.new("UIListLayout")
+profileListLayout.Parent = profileListFrame
+profileListLayout.SortOrder = Enum.SortOrder.Name
+profileListLayout.Padding = UDim.new(0, 3)
+
+local profileListPad = Instance.new("UIPadding")
+profileListPad.PaddingLeft = UDim.new(0, 4)
+profileListPad.PaddingTop = UDim.new(0, 4)
+profileListPad.PaddingRight = UDim.new(0, 4)
+profileListPad.Parent = profileListFrame
+
+local profileListCollapsed = true
+
+local function refreshProfileList()
+    for _, c in pairs(profileListFrame:GetChildren()) do
+        if c:IsA("TextButton") then c:Destroy() end
+    end
+    local profiles = listProfiles()
+    if #profiles == 0 then
+        local empty = Instance.new("TextLabel")
+        empty.Size = UDim2.new(1, 0, 0, 30)
+        empty.BackgroundTransparency = 1
+        empty.Text = "  No profiles saved yet"
+        empty.TextColor3 = Color3.fromRGB(130, 130, 150)
+        empty.Font = Enum.Font.Gotham
+        empty.TextSize = 12
+        empty.TextXAlignment = Enum.TextXAlignment.Left
+        empty.Parent = profileListFrame
+    else
+        for _, name in ipairs(profiles) do
+            local pb = Instance.new("TextButton")
+            pb.Parent = profileListFrame
+            pb.Size = UDim2.new(1, 0, 0, 36)
+            pb.Text = "  " .. name
+            pb.BackgroundColor3 = Color3.fromRGB(35, 35, 48)
+            pb.TextColor3 = Color3.new(1, 1, 1)
+            pb.TextXAlignment = Enum.TextXAlignment.Left
+            pb.BorderSizePixel = 0
+            pb.Font = Enum.Font.Gotham
+            pb.TextSize = 13
+            Instance.new("UICorner", pb).CornerRadius = UDim.new(0, 6)
+            pb.MouseButton1Click:Connect(function()
+                for _, b in pairs(profileListFrame:GetChildren()) do
+                    if b:IsA("TextButton") then b.BackgroundColor3 = Color3.fromRGB(35, 35, 48) end
+                end
+                pb.BackgroundColor3 = Color3.fromRGB(0, 100, 180)
+                profileNameInput.Text = name
+                cfgStatus.Text = "📋 Selected: " .. name
+                cfgStatus.TextColor3 = Color3.fromRGB(200, 200, 255)
+            end)
+        end
+    end
+    profileListFrame.CanvasSize = UDim2.new(0, 0, 0, profileListLayout.AbsoluteContentSize.Y + 8)
+end
+
+profileListCollapse.MouseButton1Click:Connect(function()
+    profileListCollapsed = not profileListCollapsed
+    profileListFrame.Visible = not profileListCollapsed
+    if not profileListCollapsed then
+        refreshProfileList()
+        profileListCollapse.Text = "▲  Hide Saved Profiles"
+    else
+        profileListCollapse.Text = "▼  Show Saved Profiles"
+    end
+end)
+
+ConfigTab:AddButton("🔄 Refresh List", Color3.fromRGB(55, 55, 70), function()
+    refreshProfileList()
+    cfgStatus.Text = "🔄 List refreshed"
+    cfgStatus.TextColor3 = Color3.fromRGB(180, 180, 180)
+end)
+
+-- ── Auto-load on startup ────────────────────────────────────────────────
+-- Runs once at script start; uses task.defer so GUI finishes building first.
+-- No loop, no connection kept alive — fires once and exits.
+task.defer(function()
+    local ok, autoName = pcall(readfile, AUTO_LOAD_KEY)
+    if not ok or not autoName or autoName:match("^%s*$") then return end
+    autoName = autoName:match("^%s*(.-)%s*$")
+    local ok2, src = pcall(readfile, cfgPath(autoName))
+    if not ok2 or not src then return end
+    pcall(function()
+        applyConfig(parseJSON(src))
+        cfgStatus.Text = "⚡ Auto-loaded: " .. autoName
+        cfgStatus.TextColor3 = Color3.fromRGB(180, 130, 255)
+    end)
 end)
