@@ -858,6 +858,7 @@ _guiToggles["Farming"] = AutoTab:AddToggle("Autofarm", false, function(state)
                         local minVal = getgenv().MinFarmValue or 0
                         if not shouldFarm and minVal > 0 and detectedValue >= minVal then shouldFarm = true end
                         if name:find("cosmic") then shouldFarm = false end
+                        if name:find("radioactive") then shouldFarm = false end
 
                         if shouldFarm then
                             if obj:IsA("Model") and obj.PrimaryPart then
@@ -1026,7 +1027,7 @@ end)
 -- ==========================================
 -- GIFT TAB
 -- ==========================================
-GiftTab:AddLabel("── AUTO GIFT ──")
+GiftTab:AddLabel("AUTO GIFT")
 
 local giftStatusLabel = GiftTab:AddStatusLabel("⏳ Waiting...")
 
@@ -1292,7 +1293,7 @@ GiftTab:AddButton("■ STOP GIFTING", Color3.fromRGB(160, 0, 0), function()
     giftStatusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
 end)
 
-GiftTab:AddLabel("── AUTO ACCEPT GIFT ──")
+GiftTab:AddLabel("AUTO ACCEPT GIFT")
 
 _guiToggles["AutoAcceptGift"] = GiftTab:AddToggle("Auto Accept Gift", false, function(state)
     getgenv().AutoAcceptGift = state
@@ -1315,7 +1316,7 @@ end)
 -- ==========================================
 -- BASE TAB
 -- ==========================================
-BaseTab:AddLabel("── AUTO CLAIM ──")
+BaseTab:AddLabel("AUTO CLAIM")
 
 local claimStatusLabel = BaseTab:AddStatusLabel("⏳ Idle")
 
@@ -1370,7 +1371,7 @@ BaseTab:AddButton("Claim Once", Color3.fromRGB(0, 130, 180), function()
     end)
 end)
 
-BaseTab:AddLabel("── AUTO UPGRADE ──")
+BaseTab:AddLabel("AUTO UPGRADE")
 
 local upgradeStatusLabel = BaseTab:AddStatusLabel("⏳ Idle")
 
@@ -1434,6 +1435,138 @@ BaseTab:AddButton("Upgrade Once", Color3.fromRGB(0, 130, 180), function()
 end)
 
 -- ==========================================
+-- AUTO OPEN BLOCKS
+-- ==========================================
+BaseTab:AddLabel("AUTO OPEN BLOCKS")
+
+local blockStatusLabel = BaseTab:AddStatusLabel("⏳ Idle")
+
+-- Filter textbox: "ALL", "Lucky Block", "Ancient Block", "Radioactive Ancient Block" etc.
+local blockFilterInput = BaseTab:AddTextbox("Block Filter (e.g. Ancient Block)", "ALL", function() end)
+local blockDelayInput = BaseTab:AddTextbox("Delay between opens (seconds)", "12", function() end)
+
+-- Amount buttons row
+local amountFrame = Instance.new("Frame")
+amountFrame.Size = UDim2.new(1, 0, 0, 44)
+amountFrame.BackgroundTransparency = 1
+amountFrame.Parent = BaseTab._scroll
+
+local amountLayout = Instance.new("UIListLayout")
+amountLayout.FillDirection = Enum.FillDirection.Horizontal
+amountLayout.Padding = UDim.new(0, 6)
+amountLayout.Parent = amountFrame
+
+local selectedAmount = 10
+local amountBtns = {}
+
+local function makeAmountBtn(amount)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0, 60, 1, 0)
+    btn.Text = tostring(amount)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 14
+    btn.TextColor3 = Color3.new(1,1,1)
+    btn.BackgroundColor3 = amount == selectedAmount and Color3.fromRGB(90,100,255) or Color3.fromRGB(45,45,58)
+    btn.BorderSizePixel = 0
+    btn.Parent = amountFrame
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+    amountBtns[amount] = btn
+    btn.MouseButton1Click:Connect(function()
+        selectedAmount = amount
+        for a, b in pairs(amountBtns) do
+            b.BackgroundColor3 = a == selectedAmount and Color3.fromRGB(90,100,255) or Color3.fromRGB(45,45,58)
+        end
+    end)
+end
+
+makeAmountBtn(1)
+makeAmountBtn(5)
+makeAmountBtn(10)
+
+local blockRemote = Remotes:WaitForChild("LuckyBlockShared_OpenLuckyBlock")
+local QUICK_OPEN_GAMEPASS = 1722072500
+
+local hasQuickOpen = false
+task.spawn(function()
+    hasQuickOpen = pcall(function()
+        return game:GetService("MarketplaceService"):UserOwnsGamePassAsync(player.UserId, QUICK_OPEN_GAMEPASS)
+    end) and game:GetService("MarketplaceService"):UserOwnsGamePassAsync(player.UserId, QUICK_OPEN_GAMEPASS)
+end)
+
+local function getBlocks(filter)
+    local found = {}
+    local backpack = player:FindFirstChild("Backpack")
+    if not backpack then return found end
+    for _, obj in ipairs(backpack:GetChildren()) do
+        if obj:IsA("Tool") then
+            local tip = ""
+            pcall(function() tip = obj.ToolTip or "" end)
+            -- Strip HTML/rich text tags so we get the plain name
+            local plainTip = tip:gsub("<[^>]+>", ""):match("^%s*(.-)%s*$")
+            local tipLower = plainTip:lower()
+            -- Always require "block" in the tooltip so pets are never included
+            if not tipLower:find("block", 1, true) then continue end
+            local filterLower = filter:lower()
+            if filterLower == "all" or tipLower:find(filterLower, 1, true) then
+                table.insert(found, { uuid = obj.Name, label = plainTip ~= "" and plainTip or obj.Name })
+            end
+        end
+    end
+    return found
+end
+
+local stopOpenBlocks = false
+local isOpeningBlocks = false
+
+BaseTab:AddButton("▶ Open Blocks", Color3.fromRGB(0, 150, 0), function()
+    -- Stop any existing loop and wait for it to exit
+    stopOpenBlocks = true
+    while isOpeningBlocks do task.wait(0.1) end
+    stopOpenBlocks = false
+
+    task.spawn(function()
+        isOpeningBlocks = true
+        local filter = blockFilterInput.Text:match("^%s*(.-)%s*$")
+        if filter == "" then filter = "ALL" end
+
+        blockStatusLabel.TextColor3 = Color3.fromRGB(100, 220, 100)
+        local totalOpened = 0
+
+        while not stopOpenBlocks do
+            local blocks = getBlocks(filter)
+            if #blocks == 0 then
+                blockStatusLabel.Text = "✅ Done! Opened " .. totalOpened .. " batch(es) — no blocks left"
+                blockStatusLabel.TextColor3 = Color3.fromRGB(100, 220, 100)
+                break
+            end
+
+            local data = blocks[1]
+            local remaining = #blocks
+            blockStatusLabel.Text = "📦 Batch " .. (totalOpened + 1) .. " — Opening " .. selectedAmount .. " " .. data.label .. " (" .. remaining .. " left)"
+            pcall(function()
+                blockRemote:FireServer(data.uuid, selectedAmount)
+            end)
+            totalOpened = totalOpened + 1
+
+            local delay = tonumber(blockDelayInput.Text) or 12
+            task.wait(hasQuickOpen and math.min(delay, 0.5) or delay)
+        end
+
+        if stopOpenBlocks then
+            blockStatusLabel.Text = "🛑 Stopped after " .. totalOpened .. " batch(es)"
+            blockStatusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
+        end
+        isOpeningBlocks = false
+    end)
+end)
+
+BaseTab:AddButton("■ Stop", Color3.fromRGB(160, 0, 0), function()
+    stopOpenBlocks = true
+    blockStatusLabel.Text = "🛑 Stopping..."
+    blockStatusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
+end)
+
+-- ==========================================
 -- MISC TAB
 -- ==========================================
 MiscTab:AddButton("🎟 Redeem Codes", function()
@@ -1448,9 +1581,107 @@ MiscTab:AddButton("🎟 Redeem Codes", function()
     end)
 end)
 
-MiscTab:AddLabel("── DUPE BUTTON ──")
+MiscTab:AddLabel("DUPE BUTTON")
 MiscTab:AddToggle("Show Dupe Button", false, function(state)
     SpamButton.Visible = state
+end)
+
+-- ==========================================
+-- ANTI-LAG
+-- ==========================================
+MiscTab:AddLabel("ANTI LAG")
+
+getgenv().AntiLag = false
+local _antiLagOriginals = nil
+
+MiscTab:AddToggle("⚡ Anti-Lag", false, function(state)
+    getgenv().AntiLag = state
+    if state then
+        -- Safely read originals first
+        local origShadows, origQuality, origDeco = nil, nil, nil
+        pcall(function() origShadows = workspace.GlobalShadows end)
+        pcall(function() origQuality = settings().Rendering.QualityLevel end)
+        pcall(function()
+            if workspace:FindFirstChildWhichIsA("Terrain") then
+                origDeco = workspace.Terrain.Decoration
+            end
+        end)
+        _antiLagOriginals = { GlobalShadows = origShadows, Quality = origQuality, Deco = origDeco }
+
+        pcall(function() workspace.GlobalShadows = false end)
+        pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
+        pcall(function()
+            if workspace:FindFirstChildWhichIsA("Terrain") then
+                workspace.Terrain.Decoration = false
+            end
+        end)
+        pcall(function()
+            for _, v in ipairs(workspace:GetDescendants()) do
+                if v:IsA("ParticleEmitter") or v:IsA("Trail") then
+                    v.Enabled = false
+                end
+            end
+        end)
+    else
+        if _antiLagOriginals then
+            pcall(function()
+                if _antiLagOriginals.GlobalShadows ~= nil then
+                    workspace.GlobalShadows = _antiLagOriginals.GlobalShadows
+                end
+            end)
+            pcall(function()
+                if _antiLagOriginals.Quality ~= nil then
+                    settings().Rendering.QualityLevel = _antiLagOriginals.Quality
+                end
+            end)
+            pcall(function()
+                if workspace:FindFirstChildWhichIsA("Terrain") and _antiLagOriginals.Deco ~= nil then
+                    workspace.Terrain.Decoration = _antiLagOriginals.Deco
+                end
+            end)
+            pcall(function()
+                for _, v in ipairs(workspace:GetDescendants()) do
+                    if v:IsA("ParticleEmitter") or v:IsA("Trail") then
+                        v.Enabled = true
+                    end
+                end
+            end)
+            _antiLagOriginals = nil
+        end
+    end
+end)
+
+-- ==========================================
+-- ANTI-GAMEPLAY PAUSED
+-- ==========================================
+MiscTab:AddLabel("ANTI GAMEPLAY PAUSED")
+
+getgenv().AntiPause = false
+local _antiPauseConn  = nil
+
+MiscTab:AddToggle("🔄 Anti-Gameplay Paused", false, function(state)
+    getgenv().AntiPause = state
+    if state then
+        -- Listen for GameplayPaused becoming true and immediately force it back to false.
+        -- sethiddenproperty bypasses the write-restricted flag on this property,
+        -- which is exactly how inf yield handles it.
+        _antiPauseConn = player:GetPropertyChangedSignal("GameplayPaused"):Connect(function()
+            if player.GameplayPaused then
+                pcall(sethiddenproperty, player, "GameplayPaused", false)
+            end
+        end)
+    else
+        if _antiPauseConn then
+            _antiPauseConn:Disconnect()
+            _antiPauseConn = nil
+        end
+    end
+end)
+
+-- Cleanup on GUI destroy — no leak
+ScreenGui.Destroying:Connect(function()
+    if _antiPauseConn then _antiPauseConn:Disconnect(); _antiPauseConn = nil end
+    getgenv().AntiPause = false
 end)
 
 
@@ -1597,110 +1828,16 @@ local function listProfiles()
 end
 
 -- ── UI ─────────────────────────────────────────────────────────────────
-ConfigTab:AddLabel("── PROFILES ──")
+ConfigTab:AddLabel("PROFILES")
 
 local cfgStatus = ConfigTab:AddStatusLabel("💾 Ready")
 
 -- Name input
 local profileNameInput = ConfigTab:AddTextbox("Profile Name", "MyConfig", function() end)
 
--- ── Save ──
-ConfigTab:AddButton("💾 Save Profile", Color3.fromRGB(0, 130, 80), function()
-    local name = profileNameInput.Text:match("^%s*(.-)%s*$")
-    if name == "" then
-        cfgStatus.Text = "❌ Enter a profile name"
-        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
-        return
-    end
-    local ok, err = pcall(function()
-        writefile(cfgPath(name), buildJSON())
-    end)
-    if ok then
-        cfgStatus.Text = "✅ Saved: " .. name
-        cfgStatus.TextColor3 = Color3.fromRGB(100, 220, 100)
-    else
-        cfgStatus.Text = "❌ Save failed"
-        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
-    end
-end)
+-- ── Saved Profiles List (directly below name input) ──
+ConfigTab:AddLabel("SAVED PROFILES")
 
--- ── Load ──
-ConfigTab:AddButton("📂 Load Profile", Color3.fromRGB(0, 100, 200), function()
-    local name = profileNameInput.Text:match("^%s*(.-)%s*$")
-    if name == "" then
-        cfgStatus.Text = "❌ Enter a profile name"
-        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
-        return
-    end
-    local path = cfgPath(name)
-    local ok, src = pcall(readfile, path)
-    if not ok or not src then
-        cfgStatus.Text = "❌ Profile not found: " .. name
-        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
-        return
-    end
-    local ok2, err = pcall(function()
-        applyConfig(parseJSON(src))
-    end)
-    if ok2 then
-        cfgStatus.Text = "📂 Loaded: " .. name
-        cfgStatus.TextColor3 = Color3.fromRGB(100, 200, 255)
-    else
-        cfgStatus.Text = "❌ Load parse error"
-        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
-    end
-end)
-
--- ── Delete ──
-ConfigTab:AddButton("🗑 Delete Profile", Color3.fromRGB(160, 30, 30), function()
-    local name = profileNameInput.Text:match("^%s*(.-)%s*$")
-    if name == "" then
-        cfgStatus.Text = "❌ Enter a profile name"
-        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
-        return
-    end
-    local ok = pcall(delfile, cfgPath(name))
-    if ok then
-        cfgStatus.Text = "🗑 Deleted: " .. name
-        cfgStatus.TextColor3 = Color3.fromRGB(255, 140, 60)
-    else
-        cfgStatus.Text = "❌ Delete failed (not found?)"
-        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
-    end
-end)
-
-ConfigTab:AddLabel("── AUTO-LOAD ──")
-
--- Set auto-load — writes profile name to a tiny sentinel file
-ConfigTab:AddButton("⚡ Set as Auto-Load", Color3.fromRGB(120, 80, 200), function()
-    local name = profileNameInput.Text:match("^%s*(.-)%s*$")
-    if name == "" then
-        cfgStatus.Text = "❌ Enter a profile name first"
-        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
-        return
-    end
-    -- Verify the profile actually exists before setting auto-load
-    local exists = pcall(readfile, cfgPath(name))
-    if not exists then
-        cfgStatus.Text = "❌ Save the profile first"
-        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
-        return
-    end
-    pcall(writefile, AUTO_LOAD_KEY, name)
-    cfgStatus.Text = "⚡ Auto-load set: " .. name
-    cfgStatus.TextColor3 = Color3.fromRGB(180, 130, 255)
-end)
-
--- Clear auto-load sentinel
-ConfigTab:AddButton("✕ Clear Auto-Load", Color3.fromRGB(80, 80, 100), function()
-    pcall(delfile, AUTO_LOAD_KEY)
-    cfgStatus.Text = "✕ Auto-load cleared"
-    cfgStatus.TextColor3 = Color3.fromRGB(180, 180, 180)
-end)
-
-ConfigTab:AddLabel("── SAVED PROFILES ──")
-
--- Saved profiles list (collapsible, same pattern as Select from server)
 local profileListCollapse = Instance.new("TextButton")
 profileListCollapse.Size = UDim2.new(1, 0, 0, 36)
 profileListCollapse.BackgroundColor3 = Color3.fromRGB(35, 35, 50)
@@ -1793,6 +1930,100 @@ end)
 ConfigTab:AddButton("🔄 Refresh List", Color3.fromRGB(55, 55, 70), function()
     refreshProfileList()
     cfgStatus.Text = "🔄 List refreshed"
+    cfgStatus.TextColor3 = Color3.fromRGB(180, 180, 180)
+end)
+
+-- ── Save ──
+ConfigTab:AddButton("💾 Save Profile", Color3.fromRGB(0, 130, 80), function()
+    local name = profileNameInput.Text:match("^%s*(.-)%s*$")
+    if name == "" then
+        cfgStatus.Text = "❌ Enter a profile name"
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+        return
+    end
+    local ok, err = pcall(function()
+        writefile(cfgPath(name), buildJSON())
+    end)
+    if ok then
+        cfgStatus.Text = "✅ Saved: " .. name
+        cfgStatus.TextColor3 = Color3.fromRGB(100, 220, 100)
+    else
+        cfgStatus.Text = "❌ Save failed"
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+    end
+end)
+
+-- ── Load ──
+ConfigTab:AddButton("📂 Load Profile", Color3.fromRGB(0, 100, 200), function()
+    local name = profileNameInput.Text:match("^%s*(.-)%s*$")
+    if name == "" then
+        cfgStatus.Text = "❌ Enter a profile name"
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+        return
+    end
+    local path = cfgPath(name)
+    local ok, src = pcall(readfile, path)
+    if not ok or not src then
+        cfgStatus.Text = "❌ Profile not found: " .. name
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+        return
+    end
+    local ok2, err = pcall(function()
+        applyConfig(parseJSON(src))
+    end)
+    if ok2 then
+        cfgStatus.Text = "📂 Loaded: " .. name
+        cfgStatus.TextColor3 = Color3.fromRGB(100, 200, 255)
+    else
+        cfgStatus.Text = "❌ Load parse error"
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+    end
+end)
+
+-- ── Delete ──
+ConfigTab:AddButton("🗑 Delete Profile", Color3.fromRGB(160, 30, 30), function()
+    local name = profileNameInput.Text:match("^%s*(.-)%s*$")
+    if name == "" then
+        cfgStatus.Text = "❌ Enter a profile name"
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+        return
+    end
+    local ok = pcall(delfile, cfgPath(name))
+    if ok then
+        cfgStatus.Text = "🗑 Deleted: " .. name
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 140, 60)
+    else
+        cfgStatus.Text = "❌ Delete failed (not found?)"
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+    end
+end)
+
+ConfigTab:AddLabel("AUTO-LOAD")
+
+-- Set auto-load — writes profile name to a tiny sentinel file
+ConfigTab:AddButton("⚡ Set as Auto-Load", Color3.fromRGB(120, 80, 200), function()
+    local name = profileNameInput.Text:match("^%s*(.-)%s*$")
+    if name == "" then
+        cfgStatus.Text = "❌ Enter a profile name first"
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+        return
+    end
+    -- Verify the profile actually exists before setting auto-load
+    local exists = pcall(readfile, cfgPath(name))
+    if not exists then
+        cfgStatus.Text = "❌ Save the profile first"
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+        return
+    end
+    pcall(writefile, AUTO_LOAD_KEY, name)
+    cfgStatus.Text = "⚡ Auto-load set: " .. name
+    cfgStatus.TextColor3 = Color3.fromRGB(180, 130, 255)
+end)
+
+-- Clear auto-load sentinel
+ConfigTab:AddButton("✕ Clear Auto-Load", Color3.fromRGB(80, 80, 100), function()
+    pcall(delfile, AUTO_LOAD_KEY)
+    cfgStatus.Text = "✕ Auto-load cleared"
     cfgStatus.TextColor3 = Color3.fromRGB(180, 180, 180)
 end)
 
