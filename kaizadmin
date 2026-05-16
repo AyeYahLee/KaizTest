@@ -201,17 +201,7 @@ Title.TextSize = 18
 Title.TextXAlignment = Enum.TextXAlignment.Left
 Title.Parent = TopBar
 
-local MinimizeBtn = Instance.new("TextButton")
-MinimizeBtn.Size = UDim2.new(0, 44, 0, 44)
-MinimizeBtn.Position = UDim2.new(1, -98, 0, 4)
-MinimizeBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 65)
-MinimizeBtn.Text = "—"
-MinimizeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-MinimizeBtn.Font = Enum.Font.GothamBold
-MinimizeBtn.TextSize = 20
-MinimizeBtn.BorderSizePixel = 0
-MinimizeBtn.Parent = TopBar
-Instance.new("UICorner", MinimizeBtn).CornerRadius = UDim.new(0, 8)
+
 
 local CloseBtn = Instance.new("TextButton")
 CloseBtn.Size = UDim2.new(0, 44, 0, 44)
@@ -291,21 +281,53 @@ Divider.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
 Divider.BorderSizePixel = 0
 Divider.Parent = MainFrame
 
-local minimized = false
-local originalSize = MainFrame.Size
-local minimizeTweenInfo = TweenInfo.new(0.25)
-local activeSizeTween = nil
-MinimizeBtn.MouseButton1Click:Connect(function()
-    minimized = not minimized
-    ContentContainer.Visible = not minimized
-    TabContainer.Visible = not minimized
-    Divider.Visible = not minimized
-    if activeSizeTween then activeSizeTween:Cancel() end
-    activeSizeTween = TweenService:Create(MainFrame, minimizeTweenInfo, {
-        Size = minimized and UDim2.new(0.94, 0, 0, 52) or originalSize
-    })
-    activeSizeTween:Play()
-    MinimizeBtn.Text = minimized and "▲" or "—"
+-- ==========================================
+-- FLOATING ICON (tap to hide/show GUI)
+-- ==========================================
+-- Outer glow/border frame (the blue rounded square border like Delta)
+local FloatIconBorder = Instance.new("Frame")
+FloatIconBorder.Size = UDim2.new(0, 54, 0, 54)
+FloatIconBorder.Position = UDim2.new(0, 10, 0.5, -27)
+FloatIconBorder.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
+FloatIconBorder.BorderSizePixel = 0
+FloatIconBorder.ZIndex = 9
+FloatIconBorder.Parent = ScreenGui
+Instance.new("UICorner", FloatIconBorder).CornerRadius = UDim.new(0, 14)
+
+-- Inner dark background (sits on top of border frame, slightly smaller = blue edge shows)
+local FloatIcon = Instance.new("TextButton")
+FloatIcon.Size = UDim2.new(0, 46, 0, 46)
+FloatIcon.Position = UDim2.new(0.5, -23, 0.5, -23)
+FloatIcon.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
+FloatIcon.Text = "K"
+FloatIcon.TextColor3 = Color3.fromRGB(255, 210, 0)  -- yellow when open (default)
+FloatIcon.Font = Enum.Font.GothamBold
+FloatIcon.TextSize = 20
+FloatIcon.BorderSizePixel = 0
+FloatIcon.ZIndex = 10
+FloatIcon.Parent = FloatIconBorder
+Instance.new("UICorner", FloatIcon).CornerRadius = UDim.new(0, 10)
+
+-- Drag the border frame using the button as the handle
+-- (InputBegan doesn't fire on plain Frames, only on interactive elements)
+MakeDraggable(FloatIcon, FloatIconBorder)
+
+local guiVisible = true
+local iconTapStart = nil
+FloatIcon.MouseButton1Down:Connect(function()
+    iconTapStart = tick()
+end)
+FloatIcon.MouseButton1Up:Connect(function()
+    -- Only toggle if it was a short tap, not a drag
+    if iconTapStart and (tick() - iconTapStart) < 0.2 then
+        guiVisible = not guiVisible
+        MainFrame.Visible = guiVisible
+        -- Blue border ALWAYS stays — only the K color changes
+        FloatIcon.TextColor3 = guiVisible
+            and Color3.fromRGB(255, 210, 0)   -- yellow = open
+            or  Color3.fromRGB(150, 150, 150) -- grey = closed
+    end
+    iconTapStart = nil
 end)
 
 -- ==========================================
@@ -807,6 +829,8 @@ local _minFarmInput = AutoTab:AddTextbox("Min Value Fallback (e.g. 1m, 500k)", "
 end)
 _guiTextboxes["MinFarmValue"] = _minFarmInput
 
+
+
 _guiToggles["Farming"] = AutoTab:AddToggle("Autofarm", false, function(state)
     getgenv().Farming = state
     if state then
@@ -818,7 +842,7 @@ _guiToggles["Farming"] = AutoTab:AddToggle("Autofarm", false, function(state)
                 if objects then
                     for _, obj in pairs(objects:GetChildren()) do
                         if not getgenv().Farming then break end
-                        -- Use a table + concat once to avoid O(n^2) string allocs
+                        -- Walk all descendants to find pet name (same as V3 - actually works)
                         local nameParts = {}
                         pcall(function()
                             for _, v in pairs(obj:GetDescendants()) do
@@ -921,6 +945,12 @@ _guiToggles["Selling"] = AutoTab:AddToggle("Autosell", false, function(state)
                 local bp = player.Backpack
                 if not bp then return end
                 local maxP = getgenv().MaxPrice or 0
+                if maxP == 0 then
+                    sellStatus.Text = "⚠️ Set a Max Price to sell"
+                    sellStatus.TextColor3 = Color3.fromRGB(255, 160, 50)
+                    scanPending = false
+                    return
+                end
                 local toSell = {}
                 for _, item in ipairs(bp:GetChildren()) do
                     if not getgenv().Selling then break end
@@ -941,7 +971,9 @@ _guiToggles["Selling"] = AutoTab:AddToggle("Autosell", false, function(state)
                             end
                         end)
                     end
-                    if maxP == 0 or val <= maxP then
+                    -- maxP == 0 means no price set, skip selling entirely
+                    -- only sell if a price is set AND the pet's value is at or below it
+                    if maxP > 0 and val <= maxP then
                         table.insert(toSell, item.Name)
                     end
                 end
@@ -1684,7 +1716,6 @@ ScreenGui.Destroying:Connect(function()
     getgenv().AntiPause = false
 end)
 
-
 -- ==========================================
 -- FLY
 -- ==========================================
@@ -1745,13 +1776,17 @@ MiscTab:AddToggle("✈️ Fly", false, function(state)
             local cam = workspace.CurrentCamera
             local cf = cam.CFrame
 
+            -- On mobile, MoveDirection is world-space from the thumbstick.
+            -- We project it onto the camera axes so moving forward goes where you look.
             local md = hum.MoveDirection
 
+            -- Camera-relative right and flat-forward (ignore vertical tilt for movement)
             local camRight   = cf.RightVector
             local camForward = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
             if camForward.Magnitude > 0.001 then
                 camForward = camForward.Unit
             end
+            -- camRight flattened too so strafing stays horizontal
             local camRightFlat = Vector3.new(camRight.X, 0, camRight.Z)
             if camRightFlat.Magnitude > 0.001 then
                 camRightFlat = camRightFlat.Unit
@@ -1759,18 +1794,24 @@ MiscTab:AddToggle("✈️ Fly", false, function(state)
 
             local vel = Vector3.zero
             if md.Magnitude > 0.01 then
+                -- Use full camera LookVector (includes vertical tilt) for forward movement
+                -- so pointing camera up/down actually moves you up/down
                 local fullForward = cf.LookVector
-                local fwdAmt   = camForward:Dot(md)
-                local rightAmt = camRightFlat:Dot(md)
+                local fwdAmt   = camForward:Dot(md)   -- how much thumbstick is pushing forward
+                local rightAmt = camRightFlat:Dot(md)  -- how much thumbstick is pushing right
 
+                -- Scale the full (tilted) forward by fwdAmt so vertical movement
+                -- is proportional to camera pitch × how far forward stick is pushed
                 local moveVec = fullForward * fwdAmt + camRightFlat * rightAmt
                 if moveVec.Magnitude > 0.001 then
+                    -- Multiply by 50 to match inf yield's feel: their "10" = ~500 studs/s internally
                     vel = moveVec.Unit * (speed * 50)
                 end
             end
 
             _flyBodyVel.Velocity = vel
 
+            -- Keep gyro flat so character body doesn't tilt with the camera
             local flatLook = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
             if flatLook.Magnitude > 0.001 then
                 _flyBodyGyro.CFrame = CFrame.new(Vector3.zero, flatLook)
@@ -1790,6 +1831,7 @@ end)
 ScreenGui.Destroying:Connect(function()
     stopFly()
 end)
+
 
 -- ==========================================
 -- CONFIG TAB
