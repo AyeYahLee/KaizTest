@@ -807,6 +807,21 @@ local _minFarmInput = AutoTab:AddTextbox("Min Value Fallback (e.g. 1m, 500k)", "
 end)
 _guiTextboxes["MinFarmValue"] = _minFarmInput
 
+-- ── Cheap pet name reader: no full descendant walk ──
+local function getPetNameFromZoneObj(obj)
+    -- Try ToolTip first (single property read, no tree walk)
+    local tip = ""
+    pcall(function() tip = obj.ToolTip or "" end)
+    if tip ~= "" then
+        return tip:gsub("<[^>]+>", ""):match("^%s*(.-)%s*$"):lower()
+    end
+    -- Try first StringValue child only
+    local sv = obj:FindFirstChildWhichIsA("StringValue")
+    if sv then return sv.Value:lower() end
+    -- Fallback to object name
+    return obj.Name:lower()
+end
+
 _guiToggles["Farming"] = AutoTab:AddToggle("Autofarm", false, function(state)
     getgenv().Farming = state
     if state then
@@ -818,31 +833,17 @@ _guiToggles["Farming"] = AutoTab:AddToggle("Autofarm", false, function(state)
                 if objects then
                     for _, obj in pairs(objects:GetChildren()) do
                         if not getgenv().Farming then break end
-                        -- Use a table + concat once to avoid O(n^2) string allocs
-                        local nameParts = {}
-                        pcall(function()
-                            for _, v in pairs(obj:GetDescendants()) do
-                                if v:IsA("TextLabel") then
-                                    local t = tostring(v.Text):lower()
-                                    if t ~= "" then nameParts[#nameParts+1] = t end
-                                elseif v:IsA("StringValue") then
-                                    local t = tostring(v.Value):lower()
-                                    if t ~= "" then nameParts[#nameParts+1] = t end
-                                end
-                            end
-                        end)
-                        local name = #nameParts > 0 and table.concat(nameParts, " ") or tostring(obj.Name):lower()
+                        -- Read name cheaply without walking all descendants
+                        local name = getPetNameFromZoneObj(obj)
 
                         local detectedValue = 0
-                        pcall(function()
-                            local raw = name:match("(%d+%.?%d*[kmbtq])") or name:match("(%d+%.?%d*)")
-                            if raw then
-                                local num, suffix = raw:match("([%d%.]+)([kmbtq]?)")
-                                num = tonumber(num) or 0
-                                local multipliers = {k=1e3,m=1e6,b=1e9,t=1e12,q=1e15}
-                                detectedValue = num * (multipliers[suffix] or 1)
-                            end
-                        end)
+                        local raw = name:match("(%d+%.?%d*[kmbtq])") or name:match("(%d+%.?%d*)")
+                        if raw then
+                            local num, suffix = raw:match("([%d%.]+)([kmbtq]?)")
+                            num = tonumber(num) or 0
+                            local multipliers = {k=1e3,m=1e6,b=1e9,t=1e12,q=1e15}
+                            detectedValue = num * (multipliers[suffix] or 1)
+                        end
 
                         local celestialPet = name:find("tung tung tung sahur") or name:find("esok sekolah") or name:find("job job job sahur") or name:find("chillin chili")
                         local isRainbow = name:find("rainbow")
@@ -1682,6 +1683,122 @@ end)
 ScreenGui.Destroying:Connect(function()
     if _antiPauseConn then _antiPauseConn:Disconnect(); _antiPauseConn = nil end
     getgenv().AntiPause = false
+end)
+
+-- ==========================================
+-- FLY
+-- ==========================================
+MiscTab:AddLabel("FLY")
+
+getgenv().FlyEnabled = false
+getgenv().FlySpeed = 10
+
+MiscTab:AddTextbox("Fly Speed", "10", function(val)
+    getgenv().FlySpeed = tonumber(val) or 10
+end)
+
+local _flyConn = nil
+local _flyBodyVel = nil
+local _flyBodyGyro = nil
+
+local function stopFly()
+    getgenv().FlyEnabled = false
+    if _flyConn then _flyConn:Disconnect(); _flyConn = nil end
+    if _flyBodyVel and _flyBodyVel.Parent then _flyBodyVel:Destroy() end
+    if _flyBodyGyro and _flyBodyGyro.Parent then _flyBodyGyro:Destroy() end
+    _flyBodyVel = nil
+    _flyBodyGyro = nil
+end
+
+MiscTab:AddToggle("✈️ Fly", false, function(state)
+    getgenv().FlyEnabled = state
+    if state then
+        local char = player.Character or player.CharacterAdded:Wait()
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        local hum = char:FindFirstChild("Humanoid")
+        if not hrp or not hum then
+            getgenv().FlyEnabled = false
+            return
+        end
+
+        _flyBodyVel = Instance.new("BodyVelocity")
+        _flyBodyVel.Velocity = Vector3.zero
+        _flyBodyVel.MaxForce = Vector3.new(1e6, 1e6, 1e6)
+        _flyBodyVel.Parent = hrp
+
+        _flyBodyGyro = Instance.new("BodyGyro")
+        _flyBodyGyro.MaxTorque = Vector3.new(1e6, 1e6, 1e6)
+        _flyBodyGyro.P = 1e4
+        _flyBodyGyro.CFrame = hrp.CFrame
+        _flyBodyGyro.Parent = hrp
+
+        hum.PlatformStand = true
+
+        _flyConn = game:GetService("RunService").Heartbeat:Connect(function()
+            if not getgenv().FlyEnabled then
+                hum.PlatformStand = false
+                stopFly()
+                return
+            end
+
+            local speed = getgenv().FlySpeed or 50
+            local cam = workspace.CurrentCamera
+            local cf = cam.CFrame
+
+            -- On mobile, MoveDirection is world-space from the thumbstick.
+            -- We project it onto the camera axes so moving forward goes where you look.
+            local md = hum.MoveDirection
+
+            -- Camera-relative right and flat-forward (ignore vertical tilt for movement)
+            local camRight   = cf.RightVector
+            local camForward = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
+            if camForward.Magnitude > 0.001 then
+                camForward = camForward.Unit
+            end
+            -- camRight flattened too so strafing stays horizontal
+            local camRightFlat = Vector3.new(camRight.X, 0, camRight.Z)
+            if camRightFlat.Magnitude > 0.001 then
+                camRightFlat = camRightFlat.Unit
+            end
+
+            local vel = Vector3.zero
+            if md.Magnitude > 0.01 then
+                -- Use full camera LookVector (includes vertical tilt) for forward movement
+                -- so pointing camera up/down actually moves you up/down
+                local fullForward = cf.LookVector
+                local fwdAmt   = camForward:Dot(md)   -- how much thumbstick is pushing forward
+                local rightAmt = camRightFlat:Dot(md)  -- how much thumbstick is pushing right
+
+                -- Scale the full (tilted) forward by fwdAmt so vertical movement
+                -- is proportional to camera pitch × how far forward stick is pushed
+                local moveVec = fullForward * fwdAmt + camRightFlat * rightAmt
+                if moveVec.Magnitude > 0.001 then
+                    -- Multiply by 50 to match inf yield's feel: their "10" = ~500 studs/s internally
+                    vel = moveVec.Unit * (speed * 50)
+                end
+            end
+
+            _flyBodyVel.Velocity = vel
+
+            -- Keep gyro flat so character body doesn't tilt with the camera
+            local flatLook = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
+            if flatLook.Magnitude > 0.001 then
+                _flyBodyGyro.CFrame = CFrame.new(Vector3.zero, flatLook)
+            end
+        end)
+
+        player.CharacterRemoving:Connect(stopFly)
+
+    else
+        local char = player.Character
+        local hum = char and char:FindFirstChild("Humanoid")
+        if hum then hum.PlatformStand = false end
+        stopFly()
+    end
+end)
+
+ScreenGui.Destroying:Connect(function()
+    stopFly()
 end)
 
 
