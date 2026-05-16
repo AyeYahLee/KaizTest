@@ -105,7 +105,10 @@ local function FireNearestPrompt()
     if not char or not char:FindFirstChild("HumanoidRootPart") then return end
     local hrp = char.HumanoidRootPart
     local nearestPrompt, shortestDist = nil, 15
-    for _, prompt in ipairs(workspace:GetDescendants()) do
+    -- Search only within the chosen zone (or fallback to workspace) to avoid
+    -- walking the entire game tree — huge CPU saving on large maps
+    local searchRoot = (getgenv().ChosenZone) or workspace
+    for _, prompt in ipairs(searchRoot:GetDescendants()) do
         if prompt:IsA("ProximityPrompt") then
             local pos = getPromptPosition(prompt)
             if pos and (pos - hrp.Position).Magnitude <= shortestDist then
@@ -743,6 +746,7 @@ SpamButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 SpamButton.Font = Enum.Font.GothamBold
 SpamButton.TextScaled = true
 SpamButton.BorderSizePixel = 0
+SpamButton.Visible = false  -- hidden by default; toggle in Misc tab to show
 SpamButton.Parent = ScreenGui
 Instance.new("UICorner", SpamButton).CornerRadius = UDim.new(1, 0)
 
@@ -903,59 +907,84 @@ _guiToggles["Selling"] = AutoTab:AddToggle("Autosell", false, function(state)
         task.spawn(function()
             -- Cache remote once per session, not per cycle
             local sellRemote = game:GetService("ReplicatedStorage").Shared.Classes.RemoteFunction.Remotes.EntityShared_SellEntity
-            while getgenv().Selling do
-                local char = player.Character
-                if not char then task.wait(0.05) continue end
+            local backpack = player.Backpack
+            local lastCount = backpack and #backpack:GetChildren() or 0
 
-                local backpack = player.Backpack
-                if backpack then
-                    local soldCount = 0
-                    local maxP = getgenv().MaxPrice or 0
-                    local items = backpack:GetChildren()
-                    local toSell = {}
-                    for _, item in ipairs(items) do
-                        if not getgenv().Selling then break end -- stop mid-scan instantly on toggle off
-                        if not isPetUUID(item.Name) then continue end
-                        if not item:IsA("Tool") then continue end
-                        local val = 0
+            -- Event-driven: only scan when backpack actually changes (ChildAdded/ChildRemoved)
+            -- This eliminates the 20-cycles/sec polling that was burning CPU
+            local scanPending = false
+            local addedConn, removedConn
+
+            local function doSell()
+                if not getgenv().Selling then return end
+                local bp = player.Backpack
+                if not bp then return end
+                local maxP = getgenv().MaxPrice or 0
+                local toSell = {}
+                for _, item in ipairs(bp:GetChildren()) do
+                    if not getgenv().Selling then break end
+                    if not isPetUUID(item.Name) then continue end
+                    if not item:IsA("Tool") then continue end
+                    local val = 0
+                    pcall(function()
+                        local text = item.Handle.ObjectInfo.Value.ValueLabel.Text
+                        val = parseValue(text)
+                    end)
+                    if val == 0 then
                         pcall(function()
-                            local text = item.Handle.ObjectInfo.Value.ValueLabel.Text
-                            val = parseValue(text)
-                        end)
-                        if val == 0 then
-                            pcall(function()
-                                for _, desc in ipairs(item:GetDescendants()) do
-                                    if desc:IsA("TextLabel") and desc.Name == "ValueLabel" then
-                                        local v = parseValue(desc.Text)
-                                        if v > 0 then val = v break end
-                                    end
+                            for _, desc in ipairs(item:GetDescendants()) do
+                                if desc:IsA("TextLabel") and desc.Name == "ValueLabel" then
+                                    local v = parseValue(desc.Text)
+                                    if v > 0 then val = v break end
                                 end
-                            end)
-                        end
-                        if maxP == 0 or val <= maxP then
-                            table.insert(toSell, item.Name)
-                        end
+                            end
+                        end)
                     end
-                    local totalToSell = #toSell
-                    soldCount = 0
-                    if totalToSell > 0 then
-                        for _, n in ipairs(toSell) do
-                            if not getgenv().Selling then break end -- stop mid-sell instantly on toggle off
-                            pcall(function() sellRemote:InvokeServer(n) end)
-                            soldCount = soldCount + 1
-                            sellStatus.Text = "💰 Selling " .. soldCount .. "/" .. totalToSell
-                            sellStatus.TextColor3 = Color3.fromRGB(255, 200, 50)
-                        end
-                        sellStatus.Text = "✅ Done — sold " .. soldCount .. "/" .. totalToSell
-                        sellStatus.TextColor3 = Color3.fromRGB(100, 220, 100)
-                    else
-                        sellStatus.Text = "✅ Idle — 0 under " .. tostring(maxP)
-                        sellStatus.TextColor3 = Color3.fromRGB(180, 180, 180)
+                    if maxP == 0 or val <= maxP then
+                        table.insert(toSell, item.Name)
                     end
                 end
-
-                task.wait(0.05)
+                local totalToSell = #toSell
+                if totalToSell > 0 then
+                    sellStatus.Text = "💰 Selling " .. totalToSell .. " pet(s)..."
+                    sellStatus.TextColor3 = Color3.fromRGB(255, 200, 50)
+                    -- Fire all sell remotes simultaneously — each in its own thread
+                    for _, n in ipairs(toSell) do
+                        task.spawn(function()
+                            pcall(function() sellRemote:InvokeServer(n) end)
+                        end)
+                    end
+                    sellStatus.Text = "✅ Done — sold " .. totalToSell
+                    sellStatus.TextColor3 = Color3.fromRGB(100, 220, 100)
+                else
+                    sellStatus.Text = "✅ Idle — nothing to sell"
+                    sellStatus.TextColor3 = Color3.fromRGB(180, 180, 180)
+                end
+                scanPending = false
             end
+
+            local function queueSell()
+                if scanPending then return end
+                scanPending = true
+                -- Small delay so rapid adds (farming burst) batch into one scan
+                task.delay(0.5, doSell)
+            end
+
+            if backpack then
+                addedConn   = backpack.ChildAdded:Connect(queueSell)
+                removedConn = backpack.ChildRemoved:Connect(queueSell)
+            end
+
+            -- Run one initial scan in case there's already stuff to sell
+            doSell()
+
+            -- Wait loop: just sleeps until toggled off, no work done here
+            while getgenv().Selling do
+                task.wait(1)
+            end
+
+            if addedConn   then addedConn:Disconnect() end
+            if removedConn then removedConn:Disconnect() end
             sellStatus.Text = "⏹ Autosell stopped"
             sellStatus.TextColor3 = Color3.fromRGB(180, 180, 180)
         end)
@@ -1361,7 +1390,7 @@ _guiToggles["AutoUpgrade"] = BaseTab:AddToggle("Auto Upgrade", false, function(s
                         if not getgenv().AutoUpgrade then break end
                         pcall(function() upgradeRemote:FireServer(slot) end)
                     end
-                    -- Only update label when slot count changes, not every 0.5s
+                    -- Only update label when slot count changes, not every cycle
                     if #slots ~= lastSlotCount then
                         upgradeStatusLabel.Text = "⬆️ Upgrading " .. #slots .. " slot(s)"
                         upgradeStatusLabel.TextColor3 = Color3.fromRGB(100, 220, 100)
@@ -1374,7 +1403,7 @@ _guiToggles["AutoUpgrade"] = BaseTab:AddToggle("Auto Upgrade", false, function(s
                         lastSlotCount = 0
                     end
                 end
-                task.wait(0.5)
+                task.wait(1) -- 1s is plenty; server-side upgrade isn't instant anyway
             end
             upgradeStatusLabel.Text = "⏹ Stopped"
             upgradeStatusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
@@ -1420,7 +1449,7 @@ MiscTab:AddButton("🎟 Redeem Codes", function()
 end)
 
 MiscTab:AddLabel("── DUPE BUTTON ──")
-MiscTab:AddToggle("Show Dupe Button", true, function(state)
+MiscTab:AddToggle("Show Dupe Button", false, function(state)
     SpamButton.Visible = state
 end)
 
