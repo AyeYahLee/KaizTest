@@ -1,5 +1,6 @@
---// KAIZ GOLDEN CHIP FARM + TELEPORT
---// Teleports to spawned chips then instantly collects them
+--// KAIZ GOLDEN CHIP FARM
+--// LOW LAG SPAWN-DETECTION VERSION
+--// Instantly farms chips when they spawn
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -7,7 +8,6 @@ local CoreGui = game:GetService("CoreGui")
 
 local LocalPlayer = Players.LocalPlayer
 local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-
 local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
 
 -- REMOTE
@@ -53,6 +53,7 @@ toggle.TextScaled = true
 toggle.Font = Enum.Font.GothamBold
 toggle.TextColor3 = Color3.new(1,1,1)
 
+-- TOGGLE
 toggle.MouseButton1Click:Connect(function()
     AutoFarm = not AutoFarm
 
@@ -65,49 +66,56 @@ toggle.MouseButton1Click:Connect(function()
     end
 end)
 
--- TELEPORT + COLLECT
+-- TP + TOUCH + COLLECT
 local function tpAndCollect(obj, id)
 
-    -- teleport
+    local targetCFrame
+
     if obj:IsA("BasePart") then
-        HumanoidRootPart.CFrame = obj.CFrame + Vector3.new(0,3,0)
+        targetCFrame = obj.CFrame
 
     elseif obj:IsA("Model") and obj.PrimaryPart then
-        HumanoidRootPart.CFrame = obj.PrimaryPart.CFrame + Vector3.new(0,3,0)
+        targetCFrame = obj.PrimaryPart.CFrame
     end
 
-    task.wait(0.1)
+    if targetCFrame then
 
-    -- collect
-    pcall(function()
-        CollectRemote:FireServer({
-            collectibleId = id
-        })
-    end)
+        -- TP VERY CLOSE TO CHIP
+        HumanoidRootPart.CFrame = targetCFrame + Vector3.new(0,1,0)
+
+        -- allow touch to register
+        task.wait(0.05)
+
+        -- collect
+        pcall(function()
+            CollectRemote:FireServer({
+                collectibleId = id
+            })
+        end)
+    end
 end
 
--- LOOP
-task.spawn(function()
-    while task.wait(0.1) do
-        if AutoFarm then
+-- LOW LAG SPAWN DETECTION
+workspace.DescendantAdded:Connect(function(obj)
 
-            for _, obj in ipairs(workspace:GetDescendants()) do
+    if not AutoFarm then
+        return
+    end
 
-                local id = obj:GetAttribute("collectibleId")
+    task.wait(0.05)
 
-                -- attribute check
-                if id and tostring(id):find("GoldenChips") then
-                    tpAndCollect(obj, id)
-                end
+    local id = obj:GetAttribute("collectibleId")
 
-                -- fallback name check
-                if tostring(obj.Name):find("GoldenChips") then
-                    tpAndCollect(obj, obj.Name)
-                end
-            end
+    -- attribute detection
+    if id and tostring(id):find("GoldenChips") then
+        tpAndCollect(obj, id)
+        return
+    end
 
-        end
+    -- fallback name detection
+    if tostring(obj.Name):find("GoldenChips") then
+        tpAndCollect(obj, obj.Name)
     end
 end)
 
-print("KAIZ TP CHIP FARM LOADED")
+print("KAIZ LOW LAG CHIP FARM LOADED")
