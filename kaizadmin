@@ -1,6 +1,6 @@
 --// KAIZ HUB
 --// AUTO CHIP + AUTO SPIN
---// SINGLE GUI VERSION
+--// UPDATED FAST CHIP FARM VERSION
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -109,7 +109,7 @@ spinBtn.MouseButton1Click:Connect(function()
     end
 end)
 
--- TP + CHIP COLLECT
+-- TP + COLLECT
 local function tpAndCollect(obj, id)
 
     local targetCFrame
@@ -126,8 +126,10 @@ local function tpAndCollect(obj, id)
         -- TP CLOSE FOR TOUCH
         HumanoidRootPart.CFrame = targetCFrame + Vector3.new(0,1,0)
 
+        -- allow touch register
         task.wait(0.05)
 
+        -- collect
         pcall(function()
             CollectRemote:FireServer({
                 collectibleId = id
@@ -138,8 +140,6 @@ end
 
 -- AUTO CHIP LOOP
 task.spawn(function()
-
-    local collected = {}
 
     while task.wait(0.1) do
 
@@ -156,17 +156,7 @@ task.spawn(function()
             end
 
             if id and tostring(id):find("GoldenChips") then
-
-                if not collected[id] then
-
-                    collected[id] = true
-
-                    tpAndCollect(obj, id)
-
-                    task.delay(5, function()
-                        collected[id] = nil
-                    end)
-                end
+                tpAndCollect(obj, id)
             end
         end
     end
