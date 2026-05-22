@@ -1,5 +1,6 @@
---// KAIZ GOLDEN CHIP FARM + TOUCH TP
---// Teleports VERY close to chips so touch registers properly
+--// KAIZ HUB
+--// AUTO CHIP + AUTO SPIN
+--// SINGLE GUI VERSION
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -9,63 +10,106 @@ local LocalPlayer = Players.LocalPlayer
 local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
 
--- REMOTE
-local CollectRemote = ReplicatedStorage
+-- REMOTES
+local Net = ReplicatedStorage
     :WaitForChild("Packages")
     :WaitForChild("_Index")
     :WaitForChild("sleitnick_net@0.2.0")
     :WaitForChild("net")
-    :WaitForChild("RE/CollectibleCollect")
 
-local AutoFarm = false
+local CollectRemote = Net:WaitForChild("RE/CollectibleCollect")
+local SpinRemote = Net:WaitForChild("RE/SpinWheel_Request")
+
+-- STATES
+local AutoChip = false
+local AutoSpin = false
 
 -- GUI
 local gui = Instance.new("ScreenGui")
-gui.Name = "KaizChipFarm"
+gui.Name = "KaizHub"
 gui.Parent = CoreGui
 
 local frame = Instance.new("Frame")
 frame.Parent = gui
-frame.Size = UDim2.new(0,180,0,90)
+frame.Size = UDim2.new(0,220,0,140)
 frame.Position = UDim2.new(0,20,0.4,0)
 frame.BackgroundColor3 = Color3.fromRGB(30,30,30)
 frame.BorderSizePixel = 0
 frame.Active = true
 frame.Draggable = true
 
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0,8)
+corner.Parent = frame
+
+-- TITLE
 local title = Instance.new("TextLabel")
 title.Parent = frame
 title.Size = UDim2.new(1,0,0,30)
 title.BackgroundTransparency = 1
-title.Text = "KAIZ CHIP FARM"
+title.Text = "KAIZ HUB"
 title.TextScaled = true
 title.Font = Enum.Font.GothamBold
 title.TextColor3 = Color3.new(1,1,1)
 
-local toggle = Instance.new("TextButton")
-toggle.Parent = frame
-toggle.Size = UDim2.new(0.8,0,0,35)
-toggle.Position = UDim2.new(0.1,0,0.5,0)
-toggle.BackgroundColor3 = Color3.fromRGB(170,0,0)
-toggle.Text = "OFF"
-toggle.TextScaled = true
-toggle.Font = Enum.Font.GothamBold
-toggle.TextColor3 = Color3.new(1,1,1)
+-- AUTO CHIP BUTTON
+local chipBtn = Instance.new("TextButton")
+chipBtn.Parent = frame
+chipBtn.Size = UDim2.new(0.8,0,0,35)
+chipBtn.Position = UDim2.new(0.1,0,0.3,0)
+chipBtn.BackgroundColor3 = Color3.fromRGB(170,0,0)
+chipBtn.Text = "AUTO CHIP : OFF"
+chipBtn.TextScaled = true
+chipBtn.Font = Enum.Font.GothamBold
+chipBtn.TextColor3 = Color3.new(1,1,1)
 
--- TOGGLE
-toggle.MouseButton1Click:Connect(function()
-    AutoFarm = not AutoFarm
+local chipCorner = Instance.new("UICorner")
+chipCorner.CornerRadius = UDim.new(0,6)
+chipCorner.Parent = chipBtn
 
-    if AutoFarm then
-        toggle.Text = "ON"
-        toggle.BackgroundColor3 = Color3.fromRGB(0,170,0)
+-- AUTO SPIN BUTTON
+local spinBtn = Instance.new("TextButton")
+spinBtn.Parent = frame
+spinBtn.Size = UDim2.new(0.8,0,0,35)
+spinBtn.Position = UDim2.new(0.1,0,0.62,0)
+spinBtn.BackgroundColor3 = Color3.fromRGB(170,0,0)
+spinBtn.Text = "AUTO SPIN : OFF"
+spinBtn.TextScaled = true
+spinBtn.Font = Enum.Font.GothamBold
+spinBtn.TextColor3 = Color3.new(1,1,1)
+
+local spinCorner = Instance.new("UICorner")
+spinCorner.CornerRadius = UDim.new(0,6)
+spinCorner.Parent = spinBtn
+
+-- TOGGLES
+chipBtn.MouseButton1Click:Connect(function()
+
+    AutoChip = not AutoChip
+
+    if AutoChip then
+        chipBtn.Text = "AUTO CHIP : ON"
+        chipBtn.BackgroundColor3 = Color3.fromRGB(0,170,0)
     else
-        toggle.Text = "OFF"
-        toggle.BackgroundColor3 = Color3.fromRGB(170,0,0)
+        chipBtn.Text = "AUTO CHIP : OFF"
+        chipBtn.BackgroundColor3 = Color3.fromRGB(170,0,0)
     end
 end)
 
--- TP + TOUCH + COLLECT
+spinBtn.MouseButton1Click:Connect(function()
+
+    AutoSpin = not AutoSpin
+
+    if AutoSpin then
+        spinBtn.Text = "AUTO SPIN : ON"
+        spinBtn.BackgroundColor3 = Color3.fromRGB(0,170,0)
+    else
+        spinBtn.Text = "AUTO SPIN : OFF"
+        spinBtn.BackgroundColor3 = Color3.fromRGB(170,0,0)
+    end
+end)
+
+-- TP + CHIP COLLECT
 local function tpAndCollect(obj, id)
 
     local targetCFrame
@@ -79,13 +123,11 @@ local function tpAndCollect(obj, id)
 
     if targetCFrame then
 
-        -- VERY CLOSE TP FOR TOUCH DETECTION
+        -- TP CLOSE FOR TOUCH
         HumanoidRootPart.CFrame = targetCFrame + Vector3.new(0,1,0)
 
-        -- allow touch event to register
         task.wait(0.05)
 
-        -- collect
         pcall(function()
             CollectRemote:FireServer({
                 collectibleId = id
@@ -94,28 +136,65 @@ local function tpAndCollect(obj, id)
     end
 end
 
--- MAIN LOOP
+-- AUTO CHIP LOOP
 task.spawn(function()
+
+    local collected = {}
+
     while task.wait(0.1) do
-        if AutoFarm then
 
-            for _, obj in ipairs(workspace:GetDescendants()) do
+        if not AutoChip then
+            continue
+        end
 
-                local id = obj:GetAttribute("collectibleId")
+        for _, obj in ipairs(workspace:GetDescendants()) do
 
-                -- attribute detection
-                if id and tostring(id):find("GoldenChips") then
-                    tpAndCollect(obj, id)
-                end
+            local id = obj:GetAttribute("collectibleId")
 
-                -- fallback name detection
-                if tostring(obj.Name):find("GoldenChips") then
-                    tpAndCollect(obj, obj.Name)
-                end
+            if not id then
+                id = obj.Name
             end
 
+            if id and tostring(id):find("GoldenChips") then
+
+                if not collected[id] then
+
+                    collected[id] = true
+
+                    tpAndCollect(obj, id)
+
+                    task.delay(5, function()
+                        collected[id] = nil
+                    end)
+                end
+            end
         end
     end
 end)
 
-print("KAIZ TOUCH CHIP FARM LOADED")
+-- AUTO SPIN LOOP
+task.spawn(function()
+
+    while task.wait(1) do
+
+        if AutoSpin then
+
+            pcall(function()
+
+                local args = {
+                    {
+                        Function = "RequestExchangePurchase",
+                        Args = {
+                            false
+                        }
+                    }
+                }
+
+                SpinRemote:FireServer(unpack(args))
+
+            end)
+        end
+    end
+end)
+
+print("KAIZ HUB LOADED")
