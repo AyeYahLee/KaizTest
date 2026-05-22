@@ -1,5 +1,5 @@
---// KAIZ GOLDEN CHIP FARM
---// OPTIMIZED FAST SCANNER VERSION
+--// KAIZ GOLDEN CHIP FARM + TOUCH TP
+--// Teleports VERY close to chips so touch registers properly
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -65,7 +65,7 @@ toggle.MouseButton1Click:Connect(function()
     end
 end)
 
--- TP + COLLECT
+-- TP + TOUCH + COLLECT
 local function tpAndCollect(obj, id)
 
     local targetCFrame
@@ -79,11 +79,13 @@ local function tpAndCollect(obj, id)
 
     if targetCFrame then
 
-        -- TP CLOSE FOR TOUCH
+        -- VERY CLOSE TP FOR TOUCH DETECTION
         HumanoidRootPart.CFrame = targetCFrame + Vector3.new(0,1,0)
 
+        -- allow touch event to register
         task.wait(0.05)
 
+        -- collect
         pcall(function()
             CollectRemote:FireServer({
                 collectibleId = id
@@ -92,44 +94,28 @@ local function tpAndCollect(obj, id)
     end
 end
 
--- FAST OPTIMIZED CHIP SCANNER
+-- MAIN LOOP
 task.spawn(function()
-
-    local collected = {}
-
     while task.wait(0.1) do
+        if AutoFarm then
 
-        if not AutoFarm then
-            continue
-        end
+            for _, obj in ipairs(workspace:GetDescendants()) do
 
-        -- ONLY scan objects named GoldenChips
-        for _, obj in ipairs(workspace:GetDescendants()) do
+                local id = obj:GetAttribute("collectibleId")
 
-            local id = obj:GetAttribute("collectibleId")
-
-            if not id then
-                id = obj.Name
-            end
-
-            -- ONLY process GoldenChips
-            if id and tostring(id):find("GoldenChips") then
-
-                -- prevent spam on same chip
-                if not collected[id] then
-
-                    collected[id] = true
-
+                -- attribute detection
+                if id and tostring(id):find("GoldenChips") then
                     tpAndCollect(obj, id)
+                end
 
-                    -- reset cache later
-                    task.delay(5, function()
-                        collected[id] = nil
-                    end)
+                -- fallback name detection
+                if tostring(obj.Name):find("GoldenChips") then
+                    tpAndCollect(obj, obj.Name)
                 end
             end
+
         end
     end
 end)
 
-print("KAIZ OPTIMIZED CHIP FARM LOADED")
+print("KAIZ TOUCH CHIP FARM LOADED")
