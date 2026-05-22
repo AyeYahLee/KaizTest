@@ -1,190 +1,2985 @@
---// KAIZ HUB
---// AUTO CHIP + AUTO SPIN
---// UPDATED FAST CHIP FARM VERSION
+-- ==========================================
+-- KAIZ ADMIN HUB | COMBINED EDITION
+-- Autofarm + Auto Gift + Auto Accept + Auto Claim + Auto Upgrade
+-- ==========================================
 
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CoreGui = game:GetService("CoreGui")
+local TweenService = game:GetService("TweenService")
+local UIS = game:GetService("UserInputService")
+local RS = game:GetService("ReplicatedStorage")
+local player = Players.LocalPlayer
 
-local LocalPlayer = Players.LocalPlayer
-local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
+local zonesFold = workspace:WaitForChild("Zones")
+local Remotes = RS:WaitForChild("Shared"):WaitForChild("Classes"):WaitForChild("Remote"):WaitForChild("Remotes")
 
--- REMOTES
-local Net = ReplicatedStorage
-    :WaitForChild("Packages")
-    :WaitForChild("_Index")
-    :WaitForChild("sleitnick_net@0.2.0")
-    :WaitForChild("net")
-
-local CollectRemote = Net:WaitForChild("RE/CollectibleCollect")
-local SpinRemote = Net:WaitForChild("RE/SpinWheel_Request")
-
--- STATES
-local AutoChip = false
-local AutoSpin = false
-
--- GUI
-local gui = Instance.new("ScreenGui")
-gui.Name = "KaizHub"
-gui.Parent = CoreGui
-
-local frame = Instance.new("Frame")
-frame.Parent = gui
-frame.Size = UDim2.new(0,220,0,140)
-frame.Position = UDim2.new(0,20,0.4,0)
-frame.BackgroundColor3 = Color3.fromRGB(30,30,30)
-frame.BorderSizePixel = 0
-frame.Active = true
-frame.Draggable = true
-
-local corner = Instance.new("UICorner")
-corner.CornerRadius = UDim.new(0,8)
-corner.Parent = frame
-
--- TITLE
-local title = Instance.new("TextLabel")
-title.Parent = frame
-title.Size = UDim2.new(1,0,0,30)
-title.BackgroundTransparency = 1
-title.Text = "KAIZ HUB"
-title.TextScaled = true
-title.Font = Enum.Font.GothamBold
-title.TextColor3 = Color3.new(1,1,1)
-
--- AUTO CHIP BUTTON
-local chipBtn = Instance.new("TextButton")
-chipBtn.Parent = frame
-chipBtn.Size = UDim2.new(0.8,0,0,35)
-chipBtn.Position = UDim2.new(0.1,0,0.3,0)
-chipBtn.BackgroundColor3 = Color3.fromRGB(170,0,0)
-chipBtn.Text = "AUTO CHIP : OFF"
-chipBtn.TextScaled = true
-chipBtn.Font = Enum.Font.GothamBold
-chipBtn.TextColor3 = Color3.new(1,1,1)
-
-local chipCorner = Instance.new("UICorner")
-chipCorner.CornerRadius = UDim.new(0,6)
-chipCorner.Parent = chipBtn
-
--- AUTO SPIN BUTTON
-local spinBtn = Instance.new("TextButton")
-spinBtn.Parent = frame
-spinBtn.Size = UDim2.new(0.8,0,0,35)
-spinBtn.Position = UDim2.new(0.1,0,0.62,0)
-spinBtn.BackgroundColor3 = Color3.fromRGB(170,0,0)
-spinBtn.Text = "AUTO SPIN : OFF"
-spinBtn.TextScaled = true
-spinBtn.Font = Enum.Font.GothamBold
-spinBtn.TextColor3 = Color3.new(1,1,1)
-
-local spinCorner = Instance.new("UICorner")
-spinCorner.CornerRadius = UDim.new(0,6)
-spinCorner.Parent = spinBtn
-
--- TOGGLES
-chipBtn.MouseButton1Click:Connect(function()
-
-    AutoChip = not AutoChip
-
-    if AutoChip then
-        chipBtn.Text = "AUTO CHIP : ON"
-        chipBtn.BackgroundColor3 = Color3.fromRGB(0,170,0)
-    else
-        chipBtn.Text = "AUTO CHIP : OFF"
-        chipBtn.BackgroundColor3 = Color3.fromRGB(170,0,0)
+pcall(function()
+    if CoreGui:FindFirstChild("KaizAdminHub") then
+        CoreGui.KaizAdminHub:Destroy()
     end
 end)
 
-spinBtn.MouseButton1Click:Connect(function()
+-- ==========================================
+-- GLOBALS
+-- ==========================================
+getgenv().Farming           = false
+getgenv().Selling           = false
+getgenv().PositionCycle     = false
+getgenv().AutoClaim         = false
+getgenv().AutoUpgrade       = false
+getgenv().AutoAcceptGift    = false
+getgenv().StopGift          = false
+getgenv().ChosenZone        = zonesFold:FindFirstChild("Zone1")
+getgenv().MaxPrice          = 0
+getgenv().MinFarmValue      = 0
+getgenv().InputBurst        = 20
+getgenv().ClaimSlots        = {}
+getgenv().UpgradeSlots      = {}
+getgenv().GiftTarget        = ""
+getgenv().GiftFilter        = "ALL"
+getgenv().GiftAmount        = "ALL"
 
-    AutoSpin = not AutoSpin
+-- ==========================================
+-- HELPERS
+-- ==========================================
+local function parseValue(str)
+    if not str then return 0 end
+    str = tostring(str):gsub(",",""):match("^%s*(.-)%s*$")
+    -- Strip HTML tags
+    str = str:gsub("<[^>]+>", "")
+    str = str:match("^%s*(.-)%s*$")
+    local suffixes = {k=1e3,m=1e6,b=1e9,t=1e12,q=1e15}
+    local num, suffix = str:lower():match("^([%d%.]+)([a-z]*)")
+    if not num then return 0 end
+    num = tonumber(num) or 0
+    return num * (suffixes[suffix] or 1)
+end
 
-    if AutoSpin then
-        spinBtn.Text = "AUTO SPIN : ON"
-        spinBtn.BackgroundColor3 = Color3.fromRGB(0,170,0)
-    else
-        spinBtn.Text = "AUTO SPIN : OFF"
-        spinBtn.BackgroundColor3 = Color3.fromRGB(170,0,0)
+local uuidPattern = "%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x"
+
+local function isPetUUID(name)
+    return string.match(name, uuidPattern) ~= nil
+end
+
+local function getItemValue(item)
+    -- Single-pass over descendants (avoids 3x full tree walks per item)
+    local fallbackLabel = nil
+    for _, desc in ipairs(item:GetDescendants()) do
+        if desc:IsA("NumberValue") or desc:IsA("IntValue") then
+            local n = desc.Name:lower()
+            if (n == "value" or n == "worth" or n == "price" or n == "cash") and desc.Value > 0 then
+                return desc.Value
+            end
+        elseif desc:IsA("TextLabel") then
+            if desc.Name == "ValueLabel" then
+                local val = parseValue(desc.Text)
+                if val > 0 then return val end
+            elseif not fallbackLabel then
+                fallbackLabel = desc
+            end
+        end
     end
-end)
-
--- TP + COLLECT
-local function tpAndCollect(obj, id)
-
-    local targetCFrame
-
-    if obj:IsA("BasePart") then
-        targetCFrame = obj.CFrame
-
-    elseif obj:IsA("Model") and obj.PrimaryPart then
-        targetCFrame = obj.PrimaryPart.CFrame
+    if fallbackLabel then
+        local val = parseValue(fallbackLabel.Text)
+        if val > 0 then return val end
     end
+    -- Item attributes
+    for _, attrName in ipairs({"Value","Worth","Price","Cash","value","worth"}) do
+        local attr = item:GetAttribute(attrName)
+        if attr and type(attr) == "number" and attr > 0 then return attr end
+    end
+    return -1 -- unknown; sell anyway if maxP is 0 (sell all mode)
+end
 
-    if targetCFrame then
+local function getPromptPosition(prompt)
+    if prompt.Parent then
+        if prompt.Parent:IsA("BasePart") then return prompt.Parent.Position
+        elseif prompt.Parent:IsA("Model") and prompt.Parent.PrimaryPart then return prompt.Parent.PrimaryPart.Position
+        elseif prompt.Parent:IsA("Attachment") then return prompt.Parent.WorldPosition end
+    end
+    return nil
+end
 
-        -- TP CLOSE FOR TOUCH
-        HumanoidRootPart.CFrame = targetCFrame + Vector3.new(0,1,0)
-
-        -- allow touch register
-        task.wait(0.05)
-
-        -- collect
-        pcall(function()
-            CollectRemote:FireServer({
-                collectibleId = id
-            })
-        end)
+local function FireNearestPrompt()
+    local char = player.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+    local hrp = char.HumanoidRootPart
+    local nearestPrompt, shortestDist = nil, 15
+    -- Search only within the chosen zone (or fallback to workspace) to avoid
+    -- walking the entire game tree — huge CPU saving on large maps
+    local searchRoot = (getgenv().ChosenZone) or workspace
+    for _, prompt in ipairs(searchRoot:GetDescendants()) do
+        if prompt:IsA("ProximityPrompt") then
+            local pos = getPromptPosition(prompt)
+            if pos and (pos - hrp.Position).Magnitude <= shortestDist then
+                shortestDist = (pos - hrp.Position).Magnitude
+                nearestPrompt = prompt
+            end
+        end
+    end
+    if nearestPrompt then
+        -- Fire inline: no need to spawn a new thread per burst shot
+        local burst = tonumber(getgenv().InputBurst) or 1
+        for i = 1, burst do
+            pcall(fireproximityprompt, nearestPrompt)
+        end
     end
 end
 
--- AUTO CHIP LOOP
-task.spawn(function()
+local function getPetName(obj)
+    local tooltip = ""
+    pcall(function() tooltip = obj.ToolTip or "" end)
+    if tooltip ~= "" then
+        local plain = tooltip:gsub("<[^>]+>", "")
+        plain = plain:match("^%s*(.-)%s*$")
+        if plain ~= "" then return plain end
+    end
+    local guid = obj:GetAttribute("EntityGUID")
+    if guid then return guid end
+    return "Unknown"
+end
 
-    while task.wait(0.1) do
-
-        if not AutoChip then
-            continue
+local function GetInventoryPets(filter)
+    local found = {}
+    local backpack = player:FindFirstChild("Backpack")
+    if not backpack then return found end
+    -- Support comma-separated whitelist e.g. "Rainbow Cat,Dark Matter Dog"
+    local filters = {}
+    if string.upper(filter) ~= "ALL" then
+        for f in (filter .. ","):gmatch("([^,]+),") do
+            table.insert(filters, f:match("^%s*(.-)%s*$"):lower())
         end
-
-        for _, obj in ipairs(workspace:GetDescendants()) do
-
-            local id = obj:GetAttribute("collectibleId")
-
-            if not id then
-                id = obj.Name
+    end
+    for _, obj in ipairs(backpack:GetChildren()) do
+        if string.match(obj.Name, uuidPattern) then
+            local petName = getPetName(obj)
+            local matchesFilter = #filters == 0 -- ALL
+            if not matchesFilter then
+                for _, f in ipairs(filters) do
+                    if string.find(string.lower(petName), f, 1, true) then
+                        matchesFilter = true
+                        break
+                    end
+                end
             end
-
-            if id and tostring(id):find("GoldenChips") then
-                tpAndCollect(obj, id)
+            if matchesFilter then
+                table.insert(found, {uuid = obj.Name, pet = petName})
             end
         end
     end
+    return found
+end
+
+-- ==========================================
+-- GUI SETUP
+-- ==========================================
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "KaizAdminHub"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent = CoreGui
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Size = UDim2.new(0.94, 0, 0.88, 0)
+MainFrame.Position = UDim2.new(0.03, 0, 0.06, 0)
+MainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+MainFrame.BorderSizePixel = 0
+MainFrame.Parent = ScreenGui
+MainFrame.ClipsDescendants = true
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 12)
+
+local TopBar = Instance.new("Frame")
+TopBar.Size = UDim2.new(1, 0, 0, 52)
+TopBar.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+TopBar.BorderSizePixel = 0
+TopBar.Parent = MainFrame
+Instance.new("UICorner", TopBar).CornerRadius = UDim.new(0, 12)
+
+local TopBarFix = Instance.new("Frame")
+TopBarFix.Size = UDim2.new(1, 0, 0, 12)
+TopBarFix.Position = UDim2.new(0, 0, 1, -12)
+TopBarFix.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+TopBarFix.BorderSizePixel = 0
+TopBarFix.Parent = TopBar
+
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, -130, 1, 0)
+Title.Position = UDim2.new(0, 14, 0, 0)
+Title.BackgroundTransparency = 1
+Title.Text = "⚡ KAIZ ADMIN HUB"
+Title.TextColor3 = Color3.fromRGB(255, 200, 50)
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 18
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Parent = TopBar
+
+
+
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Size = UDim2.new(0, 44, 0, 44)
+CloseBtn.Position = UDim2.new(1, -50, 0, 4)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(180, 0, 0)
+CloseBtn.Text = "✕"
+CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.TextSize = 18
+CloseBtn.BorderSizePixel = 0
+CloseBtn.Parent = TopBar
+
+Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 8)
+CloseBtn.MouseButton1Click:Connect(function() ScreenGui:Destroy() end)
+
+local function MakeDraggable(topbar, object)
+    object.Active = true
+    topbar.Active = true
+    local dragging, dragStart, startPos, dragInput = false, nil, nil, nil
+    topbar.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch
+        or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStart = input.Position
+            startPos = object.Position
+            dragInput = input
+        end
+    end)
+    -- UIS is required for touch move tracking on mobile (touch events dont bubble to frames)
+    -- Connections are stored and disconnected when the GUI is destroyed to prevent leaking
+    local moveConn = UIS.InputChanged:Connect(function(input)
+        if dragging and input == dragInput then
+            local delta = input.Position - dragStart
+            object.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+    local endConn = UIS.InputEnded:Connect(function(input)
+        if input == dragInput then dragging = false; dragInput = nil end
+    end)
+    ScreenGui.Destroying:Connect(function()
+        moveConn:Disconnect()
+        endConn:Disconnect()
+    end)
+end
+MakeDraggable(TopBar, MainFrame)
+
+-- ==========================================
+-- FLOATING ICON (tap to hide/show GUI)
+-- Default position: top-right corner, next to close button
+-- ==========================================
+local FloatIconBorder = Instance.new("Frame")
+FloatIconBorder.Size = UDim2.new(0, 54, 0, 54)
+FloatIconBorder.Position = UDim2.new(1, -130, 0, 4)
+FloatIconBorder.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
+FloatIconBorder.BorderSizePixel = 0
+FloatIconBorder.ZIndex = 9
+FloatIconBorder.Parent = ScreenGui
+Instance.new("UICorner", FloatIconBorder).CornerRadius = UDim.new(0, 14)
+
+local FloatIcon = Instance.new("TextButton")
+FloatIcon.Size = UDim2.new(0, 46, 0, 46)
+FloatIcon.Position = UDim2.new(0.5, -23, 0.5, -23)
+FloatIcon.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
+FloatIcon.Text = "K"
+FloatIcon.TextColor3 = Color3.fromRGB(255, 210, 0)
+FloatIcon.Font = Enum.Font.GothamBold
+FloatIcon.TextSize = 20
+FloatIcon.BorderSizePixel = 0
+FloatIcon.ZIndex = 10
+FloatIcon.Parent = FloatIconBorder
+Instance.new("UICorner", FloatIcon).CornerRadius = UDim.new(0, 10)
+
+MakeDraggable(FloatIcon, FloatIconBorder)
+
+local guiVisible = true
+local iconTapStart = nil
+FloatIcon.MouseButton1Down:Connect(function()
+    iconTapStart = tick()
+end)
+FloatIcon.MouseButton1Up:Connect(function()
+    if iconTapStart and (tick() - iconTapStart) < 0.3 then
+        guiVisible = not guiVisible
+        MainFrame.Visible = guiVisible
+        FloatIcon.TextColor3 = guiVisible
+            and Color3.fromRGB(255, 210, 0)
+            or  Color3.fromRGB(150, 150, 150)
+    end
+    iconTapStart = nil
 end)
 
--- AUTO SPIN LOOP
-task.spawn(function()
+local TabContainer = Instance.new("ScrollingFrame")
+TabContainer.Size = UDim2.new(0, 90, 1, -52)
+TabContainer.Position = UDim2.new(0, 0, 0, 52)
+TabContainer.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
+TabContainer.BorderSizePixel = 0
+TabContainer.ScrollBarThickness = 3
+TabContainer.ScrollBarImageColor3 = Color3.fromRGB(90, 100, 255)
+TabContainer.CanvasSize = UDim2.new(0, 0, 0, 0)
+TabContainer.ScrollingDirection = Enum.ScrollingDirection.Y
+TabContainer.Parent = MainFrame
 
-    while task.wait(1) do
+local TabListLayout = Instance.new("UIListLayout")
+TabListLayout.Parent = TabContainer
+TabListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+TabListLayout.Padding = UDim.new(0, 2)
 
-        if AutoSpin then
+-- Auto-resize canvas so scrolling works as tabs are added
+TabListLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+    TabContainer.CanvasSize = UDim2.new(0, 0, 0, TabListLayout.AbsoluteContentSize.Y)
+end)
 
-            pcall(function()
+local ContentContainer = Instance.new("Frame")
+ContentContainer.Size = UDim2.new(1, -90, 1, -52)
+ContentContainer.Position = UDim2.new(0, 90, 0, 52)
+ContentContainer.BackgroundTransparency = 1
+ContentContainer.Parent = MainFrame
 
-                local args = {
-                    {
-                        Function = "RequestExchangePurchase",
-                        Args = {
-                            false
-                        }
-                    }
-                }
+local Divider = Instance.new("Frame")
+Divider.Size = UDim2.new(0, 2, 1, -52)
+Divider.Position = UDim2.new(0, 90, 0, 52)
+Divider.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
+Divider.BorderSizePixel = 0
+Divider.Parent = MainFrame
 
-                SpinRemote:FireServer(unpack(args))
 
+-- ==========================================
+-- TAB SYSTEM
+-- ==========================================
+local activeTabButton = nil
+local activeContent = nil
+
+local function CreateTab(name, icon)
+    local TabBtn = Instance.new("TextButton")
+    TabBtn.Size = UDim2.new(1, 0, 0, 60)
+    TabBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
+    TabBtn.BorderSizePixel = 0
+    TabBtn.Text = (icon or "") .. "\n" .. name
+    TabBtn.TextColor3 = Color3.fromRGB(120, 120, 140)
+    TabBtn.Font = Enum.Font.GothamSemibold
+    TabBtn.TextSize = 11
+    TabBtn.Parent = TabContainer
+
+    local ContentScroll = Instance.new("ScrollingFrame")
+    ContentScroll.Size = UDim2.new(1, 0, 1, 0)
+    ContentScroll.BackgroundTransparency = 1
+    ContentScroll.BorderSizePixel = 0
+    ContentScroll.ScrollBarThickness = 3
+    ContentScroll.ScrollBarImageColor3 = Color3.fromRGB(90, 100, 255)
+    ContentScroll.Visible = false
+    ContentScroll.Parent = ContentContainer
+
+    local UIList = Instance.new("UIListLayout")
+    UIList.Padding = UDim.new(0, 8)
+    UIList.SortOrder = Enum.SortOrder.LayoutOrder
+    UIList.Parent = ContentScroll
+
+    local UIPadding = Instance.new("UIPadding")
+    UIPadding.PaddingTop = UDim.new(0, 10)
+    UIPadding.PaddingLeft = UDim.new(0, 10)
+    UIPadding.PaddingRight = UDim.new(0, 10)
+    UIPadding.Parent = ContentScroll
+
+    UIList:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+        ContentScroll.CanvasSize = UDim2.new(0, 0, 0, UIList.AbsoluteContentSize.Y + 20)
+    end)
+
+    local tabTweenInfo = TweenInfo.new(0.2)
+    local activeTabTween = nil
+    local function SelectTab()
+        if activeTabButton then
+            if activeTabTween then activeTabTween:Cancel() end
+            activeTabTween = TweenService:Create(activeTabButton, tabTweenInfo, {
+                BackgroundColor3 = Color3.fromRGB(20, 20, 28),
+                TextColor3 = Color3.fromRGB(120, 120, 140)
+            })
+            activeTabTween:Play()
+            activeContent.Visible = false
+        end
+        local t = TweenService:Create(TabBtn, tabTweenInfo, {
+            BackgroundColor3 = Color3.fromRGB(30, 30, 45),
+            TextColor3 = Color3.fromRGB(255, 200, 50)
+        })
+        t:Play()
+        ContentScroll.Visible = true
+        activeTabButton = TabBtn
+        activeContent = ContentScroll
+    end
+
+    TabBtn.MouseButton1Click:Connect(SelectTab)
+    if not activeTabButton then SelectTab() end
+
+    local Elements = {}
+    Elements._scroll = ContentScroll
+
+    function Elements:AddLabel(text)
+        local frame = Instance.new("Frame")
+        frame.Size = UDim2.new(1, 0, 0, 28)
+        frame.BackgroundColor3 = Color3.fromRGB(50, 50, 75)
+        frame.BorderSizePixel = 0
+        frame.Parent = ContentScroll
+        Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(1, -10, 1, 0)
+        lbl.Position = UDim2.new(0, 10, 0, 0)
+        lbl.BackgroundTransparency = 1
+        lbl.Text = text
+        lbl.TextColor3 = Color3.fromRGB(255, 200, 50)
+        lbl.Font = Enum.Font.GothamBold
+        lbl.TextSize = 12
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.Parent = frame
+        return lbl
+    end
+
+    function Elements:AddToggle(text, default, callback)
+        local state = default
+        local ToggleFrame = Instance.new("Frame")
+        ToggleFrame.Size = UDim2.new(1, 0, 0, 44)
+        ToggleFrame.BackgroundColor3 = Color3.fromRGB(28, 28, 38)
+        ToggleFrame.Parent = ContentScroll
+        Instance.new("UICorner", ToggleFrame).CornerRadius = UDim.new(0, 8)
+
+        local Label = Instance.new("TextLabel")
+        Label.Size = UDim2.new(1, -70, 1, 0)
+        Label.Position = UDim2.new(0, 12, 0, 0)
+        Label.BackgroundTransparency = 1
+        Label.Text = text
+        Label.TextColor3 = Color3.fromRGB(220, 220, 220)
+        Label.Font = Enum.Font.Gotham
+        Label.TextSize = 14
+        Label.TextXAlignment = Enum.TextXAlignment.Left
+        Label.Parent = ToggleFrame
+
+        local SwitchBtn = Instance.new("TextButton")
+        SwitchBtn.Size = UDim2.new(0, 46, 0, 24)
+        SwitchBtn.Position = UDim2.new(1, -56, 0.5, -12)
+        SwitchBtn.BackgroundColor3 = state and Color3.fromRGB(90, 100, 255) or Color3.fromRGB(55, 55, 65)
+        SwitchBtn.Text = ""
+        SwitchBtn.BorderSizePixel = 0
+        SwitchBtn.Parent = ToggleFrame
+        Instance.new("UICorner", SwitchBtn).CornerRadius = UDim.new(1, 0)
+
+        local Circle = Instance.new("Frame")
+        Circle.Size = UDim2.new(0, 18, 0, 18)
+        Circle.Position = state and UDim2.new(1, -20, 0.5, -9) or UDim2.new(0, 3, 0.5, -9)
+        Circle.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        Circle.BorderSizePixel = 0
+        Circle.Parent = SwitchBtn
+        Instance.new("UICorner", Circle).CornerRadius = UDim.new(1, 0)
+
+        local toggleTweenInfo = TweenInfo.new(0.2)
+        SwitchBtn.MouseButton1Click:Connect(function()
+            state = not state
+            TweenService:Create(SwitchBtn, toggleTweenInfo, {BackgroundColor3 = state and Color3.fromRGB(90, 100, 255) or Color3.fromRGB(55, 55, 65)}):Play()
+            TweenService:Create(Circle, toggleTweenInfo, {Position = state and UDim2.new(1, -20, 0.5, -9) or UDim2.new(0, 3, 0.5, -9)}):Play()
+            callback(state)
+        end)
+
+        -- Return a wrapper table so we can attach a setter without touching the Roblox Instance
+        local wrapper = {
+            _frame = ToggleFrame,
+            _setState = function(newState)
+                if state == newState then return end
+                state = newState
+                SwitchBtn.BackgroundColor3 = state and Color3.fromRGB(90, 100, 255) or Color3.fromRGB(55, 55, 65)
+                Circle.Position = state and UDim2.new(1, -20, 0.5, -9) or UDim2.new(0, 3, 0.5, -9)
+                callback(state)
+            end,
+        }
+        return wrapper
+    end
+
+    function Elements:AddTextbox(text, default, callback)
+        local BoxFrame = Instance.new("Frame")
+        BoxFrame.Size = UDim2.new(1, 0, 0, 44)
+        BoxFrame.BackgroundColor3 = Color3.fromRGB(28, 28, 38)
+        BoxFrame.Parent = ContentScroll
+        Instance.new("UICorner", BoxFrame).CornerRadius = UDim.new(0, 8)
+
+        local Label = Instance.new("TextLabel")
+        Label.Size = UDim2.new(0.52, 0, 1, 0)
+        Label.Position = UDim2.new(0, 12, 0, 0)
+        Label.BackgroundTransparency = 1
+        Label.Text = text
+        Label.TextColor3 = Color3.fromRGB(220, 220, 220)
+        Label.Font = Enum.Font.Gotham
+        Label.TextSize = 13
+        Label.TextXAlignment = Enum.TextXAlignment.Left
+        Label.Parent = BoxFrame
+
+        local Input = Instance.new("TextBox")
+        Input.Size = UDim2.new(0.42, 0, 0, 30)
+        Input.AnchorPoint = Vector2.new(1, 0.5)
+        Input.Position = UDim2.new(0.97, 0, 0.5, 0)
+        Input.BackgroundColor3 = Color3.fromRGB(18, 18, 26)
+        Input.TextColor3 = Color3.fromRGB(255, 255, 255)
+        Input.Font = Enum.Font.Gotham
+        Input.TextSize = 13
+        Input.Text = tostring(default)
+        Input.ClearTextOnFocus = false
+        Input.BorderSizePixel = 0
+        Input.Parent = BoxFrame
+        Instance.new("UICorner", Input).CornerRadius = UDim.new(0, 6)
+
+        Input.FocusLost:Connect(function() callback(Input.Text) end)
+        return Input
+    end
+
+    function Elements:AddButton(text, color, callback, height)
+        if type(color) == "function" then
+            callback = color
+            color = Color3.fromRGB(90, 100, 255)
+        end
+        local Btn = Instance.new("TextButton")
+        Btn.Size = UDim2.new(1, 0, 0, height or 44)
+        Btn.BackgroundColor3 = color or Color3.fromRGB(90, 100, 255)
+        Btn.Text = text
+        Btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        Btn.Font = Enum.Font.GothamBold
+        Btn.TextSize = height and 12 or 14
+        Btn.BorderSizePixel = 0
+        Btn.Parent = ContentScroll
+        Instance.new("UICorner", Btn).CornerRadius = UDim.new(0, 8)
+
+        local btnFlashInfo = TweenInfo.new(0.1)
+        Btn.MouseButton1Click:Connect(function()
+            local c = Btn.BackgroundColor3
+            TweenService:Create(Btn, btnFlashInfo, {BackgroundColor3 = Color3.fromRGB(110, 120, 255)}):Play()
+            task.wait(0.1)
+            TweenService:Create(Btn, btnFlashInfo, {BackgroundColor3 = c}):Play()
+            callback()
+        end)
+        return Btn
+    end
+
+    function Elements:AddStatusLabel(default)
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(1, 0, 0, 34)
+        lbl.BackgroundColor3 = Color3.fromRGB(22, 22, 32)
+        lbl.Text = default or "..."
+        lbl.TextColor3 = Color3.fromRGB(200, 200, 200)
+        lbl.Font = Enum.Font.Gotham
+        lbl.TextSize = 13
+        lbl.Parent = ContentScroll
+        Instance.new("UICorner", lbl).CornerRadius = UDim.new(0, 8)
+        return lbl
+    end
+
+    function Elements:AddTogglePair(leftText, rightText, default)
+        local mode = default or leftText
+        local PairFrame = Instance.new("Frame")
+        PairFrame.Size = UDim2.new(1, 0, 0, 44)
+        PairFrame.BackgroundTransparency = 1
+        PairFrame.Parent = ContentScroll
+
+        local leftBtn = Instance.new("TextButton")
+        leftBtn.Size = UDim2.new(0.5, -4, 1, 0)
+        leftBtn.Text = leftText
+        leftBtn.Font = Enum.Font.GothamBold
+        leftBtn.TextSize = 13
+        leftBtn.TextColor3 = Color3.new(1,1,1)
+        leftBtn.BackgroundColor3 = mode == leftText and Color3.fromRGB(90,100,255) or Color3.fromRGB(45,45,58)
+        leftBtn.BorderSizePixel = 0
+        leftBtn.Parent = PairFrame
+        Instance.new("UICorner", leftBtn).CornerRadius = UDim.new(0, 8)
+
+        local rightBtn = Instance.new("TextButton")
+        rightBtn.Size = UDim2.new(0.5, -4, 1, 0)
+        rightBtn.Position = UDim2.new(0.5, 4, 0, 0)
+        rightBtn.Text = rightText
+        rightBtn.Font = Enum.Font.GothamBold
+        rightBtn.TextSize = 13
+        rightBtn.TextColor3 = Color3.new(1,1,1)
+        rightBtn.BackgroundColor3 = mode == rightText and Color3.fromRGB(90,100,255) or Color3.fromRGB(45,45,58)
+        rightBtn.BorderSizePixel = 0
+        rightBtn.Parent = PairFrame
+        Instance.new("UICorner", rightBtn).CornerRadius = UDim.new(0, 8)
+
+        local function getMode() return mode end
+        leftBtn.MouseButton1Click:Connect(function()
+            mode = leftText
+            leftBtn.BackgroundColor3 = Color3.fromRGB(90,100,255)
+            rightBtn.BackgroundColor3 = Color3.fromRGB(45,45,58)
+        end)
+        rightBtn.MouseButton1Click:Connect(function()
+            mode = rightText
+            rightBtn.BackgroundColor3 = Color3.fromRGB(90,100,255)
+            leftBtn.BackgroundColor3 = Color3.fromRGB(45,45,58)
+        end)
+        return getMode
+    end
+
+    function Elements:AddSlotSelector(label, targetGlobal)
+        self:AddLabel(label)
+
+        local allSelected = true
+        local selectedSlots = {}
+        local gridOpen = false
+
+        local modeFrame = Instance.new("Frame")
+        modeFrame.Size = UDim2.new(1, 0, 0, 40)
+        modeFrame.BackgroundTransparency = 1
+        modeFrame.Parent = ContentScroll
+
+        local allModeBtn = Instance.new("TextButton")
+        allModeBtn.Size = UDim2.new(0.5, -4, 1, 0)
+        allModeBtn.Text = "ALL"
+        allModeBtn.Font = Enum.Font.GothamBold
+        allModeBtn.TextSize = 13
+        allModeBtn.TextColor3 = Color3.new(1,1,1)
+        allModeBtn.BackgroundColor3 = Color3.fromRGB(90,100,255)
+        allModeBtn.BorderSizePixel = 0
+        allModeBtn.Parent = modeFrame
+        Instance.new("UICorner", allModeBtn).CornerRadius = UDim.new(0, 8)
+
+        local pickModeBtn = Instance.new("TextButton")
+        pickModeBtn.Size = UDim2.new(0.5, -4, 1, 0)
+        pickModeBtn.Position = UDim2.new(0.5, 4, 0, 0)
+        pickModeBtn.Text = "▼ PICK SLOTS"
+        pickModeBtn.Font = Enum.Font.GothamBold
+        pickModeBtn.TextSize = 13
+        pickModeBtn.TextColor3 = Color3.new(1,1,1)
+        pickModeBtn.BackgroundColor3 = Color3.fromRGB(45,45,58)
+        pickModeBtn.BorderSizePixel = 0
+        pickModeBtn.Parent = modeFrame
+        Instance.new("UICorner", pickModeBtn).CornerRadius = UDim.new(0, 8)
+
+        local gridWrapper = Instance.new("Frame")
+        gridWrapper.Size = UDim2.new(1, 0, 0, 160)
+        gridWrapper.BackgroundColor3 = Color3.fromRGB(22, 22, 32)
+        gridWrapper.BorderSizePixel = 0
+        gridWrapper.Visible = false
+        gridWrapper.Parent = ContentScroll
+        Instance.new("UICorner", gridWrapper).CornerRadius = UDim.new(0, 8)
+
+        local gridScroll = Instance.new("ScrollingFrame")
+        gridScroll.Size = UDim2.new(1, -8, 1, -8)
+        gridScroll.Position = UDim2.new(0, 4, 0, 4)
+        gridScroll.BackgroundTransparency = 1
+        gridScroll.BorderSizePixel = 0
+        gridScroll.ScrollBarThickness = 3
+        gridScroll.Parent = gridWrapper
+
+        local gridLayout = Instance.new("UIGridLayout")
+        gridLayout.CellSize = UDim2.new(0, 44, 0, 36)
+        gridLayout.CellPadding = UDim2.new(0, 4, 0, 4)
+        gridLayout.Parent = gridScroll
+
+        local gridPad = Instance.new("UIPadding")
+        gridPad.PaddingLeft = UDim.new(0, 4)
+        gridPad.PaddingTop = UDim.new(0, 4)
+        gridPad.Parent = gridScroll
+
+        local slotBtns = {}
+
+        local function updateGlobal()
+            if allSelected then
+                local all = {}
+                for i = 1, 30 do table.insert(all, i) end
+                getgenv()[targetGlobal] = all
+            else
+                getgenv()[targetGlobal] = selectedSlots
+            end
+        end
+
+        for i = 1, 30 do
+            local sb = Instance.new("TextButton")
+            sb.Size = UDim2.new(0, 44, 0, 36)
+            sb.Text = tostring(i)
+            sb.Font = Enum.Font.GothamBold
+            sb.TextSize = 13
+            sb.TextColor3 = Color3.new(1,1,1)
+            sb.BackgroundColor3 = Color3.fromRGB(45, 45, 58)
+            sb.BorderSizePixel = 0
+            sb.Parent = gridScroll
+            Instance.new("UICorner", sb).CornerRadius = UDim.new(0, 6)
+            slotBtns[i] = sb
+
+            sb.MouseButton1Click:Connect(function()
+                local found = false
+                for idx, v in ipairs(selectedSlots) do
+                    if v == i then
+                        table.remove(selectedSlots, idx)
+                        found = true
+                        break
+                    end
+                end
+                if not found then
+                    table.insert(selectedSlots, i)
+                end
+                sb.BackgroundColor3 = (function()
+                    for _, v in ipairs(selectedSlots) do
+                        if v == i then return Color3.fromRGB(90,100,255) end
+                    end
+                    return Color3.fromRGB(45,45,58)
+                end)()
+                updateGlobal()
+            end)
+        end
+
+        gridLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+            gridScroll.CanvasSize = UDim2.new(0, 0, 0, gridLayout.AbsoluteContentSize.Y + 8)
+        end)
+
+        local selectAllBtn = Instance.new("TextButton")
+        selectAllBtn.Size = UDim2.new(0, 44, 0, 36)
+        selectAllBtn.Text = "ALL"
+        selectAllBtn.Font = Enum.Font.GothamBold
+        selectAllBtn.TextSize = 10
+        selectAllBtn.TextColor3 = Color3.new(1,1,1)
+        selectAllBtn.BackgroundColor3 = Color3.fromRGB(0, 130, 80)
+        selectAllBtn.BorderSizePixel = 0
+        selectAllBtn.Parent = gridScroll
+        Instance.new("UICorner", selectAllBtn).CornerRadius = UDim.new(0, 6)
+        selectAllBtn.MouseButton1Click:Connect(function()
+            selectedSlots = {}
+            for i = 1, 30 do table.insert(selectedSlots, i) end
+            for i, sb in ipairs(slotBtns) do sb.BackgroundColor3 = Color3.fromRGB(90,100,255) end
+            updateGlobal()
+        end)
+
+        local clearBtn = Instance.new("TextButton")
+        clearBtn.Size = UDim2.new(0, 44, 0, 36)
+        clearBtn.Text = "CLR"
+        clearBtn.Font = Enum.Font.GothamBold
+        clearBtn.TextSize = 10
+        clearBtn.TextColor3 = Color3.new(1,1,1)
+        clearBtn.BackgroundColor3 = Color3.fromRGB(160, 40, 40)
+        clearBtn.BorderSizePixel = 0
+        clearBtn.Parent = gridScroll
+        Instance.new("UICorner", clearBtn).CornerRadius = UDim.new(0, 6)
+        clearBtn.MouseButton1Click:Connect(function()
+            selectedSlots = {}
+            for _, sb in ipairs(slotBtns) do sb.BackgroundColor3 = Color3.fromRGB(45,45,58) end
+            updateGlobal()
+        end)
+
+        allModeBtn.MouseButton1Click:Connect(function()
+            allSelected = true
+            gridOpen = false
+            gridWrapper.Visible = false
+            pickModeBtn.Text = "▼ PICK SLOTS"
+            allModeBtn.BackgroundColor3 = Color3.fromRGB(90,100,255)
+            pickModeBtn.BackgroundColor3 = Color3.fromRGB(45,45,58)
+            updateGlobal()
+        end)
+
+        pickModeBtn.MouseButton1Click:Connect(function()
+            allSelected = false
+            gridOpen = not gridOpen
+            gridWrapper.Visible = gridOpen
+            pickModeBtn.Text = (gridOpen and "▲" or "▼") .. " PICK SLOTS"
+            pickModeBtn.BackgroundColor3 = Color3.fromRGB(90,100,255)
+            allModeBtn.BackgroundColor3 = Color3.fromRGB(45,45,58)
+            updateGlobal()
+        end)
+
+        updateGlobal()
+    end
+
+    return Elements
+end
+
+-- ==========================================
+-- FLOATING DUPE BUTTON
+-- ==========================================
+local SpamButton = Instance.new("TextButton")
+SpamButton.Size = UDim2.new(0, 65, 0, 65)
+SpamButton.Position = UDim2.new(0.8, 0, 0.75, 0)
+SpamButton.BackgroundColor3 = Color3.fromRGB(220, 40, 40)
+SpamButton.Text = "DUPE"
+SpamButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+SpamButton.Font = Enum.Font.GothamBold
+SpamButton.TextScaled = true
+SpamButton.BorderSizePixel = 0
+SpamButton.Visible = false  -- hidden by default; toggle in Misc tab to show
+SpamButton.Parent = ScreenGui
+Instance.new("UICorner", SpamButton).CornerRadius = UDim.new(1, 0)
+
+local dragStart2, startPos2, isDragging2 = nil, nil, false
+SpamButton.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragStart2 = input.Position
+        startPos2 = SpamButton.Position
+        isDragging2 = false
+    end
+end)
+SpamButton.InputChanged:Connect(function(input)
+    if (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) and dragStart2 then
+        local delta = input.Position - dragStart2
+        if delta.Magnitude > 5 then
+            isDragging2 = true
+            SpamButton.Position = UDim2.new(startPos2.X.Scale, startPos2.X.Offset + delta.X, startPos2.Y.Scale, startPos2.Y.Offset + delta.Y)
+        end
+    end
+end)
+SpamButton.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        if not isDragging2 then FireNearestPrompt() end
+        dragStart2, isDragging2 = nil, false
+    end
+end)
+
+-- ==========================================
+-- CREATE TABS
+-- ==========================================
+local AutoTab = CreateTab("Auto\nFarm", "🌾")
+local GiftTab = CreateTab("Gift", "🎁")
+local BaseTab = CreateTab("Base", "🏠")
+-- Override AddButton for BaseTab to use smaller height
+local _origBaseAddButton = BaseTab.AddButton
+BaseTab.AddButton = function(self, text, color, callback)
+    local btn = _origBaseAddButton(self, text, color, callback)
+    if btn then btn.Size = UDim2.new(1, 0, 0, 32) btn.TextSize = 12 end
+    return btn
+end
+local MiscTab = CreateTab("Misc", "⚙️")
+local PlayersTab = CreateTab("Players", "👥")
+local ConfigTab = CreateTab("Config", "💾")
+
+-- ==========================================
+-- GUI REGISTRY (used by applyConfig to sync visuals)
+-- ==========================================
+-- Populated below as each widget is created.
+-- Keys match SAVE_KEYS so applyConfig can look them up by name.
+local _guiToggles   = {}  -- key -> ToggleFrame (has :_setState)
+local _guiTextboxes = {}  -- key -> TextBox Input instance
+
+-- ==========================================
+-- AUTOFARM TAB
+-- ==========================================
+AutoTab:AddLabel("AUTO FARM")
+
+local _zoneInput = AutoTab:AddTextbox("Farm Zone (1-13)", "1", function(val)
+    local target = "Zone" .. tostring(val)
+    if zonesFold:FindFirstChild(target) then
+        getgenv().ChosenZone = zonesFold[target]
+    end
+end)
+_guiTextboxes["ChosenZone"] = _zoneInput  -- stored as zone number string
+
+local _minFarmInput = AutoTab:AddTextbox("Min Value Fallback (e.g. 1m, 500k)", "0", function(val)
+    getgenv().MinFarmValue = parseValue(val) or 0
+end)
+_guiTextboxes["MinFarmValue"] = _minFarmInput
+
+
+
+local farmStatus = AutoTab:AddStatusLabel("🌾 Idle — 0 farmed this session")
+
+-- Collapsible recent farm history (last 3)
+local historyCollapse = Instance.new("TextButton")
+historyCollapse.Size = UDim2.new(1, 0, 0, 32)
+historyCollapse.BackgroundColor3 = Color3.fromRGB(30, 30, 44)
+historyCollapse.Text = "\226\150\182  Recent Farms (0)"
+historyCollapse.TextColor3 = Color3.fromRGB(180, 180, 220)
+historyCollapse.Font = Enum.Font.GothamSemibold
+historyCollapse.TextSize = 12
+historyCollapse.TextXAlignment = Enum.TextXAlignment.Left
+historyCollapse.BorderSizePixel = 0
+historyCollapse.Parent = AutoTab._scroll
+do local p = Instance.new("UIPadding") p.PaddingLeft = UDim.new(0,10) p.Parent = historyCollapse end
+Instance.new("UICorner", historyCollapse).CornerRadius = UDim.new(0, 8)
+
+local historyFrame = Instance.new("Frame")
+historyFrame.Size = UDim2.new(1, 0, 0, 0)
+historyFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 32)
+historyFrame.BorderSizePixel = 0
+historyFrame.Visible = false
+historyFrame.ClipsDescendants = true
+historyFrame.Parent = AutoTab._scroll
+Instance.new("UICorner", historyFrame).CornerRadius = UDim.new(0, 8)
+
+local historyLayout = Instance.new("UIListLayout")
+historyLayout.Parent = historyFrame
+historyLayout.SortOrder = Enum.SortOrder.LayoutOrder
+historyLayout.Padding = UDim.new(0, 2)
+do local p = Instance.new("UIPadding") p.PaddingLeft = UDim.new(0,8) p.PaddingTop = UDim.new(0,4) p.PaddingBottom = UDim.new(0,4) p.Parent = historyFrame end
+
+local historyOpen = false
+historyCollapse.MouseButton1Click:Connect(function()
+    historyOpen = not historyOpen
+    historyFrame.Visible = historyOpen
+    if historyOpen then
+        historyFrame.Size = UDim2.new(1, 0, 0, historyLayout.AbsoluteContentSize.Y + 10)
+    end
+    local count = 0
+    for _, c in pairs(historyFrame:GetChildren()) do if c:IsA("TextLabel") then count = count + 1 end end
+    local arrow = historyOpen and "\226\150\188" or "\226\150\182"
+    historyCollapse.Text = arrow .. "  Recent Farms (" .. count .. ")"
+end)
+
+local farmHistory = {}
+local function pushHistory(petName, count)
+    table.insert(farmHistory, 1, {name = petName, count = count})
+    if #farmHistory > 3 then table.remove(farmHistory) end
+    for _, c in pairs(historyFrame:GetChildren()) do
+        if c:IsA("TextLabel") then c:Destroy() end
+    end
+    for i, entry in ipairs(farmHistory) do
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(1, -8, 0, 24)
+        lbl.BackgroundTransparency = 1
+        lbl.Text = "#" .. entry.count .. "  " .. entry.name
+        lbl.TextColor3 = i == 1 and Color3.fromRGB(100, 220, 100) or Color3.fromRGB(160, 160, 180)
+        lbl.Font = Enum.Font.Gotham
+        lbl.TextSize = 12
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.LayoutOrder = i
+        lbl.Parent = historyFrame
+    end
+    historyFrame.Size = UDim2.new(1, 0, 0, historyLayout.AbsoluteContentSize.Y + 10)
+    local arrow = historyOpen and "\226\150\188" or "\226\150\182"
+    historyCollapse.Text = arrow .. "  Recent Farms (" .. #farmHistory .. ")"
+end
+
+_guiToggles["Farming"] = AutoTab:AddToggle("Autofarm", false, function(state)
+    getgenv().Farming = state
+    if state then
+        local sessionCount = 0
+        farmStatus.Text = "🌾 Scanning... | Farmed: 0"
+        farmStatus.TextColor3 = Color3.fromRGB(255, 200, 50)
+        task.spawn(function()
+            while getgenv().Farming do
+                local char = player.Character
+                if not char or not getgenv().ChosenZone then task.wait(1) continue end
+                local objects = getgenv().ChosenZone:FindFirstChild("Objects")
+                if objects then
+                    for _, obj in pairs(objects:GetChildren()) do
+                        if not getgenv().Farming then break end
+                        -- Walk all descendants to find pet name (same as V3 - actually works)
+                        local nameParts = {}
+                        pcall(function()
+                            for _, v in pairs(obj:GetDescendants()) do
+                                if v:IsA("TextLabel") then
+                                    local t = tostring(v.Text):lower()
+                                    if t ~= "" then nameParts[#nameParts+1] = t end
+                                elseif v:IsA("StringValue") then
+                                    local t = tostring(v.Value):lower()
+                                    if t ~= "" then nameParts[#nameParts+1] = t end
+                                end
+                            end
+                        end)
+                        local name = #nameParts > 0 and table.concat(nameParts, " ") or tostring(obj.Name):lower()
+
+                        local detectedValue = 0
+                        pcall(function()
+                            local raw = name:match("(%d+%.?%d*[kmbtq])") or name:match("(%d+%.?%d*)")
+                            if raw then
+                                local num, suffix = raw:match("([%d%.]+)([kmbtq]?)")
+                                num = tonumber(num) or 0
+                                local multipliers = {k=1e3,m=1e6,b=1e9,t=1e12,q=1e15}
+                                detectedValue = num * (multipliers[suffix] or 1)
+                            end
+                        end)
+
+                        local celestialPet = name:find("tung tung tung sahur") or name:find("esok sekolah") or name:find("job job job sahur") or name:find("chillin chili")
+                        local isRainbow = name:find("rainbow")
+                        local isDarkMatter = name:find("darkmatter") or name:find("dark matter")
+                        local isAncient = name:find("ancient")
+
+                        local shouldFarm = false
+                        if celestialPet and (isRainbow or isDarkMatter) then shouldFarm = true end
+                        local celestialThresh = (getgenv().MinFarmValue and getgenv().MinFarmValue > 0) and getgenv().MinFarmValue or 1000000
+                        if celestialPet and not isRainbow and not isDarkMatter and detectedValue >= celestialThresh then shouldFarm = true end
+                        if isAncient and (isRainbow or isDarkMatter) then shouldFarm = true end
+                        -- Fallback: farm any pet that meets the min value threshold if no specific variant matched
+                        local minVal = getgenv().MinFarmValue or 0
+                        if not shouldFarm and minVal > 0 and detectedValue >= minVal then shouldFarm = true end
+                        if name:find("cosmic") then shouldFarm = false end
+                        if name:find("radioactive") then shouldFarm = false end
+
+                        if shouldFarm then
+                            if obj:IsA("Model") and obj.PrimaryPart then
+                                local burst = tonumber(getgenv().InputBurst) or 30
+
+                                -- Step 1: TP on top of pet
+                                char = player.Character
+                                if not char or not char:FindFirstChild("HumanoidRootPart") then continue end
+                                local hrp = char.HumanoidRootPart
+                                local tpPos = obj.PrimaryPart.CFrame + Vector3.new(0, 3, 0)
+                                hrp.CFrame = tpPos
+
+                                -- Step 2: Lock position using BodyPosition so waves can't push you off
+                                local anchor = Instance.new("BodyPosition")
+                                anchor.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+                                anchor.D = 1000
+                                anchor.P = 100000
+                                anchor.Position = tpPos.Position
+                                anchor.Parent = hrp
+
+                                -- Step 3: Wait for server to register position
+                                task.wait(0.5)
+
+                                -- Step 4: Fire once
+                                local prompt = obj:FindFirstChildWhichIsA("ProximityPrompt", true)
+                                if prompt then
+                                    for i = 1, burst do
+                                        pcall(fireproximityprompt, prompt)
+                                    end
+                                end
+
+                                -- Step 5: Wait 2s locked in place on the pet
+                                task.wait(2)
+
+                                -- Step 6: Unlock position before TPing
+                                anchor:Destroy()
+
+                                -- Step 7: TP to base
+                                pcall(function()
+                                    local freshHRP = player.Character.HumanoidRootPart
+                                    freshHRP.CFrame = workspace.Bases[player.Name].Root.CFrame + Vector3.new(0, 3, 0)
+                                end)
+
+                                -- Step 8: Wait 1s at base for pets to arrive in backpack
+                                task.wait(1)
+                                sessionCount = sessionCount + 1
+                                getgenv().FarmSessionCount = sessionCount
+                                local displayName = name:gsub("<[^>]+>", ""):match("^%s*(.-)%s*$")
+                                -- Reformat: move variant word to front and title-case
+                                -- e.g. "job job job sahur rainbow variant" -> "Rainbow Job Job Job Sahur"
+                                local variants = {"rainbow", "dark matter", "darkmatter", "golden", "gold", "shiny", "cosmic"}
+                                local foundVariant = nil
+                                local petNameOnly = displayName
+                                for _, v in ipairs(variants) do
+                                    if displayName:lower():find(v, 1, true) then
+                                        foundVariant = v:gsub("^%l", string.upper)
+                                        petNameOnly = displayName:lower():gsub(v, ""):gsub("variant", ""):match("^%s*(.-)%s*$")
+                                        break
+                                    end
+                                end
+                                -- Also strip trailing "variant" if no specific variant found
+                                petNameOnly = petNameOnly:gsub("variant", ""):match("^%s*(.-)%s*$")
+                                -- Title case the pet name
+                                local titled = petNameOnly:gsub("(%a)([%w_']*)", function(a,b) return a:upper()..b end)
+                                local shortName = (foundVariant and (foundVariant .. " ") or "") .. titled
+                                shortName = shortName:sub(1, 30)
+                                farmStatus.Text = "✅ Farmed: " .. sessionCount .. " | " .. shortName
+                                farmStatus.TextColor3 = Color3.fromRGB(100, 220, 100)
+                                pushHistory(shortName, sessionCount)
+                            end
+                        end
+                    end
+                end
+                task.wait(1)
+            end
+        end)
+    else
+        farmStatus.Text = "⏹ Stopped | Session farmed: " .. (getgenv().FarmSessionCount or 0)
+        farmStatus.TextColor3 = Color3.fromRGB(180, 180, 180)
+    end
+end)
+
+-- ==========================================
+-- AUTOSELL (FIXED)
+-- ==========================================
+local _burstInput = AutoTab:AddTextbox("Input Burst (e.g. 20 = dupe 20x)", "20", function(val)
+    getgenv().InputBurst = tonumber(val) or 1
+end)
+_guiTextboxes["InputBurst"] = _burstInput
+
+AutoTab:AddLabel("AUTO SELL")
+
+local sellStatus = AutoTab:AddStatusLabel("⏳ Autosell idle")
+
+local _maxPriceInput = AutoTab:AddTextbox("Max Price (Autosell)", "0", function(val)
+    getgenv().MaxPrice = parseValue(val) or 0
+end)
+_guiTextboxes["MaxPrice"] = _maxPriceInput
+
+-- Stored outside so rapid toggles can't stack connections
+local _sellAddedConn, _sellRemovedConn
+
+_guiToggles["Selling"] = AutoTab:AddToggle("Autosell", false, function(state)
+    getgenv().Selling = state
+    -- Disconnect any existing connections before starting fresh
+    if _sellAddedConn then _sellAddedConn:Disconnect(); _sellAddedConn = nil end
+    if _sellRemovedConn then _sellRemovedConn:Disconnect(); _sellRemovedConn = nil end
+    if state then
+        task.spawn(function()
+            -- Cache remote once per session, not per cycle
+            local sellRemote = game:GetService("ReplicatedStorage").Shared.Classes.RemoteFunction.Remotes.EntityShared_SellEntity
+            local backpack = player.Backpack
+            local scanPending = false
+
+            local function doSell()
+                if not getgenv().Selling then return end
+                local bp = player.Backpack
+                if not bp then return end
+                local maxP = getgenv().MaxPrice or 0
+                if maxP == 0 then
+                    sellStatus.Text = "⚠️ Set a Max Price to sell"
+                    sellStatus.TextColor3 = Color3.fromRGB(255, 160, 50)
+                    scanPending = false
+                    return
+                end
+                local toSell = {}
+                for _, item in ipairs(bp:GetChildren()) do
+                    if not getgenv().Selling then break end
+                    if not isPetUUID(item.Name) then continue end
+                    if not item:IsA("Tool") then continue end
+                    -- Skip lucky blocks (ancient blocks etc) — not sellable
+                    local tip = ""
+                    pcall(function() tip = item.ToolTip or "" end)
+                    if tip:lower():find("block") then continue end
+                    local val = 0
+                    pcall(function()
+                        local text = item.Handle.ObjectInfo.Value.ValueLabel.Text
+                        val = parseValue(text)
+                    end)
+                    if val == 0 then
+                        pcall(function()
+                            for _, desc in ipairs(item:GetDescendants()) do
+                                if desc:IsA("TextLabel") and desc.Name == "ValueLabel" then
+                                    local v = parseValue(desc.Text)
+                                    if v > 0 then val = v break end
+                                end
+                            end
+                        end)
+                    end
+                    -- maxP == 0 means no price set, skip selling entirely
+                    -- only sell if a price is set AND the pet's value is at or below it
+                    if maxP > 0 and val <= maxP then
+                        table.insert(toSell, item.Name)
+                    end
+                end
+                local totalToSell = #toSell
+                if totalToSell > 0 then
+                    sellStatus.Text = "💰 Selling " .. totalToSell .. " pet(s)..."
+                    sellStatus.TextColor3 = Color3.fromRGB(255, 200, 50)
+                    -- Fire all sell remotes simultaneously — each in its own thread
+                    for _, n in ipairs(toSell) do
+                        task.spawn(function()
+                            pcall(function() sellRemote:InvokeServer(n) end)
+                        end)
+                    end
+                    sellStatus.Text = "✅ Done — sold " .. totalToSell
+                    sellStatus.TextColor3 = Color3.fromRGB(100, 220, 100)
+                else
+                    sellStatus.Text = "✅ Idle — nothing to sell"
+                    sellStatus.TextColor3 = Color3.fromRGB(180, 180, 180)
+                end
+                scanPending = false
+            end
+
+            local function queueSell()
+                if scanPending then return end
+                scanPending = true
+                -- Small delay so rapid adds (farming burst) batch into one scan
+                task.delay(0.5, doSell)
+            end
+
+            if backpack then
+                _sellAddedConn   = backpack.ChildAdded:Connect(queueSell)
+                _sellRemovedConn = backpack.ChildRemoved:Connect(queueSell)
+            end
+
+            -- Run one initial scan in case there's already stuff to sell
+            doSell()
+
+            -- Wait loop: just sleeps until toggled off, no work done here
+            while getgenv().Selling do
+                task.wait(1)
+            end
+
+            if _sellAddedConn   then _sellAddedConn:Disconnect();   _sellAddedConn = nil end
+            if _sellRemovedConn then _sellRemovedConn:Disconnect(); _sellRemovedConn = nil end
+            sellStatus.Text = "⏹ Autosell stopped"
+            sellStatus.TextColor3 = Color3.fromRGB(180, 180, 180)
+        end)
+    else
+        sellStatus.Text = "⏹ Autosell stopped"
+        sellStatus.TextColor3 = Color3.fromRGB(180, 180, 180)
+    end
+end)
+
+AutoTab:AddLabel("OTHER")
+
+
+_guiToggles["PositionCycle"] = AutoTab:AddToggle("Position Cycle (TP+Dupe)", false, function(state)
+    getgenv().PositionCycle = state
+    if state then
+        task.spawn(function()
+            while getgenv().PositionCycle do
+                local char = player.Character
+                if not char or not char:FindFirstChild("HumanoidRootPart") or not getgenv().ChosenZone then task.wait(1) continue end
+                local objects = getgenv().ChosenZone:FindFirstChild("Objects")
+                if objects then
+                    for _, obj in pairs(objects:GetChildren()) do
+                        if not getgenv().PositionCycle then break end
+                        if obj:IsA("Model") and obj.PrimaryPart then
+                            char.HumanoidRootPart.CFrame = obj.PrimaryPart.CFrame
+                            task.wait(0.5)
+                            FireNearestPrompt()
+                        end
+                    end
+                end
+                task.wait(0.1)
+            end
+        end)
+    end
+end)
+
+-- ==========================================
+-- GIFT TAB
+-- ==========================================
+GiftTab:AddLabel("AUTO ACCEPT GIFT")
+
+_guiToggles["AutoAcceptGift"] = GiftTab:AddToggle("Auto Accept Gift", false, function(state)
+    getgenv().AutoAcceptGift = state
+    if state then
+        task.spawn(function()
+            while getgenv().AutoAcceptGift do
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if p ~= player then
+                        pcall(function()
+                            Remotes.GiftingShared_AcceptGift:FireServer(p)
+                        end)
+                    end
+                end
+                task.wait(0.1)
+            end
+        end)
+    end
+end)
+
+GiftTab:AddLabel("AUTO GIFT")
+
+local giftUsernameInput = GiftTab:AddTextbox("Target Username", "", function(val)
+    getgenv().GiftTarget = val
+end)
+_guiTextboxes["GiftTarget"] = giftUsernameInput
+
+-- Collapsible player list header button
+local playerListCollapse = Instance.new("TextButton")
+playerListCollapse.Size = UDim2.new(1, -20, 0, 36)
+playerListCollapse.BackgroundColor3 = Color3.fromRGB(35, 35, 50)
+playerListCollapse.Text = "\226\150\188  Select from server"
+playerListCollapse.TextColor3 = Color3.fromRGB(200, 200, 255)
+playerListCollapse.Font = Enum.Font.GothamBold
+playerListCollapse.TextSize = 13
+playerListCollapse.TextXAlignment = Enum.TextXAlignment.Left
+playerListCollapse.BorderSizePixel = 0
+playerListCollapse.Parent = GiftTab._scroll
+do local p = Instance.new("UIPadding") p.PaddingLeft = UDim.new(0,10) p.Parent = playerListCollapse end
+Instance.new("UICorner", playerListCollapse).CornerRadius = UDim.new(0, 8)
+
+local playerListFrame = Instance.new("ScrollingFrame")
+playerListFrame.Size = UDim2.new(1, -20, 0, 110)
+playerListFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 32)
+playerListFrame.BorderSizePixel = 0
+playerListFrame.ScrollBarThickness = 3
+playerListFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+playerListFrame.Visible = false
+playerListFrame.Parent = GiftTab._scroll
+Instance.new("UICorner", playerListFrame).CornerRadius = UDim.new(0, 8)
+
+local playerListCollapsed = true
+playerListCollapse.MouseButton1Click:Connect(function()
+    playerListCollapsed = not playerListCollapsed
+    playerListFrame.Visible = not playerListCollapsed
+    playerListCollapse.Text = (playerListCollapsed and "\226\150\188" or "\226\150\178") .. "  Select from server"
+end)
+
+local playerListLayout = Instance.new("UIListLayout")
+playerListLayout.Parent = playerListFrame
+playerListLayout.SortOrder = Enum.SortOrder.Name
+playerListLayout.Padding = UDim.new(0, 3)
+
+local playerListPad = Instance.new("UIPadding")
+playerListPad.PaddingLeft = UDim.new(0, 4)
+playerListPad.PaddingTop = UDim.new(0, 4)
+playerListPad.PaddingRight = UDim.new(0, 4)
+playerListPad.Parent = playerListFrame
+
+local function refreshGiftPlayerList()
+    for _, c in pairs(playerListFrame:GetChildren()) do
+        if c:IsA("TextButton") then c:Destroy() end
+    end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= player then
+            local pb = Instance.new("TextButton")
+            pb.Parent = playerListFrame
+            pb.Size = UDim2.new(1, 0, 0, 30)
+            local displayName = p.DisplayName or p.Name
+            local showSame = displayName == p.Name
+            pb.Text = "  " .. p.Name .. (not showSame and " (" .. displayName .. ")" or "")
+            pb.TextScaled = false
+            pb.TextSize = 12
+            pb.BackgroundColor3 = Color3.fromRGB(35, 35, 48)
+            pb.TextColor3 = Color3.new(1, 1, 1)
+            pb.TextXAlignment = Enum.TextXAlignment.Left
+            pb.BorderSizePixel = 0
+            pb.Font = Enum.Font.Gotham
+            Instance.new("UICorner", pb).CornerRadius = UDim.new(0, 6)
+            pb.MouseButton1Click:Connect(function()
+                for _, b in pairs(playerListFrame:GetChildren()) do
+                    if b:IsA("TextButton") then b.BackgroundColor3 = Color3.fromRGB(35, 35, 48) end
+                end
+                pb.BackgroundColor3 = Color3.fromRGB(0, 120, 200)
+                getgenv().GiftTarget = p.Name
+                giftUsernameInput.Text = p.Name
+                playerListCollapsed = true
+                playerListFrame.Visible = false
+                playerListCollapse.Text = "\226\150\188  Select from server"
             end)
         end
     end
+    playerListFrame.CanvasSize = UDim2.new(0, 0, 0, playerListLayout.AbsoluteContentSize.Y + 8)
+end
+
+refreshGiftPlayerList()
+local playerAddedConn = Players.PlayerAdded:Connect(function() refreshGiftPlayerList() end)
+local playerRemovingConn = Players.PlayerRemoving:Connect(function() task.wait(0.1) refreshGiftPlayerList() end)
+-- Clean up player list connections when the GUI is destroyed
+ScreenGui.Destroying:Connect(function()
+    playerAddedConn:Disconnect()
+    playerRemovingConn:Disconnect()
 end)
 
-print("KAIZ HUB LOADED")
+local refreshBtn = Instance.new("TextButton")
+refreshBtn.Size = UDim2.new(1, -20, 0, 30)
+refreshBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
+refreshBtn.Text = "🔄 Refresh List"
+refreshBtn.TextColor3 = Color3.new(1,1,1)
+refreshBtn.Font = Enum.Font.Gotham
+refreshBtn.TextSize = 12
+refreshBtn.BorderSizePixel = 0
+refreshBtn.Parent = GiftTab._scroll
+Instance.new("UICorner", refreshBtn).CornerRadius = UDim.new(0, 6)
+refreshBtn.MouseButton1Click:Connect(function()
+    refreshGiftPlayerList()
+end)
+
+local _giftFilterInput = GiftTab:AddTextbox("Pet Filter (name or ALL)", "ALL", function(val)
+    getgenv().GiftFilter = val
+end)
+_guiTextboxes["GiftFilter"] = _giftFilterInput
+
+-- ── PET WHITELIST PICKER ──────────────────────────────────────
+-- Collapsible grid showing current backpack pets; tap to toggle
+local whitelistSelected = {}  -- set of petName strings
+
+local wlHeader = Instance.new("TextButton")
+wlHeader.Size = UDim2.new(1, 0, 0, 32)
+wlHeader.BackgroundColor3 = Color3.fromRGB(35, 35, 52)
+wlHeader.BorderSizePixel = 0
+wlHeader.Text = "▶  Whitelist Pets (tap to select)"
+wlHeader.TextColor3 = Color3.fromRGB(180, 180, 220)
+wlHeader.Font = Enum.Font.GothamSemibold
+wlHeader.TextSize = 12
+wlHeader.TextXAlignment = Enum.TextXAlignment.Left
+wlHeader.Parent = GiftTab._scroll
+do local p = Instance.new("UIPadding") p.PaddingLeft = UDim.new(0,10) p.Parent = wlHeader end
+Instance.new("UICorner", wlHeader).CornerRadius = UDim.new(0, 8)
+
+local wlFrame = Instance.new("Frame")
+wlFrame.Size = UDim2.new(1, 0, 0, 0)
+wlFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 32)
+wlFrame.BorderSizePixel = 0
+wlFrame.Visible = false
+wlFrame.ClipsDescendants = true
+wlFrame.Parent = GiftTab._scroll
+Instance.new("UICorner", wlFrame).CornerRadius = UDim.new(0, 8)
+
+-- Search box inside whitelist
+local wlSearchBox = Instance.new("TextBox")
+wlSearchBox.Size = UDim2.new(1, -12, 0, 28)
+wlSearchBox.Position = UDim2.new(0, 6, 0, 6)
+wlSearchBox.BackgroundColor3 = Color3.fromRGB(35, 35, 52)
+wlSearchBox.BorderSizePixel = 0
+wlSearchBox.PlaceholderText = "🔍 Search pets..."
+wlSearchBox.PlaceholderColor3 = Color3.fromRGB(120, 120, 140)
+wlSearchBox.Text = ""
+wlSearchBox.TextColor3 = Color3.fromRGB(220, 220, 220)
+wlSearchBox.Font = Enum.Font.Gotham
+wlSearchBox.TextSize = 12
+wlSearchBox.ClearTextOnFocus = false
+wlSearchBox.Parent = wlFrame
+Instance.new("UICorner", wlSearchBox).CornerRadius = UDim.new(0, 6)
+do local p = Instance.new("UIPadding") p.PaddingLeft = UDim.new(0,8) p.Parent = wlSearchBox end
+
+local wlGrid = Instance.new("Frame")
+wlGrid.Size = UDim2.new(1, 0, 0, 0)
+wlGrid.BackgroundTransparency = 1
+wlGrid.Parent = wlFrame
+
+local wlLayout = Instance.new("UIGridLayout")
+wlLayout.Parent = wlGrid
+wlLayout.CellSize = UDim2.new(0, 120, 0, 30)
+wlLayout.CellPadding = UDim2.new(0, 4, 0, 4)
+wlLayout.SortOrder = Enum.SortOrder.LayoutOrder
+do local p = Instance.new("UIPadding")
+   p.PaddingLeft = UDim.new(0,6) p.PaddingTop = UDim.new(0,6)
+   p.PaddingRight = UDim.new(0,6) p.PaddingBottom = UDim.new(0,6)
+   p.Parent = wlGrid end
+
+local wlOpen = false
+local wlBtns = {}
+
+local function updateGiftFilterFromWhitelist()
+    local selected = {}
+    for name, v in pairs(whitelistSelected) do
+        if v then table.insert(selected, name) end
+    end
+    if #selected == 0 then
+        getgenv().GiftFilter = "ALL"
+        _giftFilterInput.Text = "ALL"
+    else
+        local joined = table.concat(selected, ",")
+        getgenv().GiftFilter = joined
+        _giftFilterInput.Text = joined
+    end
+end
+
+local function rebuildWhitelistGrid()
+    for _, b in pairs(wlBtns) do pcall(function() b:Destroy() end) end
+    wlBtns = {}
+    local seen = {}
+    local bp = player:FindFirstChild("Backpack")
+    if not bp then return end
+    for _, item in ipairs(bp:GetChildren()) do
+        if item:IsA("Tool") then
+            local n = ""
+            pcall(function() n = item.ToolTip or "" end)
+            n = n:gsub("<[^>]+>", ""):match("^%s*(.-)%s*$")
+            if n ~= "" and not seen[n] then
+                seen[n] = true
+                local btn = Instance.new("TextButton")
+                btn.Size = UDim2.new(0, 120, 0, 30)
+                btn.BackgroundColor3 = whitelistSelected[n]
+                    and Color3.fromRGB(90, 200, 90)
+                    or  Color3.fromRGB(45, 45, 58)
+                btn.BorderSizePixel = 0
+                btn.Text = n:sub(1, 22)
+                btn.TextColor3 = Color3.new(1,1,1)
+                btn.Font = Enum.Font.Gotham
+                btn.TextSize = 10
+                btn.Parent = wlGrid
+                Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+                local petName = n
+                btn.MouseButton1Click:Connect(function()
+                    whitelistSelected[petName] = not whitelistSelected[petName]
+                    btn.BackgroundColor3 = whitelistSelected[petName]
+                        and Color3.fromRGB(90, 200, 90)
+                        or  Color3.fromRGB(45, 45, 58)
+                    updateGiftFilterFromWhitelist()
+                end)
+                table.insert(wlBtns, btn)
+            end
+        end
+    end
+    -- Resize frame to fit grid
+    task.defer(function()
+        local gridH = wlLayout.AbsoluteContentSize.Y + 12
+        wlGrid.Size = UDim2.new(1, 0, 0, gridH)
+        wlGrid.Position = UDim2.new(0, 0, 0, 40)
+        wlFrame.Size = UDim2.new(1, 0, 0, gridH + 46)
+    end)
+end
+
+wlSearchBox:GetPropertyChangedSignal("Text"):Connect(function()
+    local query = wlSearchBox.Text:lower()
+    for _, btn in ipairs(wlBtns) do
+        btn.Visible = query == "" or btn.Text:lower():find(query, 1, true) ~= nil
+    end
+end)
+
+wlHeader.MouseButton1Click:Connect(function()
+    wlOpen = not wlOpen
+    wlFrame.Visible = wlOpen
+    if wlOpen then
+        rebuildWhitelistGrid()
+        wlHeader.Text = "▼  Whitelist Pets (tap to select)"
+    else
+        wlHeader.Text = "▶  Whitelist Pets (tap to select)"
+        wlSearchBox.Text = ""
+    end
+end)
+-- ─────────────────────────────────────────────────────────────
+
+GiftTab:AddLabel("Amount:")
+
+local giftStatusLabel = GiftTab:AddStatusLabel("⏳ Waiting...")
+
+-- ALL / SPECIFIC collapsible toggle pair (mirrors "Select from server" pattern)
+local mode = "ALL"
+
+local PairFrame2 = Instance.new("Frame")
+PairFrame2.Size = UDim2.new(1, 0, 0, 32)
+PairFrame2.BackgroundTransparency = 1
+PairFrame2.Parent = GiftTab._scroll
+
+local allBtn2 = Instance.new("TextButton")
+allBtn2.Size = UDim2.new(0.5, -4, 1, 0)
+allBtn2.Text = "ALL"
+allBtn2.Font = Enum.Font.GothamBold
+allBtn2.TextSize = 11
+allBtn2.TextColor3 = Color3.new(1,1,1)
+allBtn2.BackgroundColor3 = Color3.fromRGB(90,100,255)
+allBtn2.BorderSizePixel = 0
+allBtn2.Parent = PairFrame2
+Instance.new("UICorner", allBtn2).CornerRadius = UDim.new(0, 8)
+
+local specificCollapseBtn = Instance.new("TextButton")
+specificCollapseBtn.Size = UDim2.new(0.5, -4, 1, 0)
+specificCollapseBtn.Position = UDim2.new(0.5, 4, 0, 0)
+specificCollapseBtn.Text = "▼  SPECIFIC"
+specificCollapseBtn.Font = Enum.Font.GothamBold
+specificCollapseBtn.TextSize = 13
+specificCollapseBtn.TextColor3 = Color3.new(1,1,1)
+specificCollapseBtn.BackgroundColor3 = Color3.fromRGB(45,45,58)
+specificCollapseBtn.BorderSizePixel = 0
+specificCollapseBtn.Parent = PairFrame2
+Instance.new("UICorner", specificCollapseBtn).CornerRadius = UDim.new(0, 8)
+
+-- Amount textbox — only visible when SPECIFIC is selected (collapsed by default)
+local amountBoxFrame = Instance.new("Frame")
+amountBoxFrame.Size = UDim2.new(1, 0, 0, 44)
+amountBoxFrame.BackgroundColor3 = Color3.fromRGB(28, 28, 38)
+amountBoxFrame.BorderSizePixel = 0
+amountBoxFrame.Visible = false
+amountBoxFrame.Parent = GiftTab._scroll
+Instance.new("UICorner", amountBoxFrame).CornerRadius = UDim.new(0, 8)
+
+local amountLabel2 = Instance.new("TextLabel")
+amountLabel2.Size = UDim2.new(0.52, 0, 1, 0)
+amountLabel2.Position = UDim2.new(0, 12, 0, 0)
+amountLabel2.BackgroundTransparency = 1
+amountLabel2.Text = "Enter amount e.g. 10"
+amountLabel2.TextColor3 = Color3.fromRGB(220, 220, 220)
+amountLabel2.Font = Enum.Font.Gotham
+amountLabel2.TextSize = 13
+amountLabel2.TextXAlignment = Enum.TextXAlignment.Left
+amountLabel2.Parent = amountBoxFrame
+
+local amountInput = Instance.new("TextBox")
+amountInput.Size = UDim2.new(0.42, 0, 0, 30)
+amountInput.AnchorPoint = Vector2.new(1, 0.5)
+amountInput.Position = UDim2.new(0.97, 0, 0.5, 0)
+amountInput.BackgroundColor3 = Color3.fromRGB(18, 18, 26)
+amountInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+amountInput.Font = Enum.Font.Gotham
+amountInput.TextSize = 13
+amountInput.Text = "10"
+amountInput.ClearTextOnFocus = false
+amountInput.BorderSizePixel = 0
+amountInput.Parent = amountBoxFrame
+Instance.new("UICorner", amountInput).CornerRadius = UDim.new(0, 6)
+amountInput.FocusLost:Connect(function() getgenv().GiftAmount = amountInput.Text end)
+
+local function getAmountMode() return mode end
+
+allBtn2.MouseButton1Click:Connect(function()
+    mode = "ALL"
+    allBtn2.BackgroundColor3 = Color3.fromRGB(90,100,255)
+    specificCollapseBtn.BackgroundColor3 = Color3.fromRGB(45,45,58)
+    specificCollapseBtn.Text = "▼  SPECIFIC"
+    amountBoxFrame.Visible = false
+end)
+specificCollapseBtn.MouseButton1Click:Connect(function()
+    if mode ~= "SPECIFIC" then
+        mode = "SPECIFIC"
+        specificCollapseBtn.BackgroundColor3 = Color3.fromRGB(90,100,255)
+        allBtn2.BackgroundColor3 = Color3.fromRGB(45,45,58)
+        specificCollapseBtn.Text = "▲  SPECIFIC"
+        amountBoxFrame.Visible = true
+    else
+        local nowVisible = not amountBoxFrame.Visible
+        amountBoxFrame.Visible = nowVisible
+        specificCollapseBtn.Text = nowVisible and "▲  SPECIFIC" or "▼  SPECIFIC"
+    end
+end)
+
+-- START/STOP GIFTING inline row
+do
+    local giftRow = Instance.new("Frame")
+    giftRow.Size = UDim2.new(1, -20, 0, 34)
+    giftRow.BackgroundTransparency = 1
+    giftRow.Parent = GiftTab._scroll
+    local giftRowLayout = Instance.new("UIListLayout")
+    giftRowLayout.FillDirection = Enum.FillDirection.Horizontal
+    giftRowLayout.Padding = UDim.new(0, 6)
+    giftRowLayout.Parent = giftRow
+
+    local startGiftBtn = Instance.new("TextButton")
+    startGiftBtn.Size = UDim2.new(0.62, 0, 1, 0)
+    startGiftBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+    startGiftBtn.Text = "▶ START GIFTING"
+    startGiftBtn.Font = Enum.Font.GothamBold
+    startGiftBtn.TextSize = 12
+    startGiftBtn.TextColor3 = Color3.new(1,1,1)
+    startGiftBtn.BorderSizePixel = 0
+    startGiftBtn.Parent = giftRow
+    Instance.new("UICorner", startGiftBtn).CornerRadius = UDim.new(0, 6)
+
+    local stopGiftBtn = Instance.new("TextButton")
+    stopGiftBtn.Size = UDim2.new(0.35, 0, 1, 0)
+    stopGiftBtn.BackgroundColor3 = Color3.fromRGB(160, 0, 0)
+    stopGiftBtn.Text = "■ STOP"
+    stopGiftBtn.Font = Enum.Font.GothamBold
+    stopGiftBtn.TextSize = 12
+    stopGiftBtn.TextColor3 = Color3.new(1,1,1)
+    stopGiftBtn.BorderSizePixel = 0
+    stopGiftBtn.Parent = giftRow
+    Instance.new("UICorner", stopGiftBtn).CornerRadius = UDim.new(0, 6)
+
+    stopGiftBtn.MouseButton1Click:Connect(function()
+        getgenv().StopGift = true
+        giftStatusLabel.Text = "🛑 Stopping..."
+        giftStatusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
+    end)
+
+    startGiftBtn.MouseButton1Click:Connect(function()
+    getgenv().StopGift = false
+    local username = getgenv().GiftTarget
+    local filter = getgenv().GiftFilter or "ALL"
+
+    if username == "" then
+        giftStatusLabel.Text = "❌ No player entered"
+        giftStatusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
+        return
+    end
+    local target = Players:FindFirstChild(username)
+    if not target then
+        giftStatusLabel.Text = "❌ Player not in server"
+        giftStatusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
+        return
+    end
+    if target == player then
+        giftStatusLabel.Text = "❌ Cannot gift yourself"
+        giftStatusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
+        return
+    end
+
+    giftStatusLabel.Text = "🔍 Scanning..."
+    giftStatusLabel.TextColor3 = Color3.fromRGB(255, 200, 50)
+    task.wait(0.1)
+
+    local pets = GetInventoryPets(filter)
+    if #pets == 0 then
+        giftStatusLabel.Text = "❌ No matching pets"
+        giftStatusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
+        return
+    end
+
+    if getAmountMode() == "SPECIFIC" then
+        local limit = tonumber(getgenv().GiftAmount)
+        if not limit or limit <= 0 then
+            giftStatusLabel.Text = "❌ Invalid amount"
+            giftStatusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
+            return
+        end
+        local trimmed = {}
+        for i = 1, math.min(limit, #pets) do table.insert(trimmed, pets[i]) end
+        pets = trimmed
+    end
+
+    task.spawn(function()
+        giftStatusLabel.TextColor3 = Color3.fromRGB(100, 220, 100)
+        for i, data in ipairs(pets) do
+            if getgenv().StopGift then
+                giftStatusLabel.Text = "🛑 Stopped at " .. i-1 .. "/" .. #pets
+                giftStatusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
+                break
+            end
+            pcall(function()
+                Remotes.GiftingShared_RequestGifting:FireServer(target, "Entity", data.uuid)
+            end)
+            giftStatusLabel.Text = "🎁 " .. i .. "/" .. #pets .. " — " .. data.pet
+            task.wait(0.18)
+        end
+        if not getgenv().StopGift then
+            giftStatusLabel.Text = "✅ Done! Gifted " .. #pets .. " pet(s)"
+        end
+    end)
+end)
+
+end
+
+
+
+-- Lucky/Ancient Block gifting section
+GiftTab:AddLabel("GIFT LUCKY/ANCIENT BLOCKS")
+
+local blockGiftStatus = GiftTab:AddStatusLabel("⏳ Idle")
+
+local _blockGiftFilterInput = GiftTab:AddTextbox("Block Filter (e.g. Ancient Block or ALL)", "ALL", function() end)
+
+local stopBlockGift = false
+local isBlockGifting = false
+local blockGiftMode = "ALL"
+local blockGiftAmount = 10
+
+-- ALL / SPECIFIC toggle for blocks
+local blockAmountFrame = Instance.new("Frame")
+blockAmountFrame.Size = UDim2.new(1, -20, 0, 44)
+blockAmountFrame.BackgroundColor3 = Color3.fromRGB(28, 28, 38)
+blockAmountFrame.BorderSizePixel = 0
+blockAmountFrame.Visible = false
+blockAmountFrame.Parent = GiftTab._scroll
+Instance.new("UICorner", blockAmountFrame).CornerRadius = UDim.new(0, 8)
+
+local blockAmtLabel = Instance.new("TextLabel")
+blockAmtLabel.Size = UDim2.new(0.52, 0, 1, 0)
+blockAmtLabel.Position = UDim2.new(0, 12, 0, 0)
+blockAmtLabel.BackgroundTransparency = 1
+blockAmtLabel.Text = "Enter amount e.g. 10"
+blockAmtLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
+blockAmtLabel.Font = Enum.Font.Gotham
+blockAmtLabel.TextSize = 13
+blockAmtLabel.TextXAlignment = Enum.TextXAlignment.Left
+blockAmtLabel.Parent = blockAmountFrame
+
+local blockAmtInput = Instance.new("TextBox")
+blockAmtInput.Size = UDim2.new(0.42, 0, 0, 30)
+blockAmtInput.AnchorPoint = Vector2.new(1, 0.5)
+blockAmtInput.Position = UDim2.new(0.97, 0, 0.5, 0)
+blockAmtInput.BackgroundColor3 = Color3.fromRGB(18, 18, 26)
+blockAmtInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+blockAmtInput.Font = Enum.Font.Gotham
+blockAmtInput.TextSize = 13
+blockAmtInput.Text = "10"
+blockAmtInput.ClearTextOnFocus = false
+blockAmtInput.BorderSizePixel = 0
+blockAmtInput.Parent = blockAmountFrame
+Instance.new("UICorner", blockAmtInput).CornerRadius = UDim.new(0, 6)
+blockAmtInput.FocusLost:Connect(function()
+    blockGiftAmount = tonumber(blockAmtInput.Text) or 10
+end)
+
+-- ALL / SPECIFIC pair
+local blockModePair = Instance.new("Frame")
+blockModePair.Size = UDim2.new(1, -20, 0, 32)
+blockModePair.BackgroundTransparency = 1
+blockModePair.Parent = GiftTab._scroll
+local blockModeLayout = Instance.new("UIListLayout")
+blockModeLayout.FillDirection = Enum.FillDirection.Horizontal
+blockModeLayout.Padding = UDim.new(0, 6)
+blockModeLayout.Parent = blockModePair
+
+local blockAllBtn = Instance.new("TextButton")
+blockAllBtn.Size = UDim2.new(0.5, -4, 1, 0)
+blockAllBtn.Text = "ALL"
+blockAllBtn.Font = Enum.Font.GothamBold
+blockAllBtn.TextSize = 11
+blockAllBtn.TextColor3 = Color3.new(1,1,1)
+blockAllBtn.BackgroundColor3 = Color3.fromRGB(90,100,255)
+blockAllBtn.BorderSizePixel = 0
+blockAllBtn.Parent = blockModePair
+Instance.new("UICorner", blockAllBtn).CornerRadius = UDim.new(0, 6)
+
+local blockSpecBtn = Instance.new("TextButton")
+blockSpecBtn.Size = UDim2.new(0.5, -4, 1, 0)
+blockSpecBtn.Text = "SPECIFIC"
+blockSpecBtn.Font = Enum.Font.GothamBold
+blockSpecBtn.TextSize = 11
+blockSpecBtn.TextColor3 = Color3.new(1,1,1)
+blockSpecBtn.BackgroundColor3 = Color3.fromRGB(45,45,58)
+blockSpecBtn.BorderSizePixel = 0
+blockSpecBtn.Parent = blockModePair
+Instance.new("UICorner", blockSpecBtn).CornerRadius = UDim.new(0, 6)
+
+blockAllBtn.MouseButton1Click:Connect(function()
+    blockGiftMode = "ALL"
+    blockAllBtn.BackgroundColor3 = Color3.fromRGB(90,100,255)
+    blockSpecBtn.BackgroundColor3 = Color3.fromRGB(45,45,58)
+    blockAmountFrame.Visible = false
+    task.spawn(function()
+        task.wait(0.05)
+        local scroll = GiftTab._scroll
+        local target = scroll.AbsoluteCanvasSize.Y
+        local steps = 12
+        local current = scroll.CanvasPosition.Y
+        for i = 1, steps do
+            local t = i / steps
+            t = t * t * (3 - 2 * t)
+            scroll.CanvasPosition = Vector2.new(0, current + (target - current) * t)
+            task.wait(0.016)
+        end
+        scroll.CanvasPosition = Vector2.new(0, target)
+    end)
+end)
+blockSpecBtn.MouseButton1Click:Connect(function()
+    blockGiftMode = "SPECIFIC"
+    blockSpecBtn.BackgroundColor3 = Color3.fromRGB(90,100,255)
+    blockAllBtn.BackgroundColor3 = Color3.fromRGB(45,45,58)
+    blockAmountFrame.Visible = true
+    task.spawn(function()
+        task.wait(0.1)
+        local scroll = GiftTab._scroll
+        local target = scroll.AbsoluteCanvasSize.Y
+        local steps = 12
+        local current = scroll.CanvasPosition.Y
+        for i = 1, steps do
+            local t = i / steps
+            t = t * t * (3 - 2 * t) -- smoothstep easing
+            scroll.CanvasPosition = Vector2.new(0, current + (target - current) * t)
+            task.wait(0.016)
+        end
+        scroll.CanvasPosition = Vector2.new(0, target)
+    end)
+end)
+
+-- Start Gifting / Stop inline row
+do
+    local gbRow = Instance.new("Frame")
+    gbRow.Size = UDim2.new(1, -20, 0, 34)
+    gbRow.BackgroundTransparency = 1
+    gbRow.Parent = GiftTab._scroll
+    local gbLayout = Instance.new("UIListLayout")
+    gbLayout.FillDirection = Enum.FillDirection.Horizontal
+    gbLayout.Padding = UDim.new(0, 6)
+    gbLayout.Parent = gbRow
+
+    local giftBlockBtn = Instance.new("TextButton")
+    giftBlockBtn.Size = UDim2.new(0.62, 0, 1, 0)
+    giftBlockBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+    giftBlockBtn.Text = "▶ Start Gifting"
+    giftBlockBtn.Font = Enum.Font.GothamBold
+    giftBlockBtn.TextSize = 12
+    giftBlockBtn.TextColor3 = Color3.new(1,1,1)
+    giftBlockBtn.BorderSizePixel = 0
+    giftBlockBtn.Parent = gbRow
+    Instance.new("UICorner", giftBlockBtn).CornerRadius = UDim.new(0, 6)
+
+    local stopBlockBtn2 = Instance.new("TextButton")
+    stopBlockBtn2.Size = UDim2.new(0.35, 0, 1, 0)
+    stopBlockBtn2.BackgroundColor3 = Color3.fromRGB(160, 0, 0)
+    stopBlockBtn2.Text = "■ Stop"
+    stopBlockBtn2.Font = Enum.Font.GothamBold
+    stopBlockBtn2.TextSize = 12
+    stopBlockBtn2.TextColor3 = Color3.new(1,1,1)
+    stopBlockBtn2.BorderSizePixel = 0
+    stopBlockBtn2.Parent = gbRow
+    Instance.new("UICorner", stopBlockBtn2).CornerRadius = UDim.new(0, 6)
+
+    stopBlockBtn2.MouseButton1Click:Connect(function()
+        stopBlockGift = true
+        blockGiftStatus.Text = "🛑 Stopping..."
+        blockGiftStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+    end)
+
+    giftBlockBtn.MouseButton1Click:Connect(function()
+        local targetName = (giftUsernameInput.Text or ""):match("^%s*(.-)%s*$")
+        if targetName == "" then
+            blockGiftStatus.Text = "❌ No player entered"
+            blockGiftStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+            return
+        end
+        local target = Players:FindFirstChild(targetName)
+        if not target then
+            blockGiftStatus.Text = "❌ Player not in server"
+            blockGiftStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+            return
+        end
+
+        stopBlockGift = true
+        while isBlockGifting do task.wait(0.1) end
+        stopBlockGift = false
+
+        task.spawn(function()
+            isBlockGifting = true
+            local filter = (_blockGiftFilterInput.Text or "ALL"):match("^%s*(.-)%s*$"):lower()
+            if filter == "" then filter = "all" end
+            local totalGifted = 0
+
+            while not stopBlockGift do
+                local blocks = {}
+                local backpack = player:FindFirstChild("Backpack")
+                if backpack then
+                    for _, obj in ipairs(backpack:GetChildren()) do
+                        if obj:IsA("Tool") then
+                            local tip = ""
+                            pcall(function() tip = obj.ToolTip or "" end)
+                            local plainTip = tip:gsub("<[^>]+>", ""):lower()
+                            if plainTip:find("block", 1, true) then
+                                if filter == "all" or plainTip:find(filter, 1, true) then
+                                    local guid = obj:GetAttribute("GUID") or obj:GetAttribute("LuckyBlockGUID") or obj.Name
+                                    table.insert(blocks, {uuid = tostring(guid), label = tip:gsub("<[^>]+>", ""):match("^%s*(.-)%s*$") or obj.Name})
+                                end
+                            end
+                        end
+                    end
+                end
+
+                -- Apply SPECIFIC limit
+                if blockGiftMode == "SPECIFIC" then
+                    local limit = blockGiftAmount
+                    local trimmed = {}
+                    for i = 1, math.min(limit, #blocks) do
+                        table.insert(trimmed, blocks[i])
+                    end
+                    blocks = trimmed
+                end
+
+                if #blocks == 0 then
+                    if totalGifted == 0 then
+                        blockGiftStatus.Text = "❌ No matching blocks found"
+                        blockGiftStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+                    else
+                        blockGiftStatus.Text = "✅ Done! Gifted " .. totalGifted .. " block(s)"
+                        blockGiftStatus.TextColor3 = Color3.fromRGB(100, 220, 100)
+                    end
+                    break
+                end
+
+                for i, data in ipairs(blocks) do
+                    if stopBlockGift then break end
+                    pcall(function()
+                        Remotes.GiftingShared_RequestGifting:FireServer(target, "LuckyBlock", data.uuid)
+                    end)
+                    totalGifted = totalGifted + 1
+                    blockGiftStatus.Text = "🎁 Gifted " .. totalGifted .. " — " .. data.label
+                    blockGiftStatus.TextColor3 = Color3.fromRGB(100, 220, 100)
+                    task.wait(0.18)
+                end
+
+                -- If SPECIFIC mode, stop after one pass
+                if blockGiftMode == "SPECIFIC" then break end
+            end
+
+            if stopBlockGift and totalGifted > 0 then
+                blockGiftStatus.Text = "🛑 Stopped — " .. totalGifted .. " gifted"
+                blockGiftStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+            end
+            isBlockGifting = false
+        end)
+    end)
+end
+
+
+-- ==========================================
+-- BASE TAB
+-- ==========================================
+BaseTab:AddLabel("AUTO CLAIM")
+
+local claimStatusLabel = BaseTab:AddStatusLabel("⏳ Idle")
+
+BaseTab:AddSlotSelector("Claim Slots:", "ClaimSlots")
+
+_guiToggles["AutoClaim"] = BaseTab:AddToggle("Auto Claim", false, function(state)
+    getgenv().AutoClaim = state
+    if state then
+        task.spawn(function()
+            local claimRemote = Remotes.BaseShared_ClaimSlotBalance
+            while getgenv().AutoClaim do
+                local slots = getgenv().ClaimSlots
+                if slots and #slots > 0 then
+                    for _, slot in ipairs(slots) do
+                        if not getgenv().AutoClaim then break end
+                        pcall(function() claimRemote:FireServer(slot) end)
+                        task.wait(0.1)
+                    end
+                    -- Only update label once per full cycle, not per slot
+                    claimStatusLabel.Text = "✅ Claimed " .. #slots .. " slot(s)"
+                    claimStatusLabel.TextColor3 = Color3.fromRGB(100, 220, 100)
+                else
+                    claimStatusLabel.Text = "⚠️ No slots selected"
+                    claimStatusLabel.TextColor3 = Color3.fromRGB(255, 180, 0)
+                end
+                task.wait(3)
+            end
+            claimStatusLabel.Text = "⏹ Stopped"
+            claimStatusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
+        end)
+    else
+        claimStatusLabel.Text = "⏹ Stopped"
+        claimStatusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
+    end
+end)
+
+BaseTab:AddButton("Claim Once", Color3.fromRGB(0, 130, 180), function()
+    task.spawn(function()
+        local slots = getgenv().ClaimSlots
+        if not slots or #slots == 0 then
+            claimStatusLabel.Text = "⚠️ No slots selected"
+            claimStatusLabel.TextColor3 = Color3.fromRGB(255, 180, 0)
+            return
+        end
+        for _, slot in ipairs(slots) do
+            pcall(function() Remotes.BaseShared_ClaimSlotBalance:FireServer(slot) end)
+            claimStatusLabel.Text = "✅ Claimed slot " .. slot
+            claimStatusLabel.TextColor3 = Color3.fromRGB(100, 220, 100)
+            task.wait(0.1)
+        end
+        claimStatusLabel.Text = "✅ All done"
+    end)
+end)
+
+BaseTab:AddLabel("AUTO UPGRADE")
+
+local upgradeStatusLabel = BaseTab:AddStatusLabel("⏳ Idle")
+
+BaseTab:AddSlotSelector("Upgrade Slots:", "UpgradeSlots")
+
+_guiToggles["AutoUpgrade"] = BaseTab:AddToggle("Auto Upgrade", false, function(state)
+    getgenv().AutoUpgrade = state
+    if state then
+        task.spawn(function()
+            -- Cache remote once, fire inline (no per-slot task.spawn threads)
+            local upgradeRemote = Remotes.BaseShared_UpgradeSlot
+            local lastSlotCount = -1
+            while getgenv().AutoUpgrade do
+                local slots = getgenv().UpgradeSlots
+                if slots and #slots > 0 then
+                    for _, slot in ipairs(slots) do
+                        if not getgenv().AutoUpgrade then break end
+                        pcall(function() upgradeRemote:FireServer(slot) end)
+                    end
+                    -- Only update label when slot count changes, not every cycle
+                    if #slots ~= lastSlotCount then
+                        upgradeStatusLabel.Text = "⬆️ Upgrading " .. #slots .. " slot(s)"
+                        upgradeStatusLabel.TextColor3 = Color3.fromRGB(100, 220, 100)
+                        lastSlotCount = #slots
+                    end
+                else
+                    if lastSlotCount ~= 0 then
+                        upgradeStatusLabel.Text = "⚠️ No slots selected"
+                        upgradeStatusLabel.TextColor3 = Color3.fromRGB(255, 180, 0)
+                        lastSlotCount = 0
+                    end
+                end
+                task.wait(1) -- 1s is plenty; server-side upgrade isn't instant anyway
+            end
+            upgradeStatusLabel.Text = "⏹ Stopped"
+            upgradeStatusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
+        end)
+    else
+        upgradeStatusLabel.Text = "⏹ Stopped"
+        upgradeStatusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
+    end
+end)
+
+BaseTab:AddButton("Upgrade Once", Color3.fromRGB(0, 130, 180), function()
+    task.spawn(function()
+        local slots = getgenv().UpgradeSlots
+        if not slots or #slots == 0 then
+            upgradeStatusLabel.Text = "⚠️ No slots selected"
+            upgradeStatusLabel.TextColor3 = Color3.fromRGB(255, 180, 0)
+            return
+        end
+        for _, slot in ipairs(slots) do
+            local s = slot
+            task.spawn(function()
+                pcall(function() Remotes.BaseShared_UpgradeSlot:FireServer(s) end)
+            end)
+        end
+        upgradeStatusLabel.Text = "✅ Upgraded " .. #slots .. " slot(s)"
+        upgradeStatusLabel.TextColor3 = Color3.fromRGB(100, 220, 100)
+    end)
+end)
+
+-- ==========================================
+-- AUTO OPEN BLOCKS
+-- ==========================================
+BaseTab:AddLabel("AUTO OPEN BLOCKS")
+
+local blockStatusLabel = BaseTab:AddStatusLabel("⏳ Idle")
+
+-- Filter textbox: "ALL", "Lucky Block", "Ancient Block", "Radioactive Ancient Block" etc.
+local blockFilterInput = BaseTab:AddTextbox("Block Filter (e.g. Ancient Block)", "ALL", function() end)
+local blockDelayInput = BaseTab:AddTextbox("Delay between opens (seconds)", "12", function() end)
+
+-- Amount buttons row
+local amountFrame = Instance.new("Frame")
+amountFrame.Size = UDim2.new(1, 0, 0, 32)
+amountFrame.BackgroundTransparency = 1
+amountFrame.Parent = BaseTab._scroll
+
+local amountLayout = Instance.new("UIListLayout")
+amountLayout.FillDirection = Enum.FillDirection.Horizontal
+amountLayout.Padding = UDim.new(0, 6)
+amountLayout.Parent = amountFrame
+
+local selectedAmount = 10
+local amountBtns = {}
+
+local function makeAmountBtn(amount)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0, 46, 1, 0)
+    btn.Text = tostring(amount)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 12
+    btn.TextColor3 = Color3.new(1,1,1)
+    btn.BackgroundColor3 = amount == selectedAmount and Color3.fromRGB(90,100,255) or Color3.fromRGB(45,45,58)
+    btn.BorderSizePixel = 0
+    btn.Parent = amountFrame
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+    amountBtns[amount] = btn
+    btn.MouseButton1Click:Connect(function()
+        selectedAmount = amount
+        for a, b in pairs(amountBtns) do
+            b.BackgroundColor3 = a == selectedAmount and Color3.fromRGB(90,100,255) or Color3.fromRGB(45,45,58)
+        end
+    end)
+end
+
+makeAmountBtn(1)
+makeAmountBtn(5)
+makeAmountBtn(10)
+
+local blockRemote = Remotes:WaitForChild("LuckyBlockShared_OpenLuckyBlock")
+local QUICK_OPEN_GAMEPASS = 1722072500
+
+local hasQuickOpen = false
+task.spawn(function()
+    hasQuickOpen = pcall(function()
+        return game:GetService("MarketplaceService"):UserOwnsGamePassAsync(player.UserId, QUICK_OPEN_GAMEPASS)
+    end) and game:GetService("MarketplaceService"):UserOwnsGamePassAsync(player.UserId, QUICK_OPEN_GAMEPASS)
+end)
+
+local function getBlocks(filter)
+    local found = {}
+    local backpack = player:FindFirstChild("Backpack")
+    if not backpack then return found end
+    for _, obj in ipairs(backpack:GetChildren()) do
+        if obj:IsA("Tool") then
+            local tip = ""
+            pcall(function() tip = obj.ToolTip or "" end)
+            -- Strip HTML/rich text tags so we get the plain name
+            local plainTip = tip:gsub("<[^>]+>", ""):match("^%s*(.-)%s*$")
+            local tipLower = plainTip:lower()
+            -- Always require "block" in the tooltip so pets are never included
+            if not tipLower:find("block", 1, true) then continue end
+            local filterLower = filter:lower()
+            if filterLower == "all" or tipLower:find(filterLower, 1, true) then
+                table.insert(found, { uuid = obj.Name, label = plainTip ~= "" and plainTip or obj.Name })
+            end
+        end
+    end
+    return found
+end
+
+local stopOpenBlocks = false
+local isOpeningBlocks = false
+
+BaseTab:AddButton("▶ Open Blocks", Color3.fromRGB(0, 150, 0), function()
+    -- Stop any existing loop and wait for it to exit
+    stopOpenBlocks = true
+    while isOpeningBlocks do task.wait(0.1) end
+    stopOpenBlocks = false
+
+    task.spawn(function()
+        isOpeningBlocks = true
+        local filter = blockFilterInput.Text:match("^%s*(.-)%s*$")
+        if filter == "" then filter = "ALL" end
+
+        blockStatusLabel.TextColor3 = Color3.fromRGB(100, 220, 100)
+        local totalOpened = 0
+
+        while not stopOpenBlocks do
+            local blocks = getBlocks(filter)
+            if #blocks == 0 then
+                blockStatusLabel.Text = "✅ Done! Opened " .. totalOpened .. " batch(es) — no blocks left"
+                blockStatusLabel.TextColor3 = Color3.fromRGB(100, 220, 100)
+                break
+            end
+
+            local data = blocks[1]
+            local remaining = #blocks
+            blockStatusLabel.Text = "📦 Batch " .. (totalOpened + 1) .. " — Opening " .. selectedAmount .. " " .. data.label .. " (" .. remaining .. " left)"
+            pcall(function()
+                blockRemote:FireServer(data.uuid, selectedAmount)
+            end)
+            totalOpened = totalOpened + 1
+
+            local delay = tonumber(blockDelayInput.Text) or 12
+            task.wait(hasQuickOpen and math.min(delay, 0.5) or delay)
+        end
+
+        if stopOpenBlocks then
+            blockStatusLabel.Text = "🛑 Stopped after " .. totalOpened .. " batch(es)"
+            blockStatusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
+        end
+        isOpeningBlocks = false
+    end)
+end)
+
+BaseTab:AddButton("■ Stop", Color3.fromRGB(160, 0, 0), function()
+    stopOpenBlocks = true
+    blockStatusLabel.Text = "🛑 Stopping..."
+    blockStatusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
+end)
+
+-- ==========================================
+-- MISC TAB
+-- ==========================================
+MiscTab:AddButton("🎟 Redeem Codes", function()
+    task.spawn(function()
+        local codes = {"Stop Looking","TommysHouse","Phew","GoldStatue","FreeSpin"}
+        for _, v in pairs(codes) do
+            pcall(function()
+                RS.Shared.Classes.RemoteFunction.Remotes.CodeShared_Redeem:InvokeServer(v)
+            end)
+            task.wait(0.2)
+        end
+    end)
+end)
+
+MiscTab:AddLabel("DUPE BUTTON")
+MiscTab:AddToggle("Show Dupe Button", false, function(state)
+    SpamButton.Visible = state
+end)
+
+-- ==========================================
+-- ANTI-LAG
+-- ==========================================
+MiscTab:AddLabel("ANTI LAG")
+
+getgenv().AntiLag = false
+local _antiLagOriginals = nil
+
+MiscTab:AddToggle("⚡ Anti-Lag", false, function(state)
+    getgenv().AntiLag = state
+    if state then
+        -- Safely read originals first
+        local origShadows, origQuality, origDeco = nil, nil, nil
+        pcall(function() origShadows = workspace.GlobalShadows end)
+        pcall(function() origQuality = settings().Rendering.QualityLevel end)
+        pcall(function()
+            if workspace:FindFirstChildWhichIsA("Terrain") then
+                origDeco = workspace.Terrain.Decoration
+            end
+        end)
+        _antiLagOriginals = { GlobalShadows = origShadows, Quality = origQuality, Deco = origDeco }
+
+        pcall(function() workspace.GlobalShadows = false end)
+        pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
+        pcall(function()
+            if workspace:FindFirstChildWhichIsA("Terrain") then
+                workspace.Terrain.Decoration = false
+            end
+        end)
+        pcall(function()
+            for _, v in ipairs(workspace:GetDescendants()) do
+                if v:IsA("ParticleEmitter") or v:IsA("Trail") then
+                    v.Enabled = false
+                end
+            end
+        end)
+    else
+        if _antiLagOriginals then
+            pcall(function()
+                if _antiLagOriginals.GlobalShadows ~= nil then
+                    workspace.GlobalShadows = _antiLagOriginals.GlobalShadows
+                end
+            end)
+            pcall(function()
+                if _antiLagOriginals.Quality ~= nil then
+                    settings().Rendering.QualityLevel = _antiLagOriginals.Quality
+                end
+            end)
+            pcall(function()
+                if workspace:FindFirstChildWhichIsA("Terrain") and _antiLagOriginals.Deco ~= nil then
+                    workspace.Terrain.Decoration = _antiLagOriginals.Deco
+                end
+            end)
+            pcall(function()
+                for _, v in ipairs(workspace:GetDescendants()) do
+                    if v:IsA("ParticleEmitter") or v:IsA("Trail") then
+                        v.Enabled = true
+                    end
+                end
+            end)
+            _antiLagOriginals = nil
+        end
+    end
+end)
+
+-- ==========================================
+-- ANTI-GAMEPLAY PAUSED
+-- ==========================================
+MiscTab:AddLabel("ANTI GAMEPLAY PAUSED")
+
+getgenv().AntiPause = false
+local _antiPauseConn  = nil
+
+MiscTab:AddToggle("🔄 Anti-Gameplay Paused", false, function(state)
+    getgenv().AntiPause = state
+    if state then
+        -- Listen for GameplayPaused becoming true and immediately force it back to false.
+        -- sethiddenproperty bypasses the write-restricted flag on this property,
+        -- which is exactly how inf yield handles it.
+        _antiPauseConn = player:GetPropertyChangedSignal("GameplayPaused"):Connect(function()
+            if player.GameplayPaused then
+                pcall(sethiddenproperty, player, "GameplayPaused", false)
+            end
+        end)
+    else
+        if _antiPauseConn then
+            _antiPauseConn:Disconnect()
+            _antiPauseConn = nil
+        end
+    end
+end)
+
+-- Cleanup on GUI destroy — no leak
+ScreenGui.Destroying:Connect(function()
+    if _antiPauseConn then _antiPauseConn:Disconnect(); _antiPauseConn = nil end
+    getgenv().AntiPause = false
+end)
+
+-- ==========================================
+-- FLY
+-- ==========================================
+MiscTab:AddLabel("FLY")
+
+getgenv().FlyEnabled = false
+getgenv().FlySpeed = 10
+
+MiscTab:AddTextbox("Fly Speed", "10", function(val)
+    getgenv().FlySpeed = tonumber(val) or 10
+end)
+
+local _flyConn = nil
+local _flyBodyVel = nil
+local _flyBodyGyro = nil
+
+local function stopFly()
+    getgenv().FlyEnabled = false
+    if _flyConn then _flyConn:Disconnect(); _flyConn = nil end
+    if _flyBodyVel and _flyBodyVel.Parent then _flyBodyVel:Destroy() end
+    if _flyBodyGyro and _flyBodyGyro.Parent then _flyBodyGyro:Destroy() end
+    _flyBodyVel = nil
+    _flyBodyGyro = nil
+end
+
+MiscTab:AddToggle("✈️ Fly", false, function(state)
+    getgenv().FlyEnabled = state
+    if state then
+        local char = player.Character or player.CharacterAdded:Wait()
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        local hum = char:FindFirstChild("Humanoid")
+        if not hrp or not hum then
+            getgenv().FlyEnabled = false
+            return
+        end
+
+        _flyBodyVel = Instance.new("BodyVelocity")
+        _flyBodyVel.Velocity = Vector3.zero
+        _flyBodyVel.MaxForce = Vector3.new(1e6, 1e6, 1e6)
+        _flyBodyVel.Parent = hrp
+
+        _flyBodyGyro = Instance.new("BodyGyro")
+        _flyBodyGyro.MaxTorque = Vector3.new(1e6, 1e6, 1e6)
+        _flyBodyGyro.P = 1e4
+        _flyBodyGyro.CFrame = hrp.CFrame
+        _flyBodyGyro.Parent = hrp
+
+        hum.PlatformStand = true
+
+        _flyConn = game:GetService("RunService").Heartbeat:Connect(function()
+            if not getgenv().FlyEnabled then
+                hum.PlatformStand = false
+                stopFly()
+                return
+            end
+
+            local speed = getgenv().FlySpeed or 50
+            local cam = workspace.CurrentCamera
+            local cf = cam.CFrame
+
+            -- On mobile, MoveDirection is world-space from the thumbstick.
+            -- We project it onto the camera axes so moving forward goes where you look.
+            local md = hum.MoveDirection
+
+            -- Camera-relative right and flat-forward (ignore vertical tilt for movement)
+            local camRight   = cf.RightVector
+            local camForward = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
+            if camForward.Magnitude > 0.001 then
+                camForward = camForward.Unit
+            end
+            -- camRight flattened too so strafing stays horizontal
+            local camRightFlat = Vector3.new(camRight.X, 0, camRight.Z)
+            if camRightFlat.Magnitude > 0.001 then
+                camRightFlat = camRightFlat.Unit
+            end
+
+            local vel = Vector3.zero
+            if md.Magnitude > 0.01 then
+                -- Use full camera LookVector (includes vertical tilt) for forward movement
+                -- so pointing camera up/down actually moves you up/down
+                local fullForward = cf.LookVector
+                local fwdAmt   = camForward:Dot(md)   -- how much thumbstick is pushing forward
+                local rightAmt = camRightFlat:Dot(md)  -- how much thumbstick is pushing right
+
+                -- Scale the full (tilted) forward by fwdAmt so vertical movement
+                -- is proportional to camera pitch × how far forward stick is pushed
+                local moveVec = fullForward * fwdAmt + camRightFlat * rightAmt
+                if moveVec.Magnitude > 0.001 then
+                    -- Multiply by 50 to match inf yield's feel: their "10" = ~500 studs/s internally
+                    vel = moveVec.Unit * (speed * 50)
+                end
+            end
+
+            _flyBodyVel.Velocity = vel
+
+            -- Keep gyro flat so character body doesn't tilt with the camera
+            local flatLook = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
+            if flatLook.Magnitude > 0.001 then
+                _flyBodyGyro.CFrame = CFrame.new(Vector3.zero, flatLook)
+            end
+        end)
+
+        player.CharacterRemoving:Connect(stopFly)
+
+    else
+        local char = player.Character
+        local hum = char and char:FindFirstChild("Humanoid")
+        if hum then hum.PlatformStand = false end
+        stopFly()
+    end
+end)
+
+ScreenGui.Destroying:Connect(function()
+    stopFly()
+    if specAddedConn then specAddedConn:Disconnect() end
+    if specRemovingConn then specRemovingConn:Disconnect() end
+    if specAutoStopConn then specAutoStopConn:Disconnect() end
+    if _spectateConn then _spectateConn:Disconnect() end
+    if _sellAddedConn then _sellAddedConn:Disconnect() end
+    if _sellRemovedConn then _sellRemovedConn:Disconnect() end
+end)
+
+
+-- ==========================================
+-- PLAYERS TAB
+-- ==========================================
+PlayersTab:AddLabel("SPECTATE")
+
+-- Spectate state (declared here so all spectate code shares same variables)
+local isSpectating = false
+local _spectateConn = nil
+
+local spectateStatus = PlayersTab:AddStatusLabel("⏳ Not spectating")
+
+-- Manual username input
+local spectateUsernameInput = PlayersTab:AddTextbox("Player Username", "", function() end)
+
+-- Collapsible server player list
+local specPlayerCollapse = Instance.new("TextButton")
+specPlayerCollapse.Size = UDim2.new(1, 0, 0, 36)
+specPlayerCollapse.BackgroundColor3 = Color3.fromRGB(35, 35, 50)
+specPlayerCollapse.Text = "▼  Select from server"
+specPlayerCollapse.TextColor3 = Color3.fromRGB(200, 200, 255)
+specPlayerCollapse.Font = Enum.Font.GothamBold
+specPlayerCollapse.TextSize = 13
+specPlayerCollapse.TextXAlignment = Enum.TextXAlignment.Left
+specPlayerCollapse.BorderSizePixel = 0
+specPlayerCollapse.Parent = PlayersTab._scroll
+Instance.new("UICorner", specPlayerCollapse).CornerRadius = UDim.new(0, 8)
+do local p = Instance.new("UIPadding") p.PaddingLeft = UDim.new(0, 10) p.Parent = specPlayerCollapse end
+
+local specPlayerFrame = Instance.new("ScrollingFrame")
+specPlayerFrame.Size = UDim2.new(1, 0, 0, 130)
+specPlayerFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 32)
+specPlayerFrame.BorderSizePixel = 0
+specPlayerFrame.ScrollBarThickness = 3
+specPlayerFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+specPlayerFrame.Visible = false
+specPlayerFrame.Parent = PlayersTab._scroll
+Instance.new("UICorner", specPlayerFrame).CornerRadius = UDim.new(0, 8)
+
+local specPlayerLayout = Instance.new("UIListLayout")
+specPlayerLayout.Parent = specPlayerFrame
+specPlayerLayout.SortOrder = Enum.SortOrder.Name
+specPlayerLayout.Padding = UDim.new(0, 3)
+
+local specPlayerPad = Instance.new("UIPadding")
+specPlayerPad.PaddingLeft = UDim.new(0, 4)
+specPlayerPad.PaddingTop = UDim.new(0, 4)
+specPlayerPad.PaddingRight = UDim.new(0, 4)
+specPlayerPad.Parent = specPlayerFrame
+
+local specListCollapsed = true
+
+local function refreshSpecPlayerList()
+    for _, c in pairs(specPlayerFrame:GetChildren()) do
+        if c:IsA("TextButton") then c:Destroy() end
+    end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= player then
+            local pb = Instance.new("TextButton")
+            pb.Parent = specPlayerFrame
+            pb.Size = UDim2.new(1, 0, 0, 36)
+            local dn = p.DisplayName or p.Name
+            local sameName = dn == p.Name
+            pb.Text = "  " .. p.Name .. (not sameName and " (" .. dn .. ")" or "")
+            pb.BackgroundColor3 = Color3.fromRGB(35, 35, 48)
+            pb.TextColor3 = Color3.new(1, 1, 1)
+            pb.TextXAlignment = Enum.TextXAlignment.Left
+            pb.BorderSizePixel = 0
+            pb.Font = Enum.Font.Gotham
+            pb.TextSize = 13
+            Instance.new("UICorner", pb).CornerRadius = UDim.new(0, 6)
+            pb.MouseButton1Click:Connect(function()
+                -- Fill textbox, auto-close list, and immediately spectate
+                spectateUsernameInput.Text = p.Name
+                specListCollapsed = true
+                specPlayerFrame.Visible = false
+                specPlayerCollapse.Text = "▼  Select from server"
+
+                -- Spectate immediately using Heartbeat loop (same as working standalone)
+                local char = p.Character
+                if not char or not char:FindFirstChild("Humanoid") then
+                    spectateStatus.Text = "❌ Target has no character"
+                    spectateStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+                    return
+                end
+
+                -- Stop any existing spectate first
+                if isSpectating and _spectateConn then
+                    _spectateConn:Disconnect()
+                    _spectateConn = nil
+                end
+
+                isSpectating = true
+                local spectateTarget = p
+
+                _spectateConn = game:GetService("RunService").Heartbeat:Connect(function()
+                    if not isSpectating then return end
+                    local c = spectateTarget.Character
+                    if c then
+                        local hum = c:FindFirstChild("Humanoid")
+                        if hum then
+                            workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+                            workspace.CurrentCamera.CameraSubject = hum
+                        end
+                    end
+                end)
+
+                spectateStatus.Text = "👁 Spectating: " .. p.Name
+                spectateStatus.TextColor3 = Color3.fromRGB(100, 220, 100)
+            end)
+        end
+    end
+    specPlayerFrame.CanvasSize = UDim2.new(0, 0, 0, specPlayerLayout.AbsoluteContentSize.Y + 8)
+end
+
+specPlayerCollapse.MouseButton1Click:Connect(function()
+    specListCollapsed = not specListCollapsed
+    specPlayerFrame.Visible = not specListCollapsed
+    if not specListCollapsed then
+        refreshSpecPlayerList()
+        specPlayerCollapse.Text = "▲  Select from server"
+    else
+        specPlayerCollapse.Text = "▼  Select from server"
+    end
+end)
+
+-- Auto-refresh list when someone joins or leaves
+local specAddedConn = Players.PlayerAdded:Connect(function()
+    if not specListCollapsed then
+        refreshSpecPlayerList()
+    end
+end)
+
+local specRemovingConn = Players.PlayerRemoving:Connect(function(p)
+    if not specListCollapsed then
+        refreshSpecPlayerList()
+    end
+end)
+
+local originalCameraSubject = nil
+
+-- Stop spectating button
+PlayersTab:AddButton("✕ Stop Spectating", Color3.fromRGB(160, 0, 0), function()
+    if not isSpectating then
+        spectateStatus.Text = "⏳ Not spectating"
+        spectateStatus.TextColor3 = Color3.fromRGB(180, 180, 180)
+        return
+    end
+
+    -- Disconnect the heartbeat loop first
+    isSpectating = false
+    if _spectateConn then
+        _spectateConn:Disconnect()
+        _spectateConn = nil
+    end
+
+    -- Restore camera to own character
+    local myChar = player.Character
+    workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+    if myChar and myChar:FindFirstChild("Humanoid") then
+        workspace.CurrentCamera.CameraSubject = myChar.Humanoid
+    end
+
+    originalCameraSubject = nil
+    spectateUsernameInput.Text = ""
+    spectateStatus.Text = "⏹ Stopped spectating"
+    spectateStatus.TextColor3 = Color3.fromRGB(180, 180, 180)
+end)
+
+-- Auto-stop spectating if target leaves
+local specAutoStopConn = Players.PlayerRemoving:Connect(function(p)
+    if isSpectating and spectateUsernameInput.Text == p.Name then
+        isSpectating = false
+        if _spectateConn then _spectateConn:Disconnect(); _spectateConn = nil end
+        local ownChar = player.Character
+        workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+        if ownChar and ownChar:FindFirstChild("Humanoid") then
+            workspace.CurrentCamera.CameraSubject = ownChar.Humanoid
+        end
+        spectateUsernameInput.Text = ""
+        spectateStatus.Text = "⚠️ Player left — stopped"
+        spectateStatus.TextColor3 = Color3.fromRGB(255, 180, 50)
+    end
+end)
+
+
+-- ==========================================
+-- CONFIG TAB
+-- ==========================================
+-- Uses writefile/readfile (executor API) to persist profiles.
+-- Each profile is saved as a separate JSON-like file under a folder.
+-- No connections are left open — all operations are one-shot, no loops,
+-- no persistent threads. Zero memory leak surface.
+
+local CONFIG_FOLDER = "KaizAdminHub"
+local CONFIG_EXT    = ".cfg"
+local AUTO_LOAD_KEY = CONFIG_FOLDER .. "/autoload.txt"
+
+-- Ensure folder exists (pcall so it never throws)
+pcall(function() makefolder(CONFIG_FOLDER) end)
+
+-- ── Helpers ────────────────────────────────────────────────────────────
+local function cfgPath(name)
+    return CONFIG_FOLDER .. "/" .. tostring(name):gsub("[^%w_%-]", "_") .. CONFIG_EXT
+end
+
+-- Lightweight serialiser — stores only the getgenv() keys that we care about.
+-- Does NOT walk the entire environment, so no runaway memory usage.
+local SAVE_KEYS = {
+    "Farming", "Selling", "PositionCycle", "AutoClaim", "AutoUpgrade",
+    "AutoAcceptGift", "StopGift", "MaxPrice", "MinFarmValue", "InputBurst",
+    "ClaimSlots", "UpgradeSlots", "GiftTarget", "GiftFilter", "GiftAmount",
+    "ChosenZone",  -- saved as zone name string, restored on load
+}
+
+local function serializeValue(k, v)
+    local t = type(v)
+    if t == "boolean" then return (v and "true" or "false")
+    elseif t == "number" then return tostring(v)
+    elseif t == "string" then return '"' .. v:gsub('"', '\\"') .. '"'
+    elseif t == "table" then
+        -- Only handle flat arrays of numbers (slot lists)
+        local parts = {}
+        for _, n in ipairs(v) do
+            if type(n) == "number" then
+                parts[#parts+1] = tostring(n)
+            end
+        end
+        return "[" .. table.concat(parts, ",") .. "]"
+    elseif t == "userdata" or t == "Instance" then
+        -- ChosenZone → store its name
+        pcall(function()
+            if v and v.Name then return end
+        end)
+        local ok, name = pcall(function() return v.Name end)
+        return ok and ('"' .. tostring(name) .. '"') or '"Zone1"'
+    end
+    return "null"
+end
+
+local function buildJSON()
+    local lines = {"{"}
+    local count = 0
+    for _, k in ipairs(SAVE_KEYS) do
+        local v = getgenv()[k]
+        if v ~= nil then
+            count = count + 1
+            lines[#lines+1] = '  "' .. k .. '": ' .. serializeValue(k, v) .. ","
+        end
+    end
+    -- Remove trailing comma from last entry
+    if count > 0 then
+        lines[#lines] = lines[#lines]:sub(1, -2)
+    end
+    lines[#lines+1] = "}"
+    return table.concat(lines, "\n")
+end
+
+-- Minimal JSON-ish parser for our own format (no external deps)
+local function parseJSON(src)
+    local data = {}
+    -- Booleans
+    for k, v in src:gmatch('"([%w_]+)"%s*:%s*(true)') do data[k] = true end
+    for k, v in src:gmatch('"([%w_]+)"%s*:%s*(false)') do data[k] = false end
+    -- Numbers
+    for k, v in src:gmatch('"([%w_]+)"%s*:%s*(-?%d+%.?%d*)') do
+        if data[k] == nil then data[k] = tonumber(v) end
+    end
+    -- Strings
+    for k, v in src:gmatch('"([%w_]+)"%s*:%s*"(.-)"') do
+        if data[k] == nil then data[k] = v end
+    end
+    -- Arrays of numbers
+    for k, v in src:gmatch('"([%w_]+)"%s*:%s*%[([^%]]*)%]') do
+        if data[k] == nil then
+            local arr = {}
+            for n in v:gmatch("%-?%d+%.?%d*") do
+                arr[#arr+1] = tonumber(n)
+            end
+            data[k] = arr
+        end
+    end
+    return data
+end
+
+local function applyConfig(data)
+    for _, k in ipairs(SAVE_KEYS) do
+        if data[k] ~= nil then
+            if k == "ChosenZone" then
+                -- Resolve zone name back to instance safely
+                local zoneName = tostring(data[k])
+                local zone = zonesFold:FindFirstChild(zoneName)
+                if zone then
+                    getgenv().ChosenZone = zone
+                    -- Sync zone textbox: strip "Zone" prefix to get the number
+                    local zoneNum = zoneName:match("^Zone(%d+)$")
+                    if zoneNum and _guiTextboxes["ChosenZone"] then
+                        _guiTextboxes["ChosenZone"].Text = zoneNum
+                    end
+                end
+            else
+                getgenv()[k] = data[k]
+                -- Sync toggle GUI
+                if _guiToggles[k] then
+                    pcall(_guiToggles[k]._setState, data[k])
+                end
+                -- Sync textbox GUI
+                if _guiTextboxes[k] then
+                    _guiTextboxes[k].Text = tostring(data[k])
+                end
+            end
+        end
+    end
+end
+
+-- Returns sorted list of saved profile names (strips path + extension)
+local function listProfiles()
+    local names = {}
+    pcall(function()
+        for _, f in ipairs(listfiles(CONFIG_FOLDER)) do
+            local name = f:match("([^/\\]+)" .. CONFIG_EXT .. "$")
+            if name then names[#names+1] = name end
+        end
+    end)
+    table.sort(names)
+    return names
+end
+
+-- ── UI ─────────────────────────────────────────────────────────────────
+ConfigTab:AddLabel("PROFILES")
+
+local cfgStatus = ConfigTab:AddStatusLabel("💾 Ready")
+
+-- Name input
+local profileNameInput = ConfigTab:AddTextbox("Profile Name", "MyConfig", function() end)
+
+-- ── Saved Profiles List (directly below name input) ──
+ConfigTab:AddLabel("SAVED PROFILES")
+
+local profileListCollapse = Instance.new("TextButton")
+profileListCollapse.Size = UDim2.new(1, 0, 0, 36)
+profileListCollapse.BackgroundColor3 = Color3.fromRGB(35, 35, 50)
+profileListCollapse.Text = "▼  Show Saved Profiles"
+profileListCollapse.TextColor3 = Color3.fromRGB(200, 200, 255)
+profileListCollapse.Font = Enum.Font.GothamBold
+profileListCollapse.TextSize = 13
+profileListCollapse.TextXAlignment = Enum.TextXAlignment.Left
+profileListCollapse.BorderSizePixel = 0
+profileListCollapse.Parent = ConfigTab._scroll
+do local p = Instance.new("UIPadding") p.PaddingLeft = UDim.new(0,10) p.Parent = profileListCollapse end
+Instance.new("UICorner", profileListCollapse).CornerRadius = UDim.new(0, 8)
+
+local profileListFrame = Instance.new("ScrollingFrame")
+profileListFrame.Size = UDim2.new(1, 0, 0, 130)
+profileListFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 32)
+profileListFrame.BorderSizePixel = 0
+profileListFrame.ScrollBarThickness = 3
+profileListFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+profileListFrame.Visible = false
+profileListFrame.Parent = ConfigTab._scroll
+Instance.new("UICorner", profileListFrame).CornerRadius = UDim.new(0, 8)
+
+local profileListLayout = Instance.new("UIListLayout")
+profileListLayout.Parent = profileListFrame
+profileListLayout.SortOrder = Enum.SortOrder.Name
+profileListLayout.Padding = UDim.new(0, 3)
+
+local profileListPad = Instance.new("UIPadding")
+profileListPad.PaddingLeft = UDim.new(0, 4)
+profileListPad.PaddingTop = UDim.new(0, 4)
+profileListPad.PaddingRight = UDim.new(0, 4)
+profileListPad.Parent = profileListFrame
+
+local profileListCollapsed = true
+
+local function refreshProfileList()
+    for _, c in pairs(profileListFrame:GetChildren()) do
+        if c:IsA("TextButton") then c:Destroy() end
+    end
+    local profiles = listProfiles()
+    if #profiles == 0 then
+        local empty = Instance.new("TextLabel")
+        empty.Size = UDim2.new(1, 0, 0, 30)
+        empty.BackgroundTransparency = 1
+        empty.Text = "  No profiles saved yet"
+        empty.TextColor3 = Color3.fromRGB(130, 130, 150)
+        empty.Font = Enum.Font.Gotham
+        empty.TextSize = 12
+        empty.TextXAlignment = Enum.TextXAlignment.Left
+        empty.Parent = profileListFrame
+    else
+        for _, name in ipairs(profiles) do
+            local pb = Instance.new("TextButton")
+            pb.Parent = profileListFrame
+            pb.Size = UDim2.new(1, 0, 0, 36)
+            pb.Text = "  " .. name
+            pb.BackgroundColor3 = Color3.fromRGB(35, 35, 48)
+            pb.TextColor3 = Color3.new(1, 1, 1)
+            pb.TextXAlignment = Enum.TextXAlignment.Left
+            pb.BorderSizePixel = 0
+            pb.Font = Enum.Font.Gotham
+            pb.TextSize = 13
+            Instance.new("UICorner", pb).CornerRadius = UDim.new(0, 6)
+            pb.MouseButton1Click:Connect(function()
+                for _, b in pairs(profileListFrame:GetChildren()) do
+                    if b:IsA("TextButton") then b.BackgroundColor3 = Color3.fromRGB(35, 35, 48) end
+                end
+                pb.BackgroundColor3 = Color3.fromRGB(0, 100, 180)
+                profileNameInput.Text = name
+                cfgStatus.Text = "📋 Selected: " .. name
+                cfgStatus.TextColor3 = Color3.fromRGB(200, 200, 255)
+            end)
+        end
+    end
+    profileListFrame.CanvasSize = UDim2.new(0, 0, 0, profileListLayout.AbsoluteContentSize.Y + 8)
+end
+
+profileListCollapse.MouseButton1Click:Connect(function()
+    profileListCollapsed = not profileListCollapsed
+    profileListFrame.Visible = not profileListCollapsed
+    if not profileListCollapsed then
+        refreshProfileList()
+        profileListCollapse.Text = "▲  Hide Saved Profiles"
+    else
+        profileListCollapse.Text = "▼  Show Saved Profiles"
+    end
+end)
+
+ConfigTab:AddButton("🔄 Refresh List", Color3.fromRGB(55, 55, 70), function()
+    refreshProfileList()
+    cfgStatus.Text = "🔄 List refreshed"
+    cfgStatus.TextColor3 = Color3.fromRGB(180, 180, 180)
+end)
+
+-- ── Save ──
+ConfigTab:AddButton("💾 Save Profile", Color3.fromRGB(0, 130, 80), function()
+    local name = profileNameInput.Text:match("^%s*(.-)%s*$")
+    if name == "" then
+        cfgStatus.Text = "❌ Enter a profile name"
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+        return
+    end
+    local ok, err = pcall(function()
+        writefile(cfgPath(name), buildJSON())
+    end)
+    if ok then
+        cfgStatus.Text = "✅ Saved: " .. name
+        cfgStatus.TextColor3 = Color3.fromRGB(100, 220, 100)
+    else
+        cfgStatus.Text = "❌ Save failed"
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+    end
+end)
+
+-- ── Load ──
+ConfigTab:AddButton("📂 Load Profile", Color3.fromRGB(0, 100, 200), function()
+    local name = profileNameInput.Text:match("^%s*(.-)%s*$")
+    if name == "" then
+        cfgStatus.Text = "❌ Enter a profile name"
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+        return
+    end
+    local path = cfgPath(name)
+    local ok, src = pcall(readfile, path)
+    if not ok or not src then
+        cfgStatus.Text = "❌ Profile not found: " .. name
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+        return
+    end
+    local ok2, err = pcall(function()
+        applyConfig(parseJSON(src))
+    end)
+    if ok2 then
+        cfgStatus.Text = "📂 Loaded: " .. name
+        cfgStatus.TextColor3 = Color3.fromRGB(100, 200, 255)
+    else
+        cfgStatus.Text = "❌ Load parse error"
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+    end
+end)
+
+-- ── Delete ──
+ConfigTab:AddButton("🗑 Delete Profile", Color3.fromRGB(160, 30, 30), function()
+    local name = profileNameInput.Text:match("^%s*(.-)%s*$")
+    if name == "" then
+        cfgStatus.Text = "❌ Enter a profile name"
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+        return
+    end
+    local ok = pcall(delfile, cfgPath(name))
+    if ok then
+        cfgStatus.Text = "🗑 Deleted: " .. name
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 140, 60)
+    else
+        cfgStatus.Text = "❌ Delete failed (not found?)"
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+    end
+end)
+
+ConfigTab:AddLabel("AUTO-LOAD")
+
+-- Set auto-load — writes profile name to a tiny sentinel file
+ConfigTab:AddButton("⚡ Set as Auto-Load", Color3.fromRGB(120, 80, 200), function()
+    local name = profileNameInput.Text:match("^%s*(.-)%s*$")
+    if name == "" then
+        cfgStatus.Text = "❌ Enter a profile name first"
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+        return
+    end
+    -- Verify the profile actually exists before setting auto-load
+    local exists = pcall(readfile, cfgPath(name))
+    if not exists then
+        cfgStatus.Text = "❌ Save the profile first"
+        cfgStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+        return
+    end
+    pcall(writefile, AUTO_LOAD_KEY, name)
+    cfgStatus.Text = "⚡ Auto-load set: " .. name
+    cfgStatus.TextColor3 = Color3.fromRGB(180, 130, 255)
+end)
+
+-- Clear auto-load sentinel
+ConfigTab:AddButton("✕ Clear Auto-Load", Color3.fromRGB(80, 80, 100), function()
+    pcall(delfile, AUTO_LOAD_KEY)
+    cfgStatus.Text = "✕ Auto-load cleared"
+    cfgStatus.TextColor3 = Color3.fromRGB(180, 180, 180)
+end)
+
+-- ── Auto-load on startup ────────────────────────────────────────────────
+-- Runs once at script start; uses task.defer so GUI finishes building first.
+-- No loop, no connection kept alive — fires once and exits.
+task.defer(function()
+    local ok, autoName = pcall(readfile, AUTO_LOAD_KEY)
+    if not ok or not autoName or autoName:match("^%s*$") then return end
+    autoName = autoName:match("^%s*(.-)%s*$")
+    local ok2, src = pcall(readfile, cfgPath(autoName))
+    if not ok2 or not src then return end
+    pcall(function()
+        applyConfig(parseJSON(src))
+        cfgStatus.Text = "⚡ Auto-loaded: " .. autoName
+        cfgStatus.TextColor3 = Color3.fromRGB(180, 130, 255)
+    end)
+end)
