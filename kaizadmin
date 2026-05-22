@@ -1,6 +1,5 @@
 --// KAIZ GOLDEN CHIP FARM
---// LOW LAG SPAWN-DETECTION VERSION
---// Instantly farms chips when they spawn
+--// OPTIMIZED FAST SCANNER VERSION
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -66,7 +65,7 @@ toggle.MouseButton1Click:Connect(function()
     end
 end)
 
--- TP + TOUCH + COLLECT
+-- TP + COLLECT
 local function tpAndCollect(obj, id)
 
     local targetCFrame
@@ -80,13 +79,11 @@ local function tpAndCollect(obj, id)
 
     if targetCFrame then
 
-        -- TP VERY CLOSE TO CHIP
+        -- TP CLOSE FOR TOUCH
         HumanoidRootPart.CFrame = targetCFrame + Vector3.new(0,1,0)
 
-        -- allow touch to register
         task.wait(0.05)
 
-        -- collect
         pcall(function()
             CollectRemote:FireServer({
                 collectibleId = id
@@ -95,27 +92,44 @@ local function tpAndCollect(obj, id)
     end
 end
 
--- LOW LAG SPAWN DETECTION
-workspace.DescendantAdded:Connect(function(obj)
+-- FAST OPTIMIZED CHIP SCANNER
+task.spawn(function()
 
-    if not AutoFarm then
-        return
-    end
+    local collected = {}
 
-    task.wait(0.05)
+    while task.wait(0.1) do
 
-    local id = obj:GetAttribute("collectibleId")
+        if not AutoFarm then
+            continue
+        end
 
-    -- attribute detection
-    if id and tostring(id):find("GoldenChips") then
-        tpAndCollect(obj, id)
-        return
-    end
+        -- ONLY scan objects named GoldenChips
+        for _, obj in ipairs(workspace:GetDescendants()) do
 
-    -- fallback name detection
-    if tostring(obj.Name):find("GoldenChips") then
-        tpAndCollect(obj, obj.Name)
+            local id = obj:GetAttribute("collectibleId")
+
+            if not id then
+                id = obj.Name
+            end
+
+            -- ONLY process GoldenChips
+            if id and tostring(id):find("GoldenChips") then
+
+                -- prevent spam on same chip
+                if not collected[id] then
+
+                    collected[id] = true
+
+                    tpAndCollect(obj, id)
+
+                    -- reset cache later
+                    task.delay(5, function()
+                        collected[id] = nil
+                    end)
+                end
+            end
+        end
     end
 end)
 
-print("KAIZ LOW LAG CHIP FARM LOADED")
+print("KAIZ OPTIMIZED CHIP FARM LOADED")
