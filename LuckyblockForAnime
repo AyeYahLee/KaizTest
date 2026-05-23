@@ -13,7 +13,7 @@ local sellRunning = false
 
 local tpSecondWait = 0.5
 local tpStayWait = 2.2
-local tpReturnWait = 4.0
+local tpReturnWait = 4.1
 local rbFireRate = 0.05
 local rbBurstTime = 60
 local rbRestTime = 5
