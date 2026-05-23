@@ -7,10 +7,9 @@ screenGui.Name = "RebirthHub"
 screenGui.ResetOnSpawn = false
 screenGui.Parent = player.PlayerGui
 
--- MAIN FRAME
 local frame = Instance.new("Frame", screenGui)
-frame.Size = UDim2.new(0, 240, 0, 200)
-frame.Position = UDim2.new(0.5, -120, 0.5, -100)
+frame.Size = UDim2.new(0, 240, 0, 260)
+frame.Position = UDim2.new(0.5, -120, 0.5, -130)
 frame.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
 frame.BorderSizePixel = 0
 frame.Active = true
@@ -20,7 +19,6 @@ local fs = Instance.new("UIStroke", frame)
 fs.Color = Color3.fromRGB(120, 60, 255)
 fs.Thickness = 2
 
--- TITLE BAR
 local titleBar = Instance.new("Frame", frame)
 titleBar.Size = UDim2.new(1, 0, 0, 38)
 titleBar.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
@@ -42,7 +40,6 @@ titleLbl.Font = Enum.Font.GothamBold
 titleLbl.TextSize = 15
 titleLbl.TextXAlignment = Enum.TextXAlignment.Left
 
--- CONTENT
 local layout = Instance.new("UIListLayout", frame)
 layout.Padding = UDim.new(0, 8)
 layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
@@ -53,37 +50,40 @@ pad.PaddingBottom = UDim.new(0, 10)
 pad.PaddingLeft = UDim.new(0, 10)
 pad.PaddingRight = UDim.new(0, 10)
 
--- AMOUNT ROW
-local amtRow = Instance.new("Frame", frame)
-amtRow.Size = UDim2.new(1, 0, 0, 34)
-amtRow.BackgroundColor3 = Color3.fromRGB(25, 25, 38)
-amtRow.BorderSizePixel = 0
-amtRow.LayoutOrder = 1
-Instance.new("UICorner", amtRow).CornerRadius = UDim.new(0, 9)
+local function makeRow(parent, labelTxt, defaultVal, order)
+    local row = Instance.new("Frame", parent)
+    row.Size = UDim2.new(1, 0, 0, 34)
+    row.BackgroundColor3 = Color3.fromRGB(25, 25, 38)
+    row.BorderSizePixel = 0
+    row.LayoutOrder = order
+    Instance.new("UICorner", row).CornerRadius = UDim.new(0, 9)
+    local lbl = Instance.new("TextLabel", row)
+    lbl.Size = UDim2.new(0.62, 0, 1, 0)
+    lbl.Position = UDim2.new(0, 8, 0, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = labelTxt
+    lbl.TextColor3 = Color3.fromRGB(200, 200, 210)
+    lbl.Font = Enum.Font.Gotham
+    lbl.TextSize = 11
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    local box = Instance.new("TextBox", row)
+    box.Size = UDim2.new(0.33, 0, 0, 24)
+    box.Position = UDim2.new(0.64, 0, 0.5, -12)
+    box.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
+    box.Text = tostring(defaultVal)
+    box.TextColor3 = Color3.fromRGB(255, 255, 255)
+    box.Font = Enum.Font.GothamBold
+    box.TextSize = 12
+    box.BorderSizePixel = 0
+    box.ClearTextOnFocus = false
+    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 6)
+    return box
+end
 
-local amtLabel = Instance.new("TextLabel", amtRow)
-amtLabel.Size = UDim2.new(0.55, 0, 1, 0)
-amtLabel.Position = UDim2.new(0, 8, 0, 0)
-amtLabel.BackgroundTransparency = 1
-amtLabel.Text = "Amount per burst:"
-amtLabel.TextColor3 = Color3.fromRGB(200, 200, 210)
-amtLabel.Font = Enum.Font.Gotham
-amtLabel.TextSize = 11
-amtLabel.TextXAlignment = Enum.TextXAlignment.Left
+local amtBox   = makeRow(frame, "Amount per burst:", 100, 1)
+local burstBox = makeRow(frame, "Burst duration (s):", 120, 2)
+local restBox  = makeRow(frame, "Rest duration (s):", 10, 3)
 
-local amtBox = Instance.new("TextBox", amtRow)
-amtBox.Size = UDim2.new(0.35, 0, 0, 24)
-amtBox.Position = UDim2.new(0.62, 0, 0.5, -12)
-amtBox.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
-amtBox.Text = "100"
-amtBox.TextColor3 = Color3.fromRGB(255, 255, 255)
-amtBox.Font = Enum.Font.GothamBold
-amtBox.TextSize = 12
-amtBox.BorderSizePixel = 0
-amtBox.ClearTextOnFocus = false
-Instance.new("UICorner", amtBox).CornerRadius = UDim.new(0, 6)
-
--- STATUS
 local statusLbl = Instance.new("TextLabel", frame)
 statusLbl.Size = UDim2.new(1, 0, 0, 16)
 statusLbl.BackgroundTransparency = 1
@@ -91,9 +91,8 @@ statusLbl.Text = "Idle"
 statusLbl.TextColor3 = Color3.fromRGB(130, 130, 140)
 statusLbl.Font = Enum.Font.Gotham
 statusLbl.TextSize = 11
-statusLbl.LayoutOrder = 2
+statusLbl.LayoutOrder = 4
 
--- FIRE ONCE BUTTON
 local onceBtn = Instance.new("TextButton", frame)
 onceBtn.Size = UDim2.new(1, 0, 0, 38)
 onceBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 90)
@@ -102,10 +101,9 @@ onceBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 onceBtn.Font = Enum.Font.GothamBold
 onceBtn.TextSize = 13
 onceBtn.BorderSizePixel = 0
-onceBtn.LayoutOrder = 3
+onceBtn.LayoutOrder = 5
 Instance.new("UICorner", onceBtn).CornerRadius = UDim.new(0, 11)
 
--- AUTO TOGGLE
 local autoBtn = Instance.new("TextButton", frame)
 autoBtn.Size = UDim2.new(1, 0, 0, 38)
 autoBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
@@ -114,16 +112,15 @@ autoBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 autoBtn.Font = Enum.Font.GothamBold
 autoBtn.TextSize = 13
 autoBtn.BorderSizePixel = 0
-autoBtn.LayoutOrder = 4
+autoBtn.LayoutOrder = 6
 Instance.new("UICorner", autoBtn).CornerRadius = UDim.new(0, 11)
 
--- LOGIC
 local autoRunning = false
 local totalFired = 0
 
-local function getAmount()
-    return tonumber(amtBox.Text) or 100
-end
+local function getAmount() return tonumber(amtBox.Text) or 100 end
+local function getBurst()  return tonumber(burstBox.Text) or 120 end
+local function getRest()   return tonumber(restBox.Text) or 10 end
 
 local function fireRebirth(amount)
     for i = 1, amount do
@@ -132,12 +129,12 @@ local function fireRebirth(amount)
         end)
     end
     totalFired = totalFired + amount
-    statusLbl.Text = "✅ Fired " .. amount .. "x | Total: " .. totalFired
-    statusLbl.TextColor3 = Color3.fromRGB(100, 220, 100)
 end
 
 onceBtn.MouseButton1Click:Connect(function()
     fireRebirth(getAmount())
+    statusLbl.Text = "✅ Fired " .. getAmount() .. "x | Total: " .. totalFired
+    statusLbl.TextColor3 = Color3.fromRGB(100, 220, 100)
 end)
 
 autoBtn.MouseButton1Click:Connect(function()
@@ -145,12 +142,27 @@ autoBtn.MouseButton1Click:Connect(function()
     if autoRunning then
         autoBtn.Text = "🤖 Auto Rebirth: ON"
         autoBtn.BackgroundColor3 = Color3.fromRGB(120, 60, 255)
-        statusLbl.TextColor3 = Color3.fromRGB(180, 100, 255)
         totalFired = 0
         task.spawn(function()
             while autoRunning do
-                fireRebirth(getAmount())
-                task.wait(0.05)
+                -- BURST PHASE
+                local burstEnd = tick() + getBurst()
+                while autoRunning and tick() < burstEnd do
+                    fireRebirth(getAmount())
+                    local remaining = math.ceil(burstEnd - tick())
+                    statusLbl.Text = "♻️ Firing | " .. remaining .. "s left | Total: " .. totalFired
+                    statusLbl.TextColor3 = Color3.fromRGB(100, 220, 100)
+                    task.wait(0.05)
+                end
+                if not autoRunning then break end
+                -- REST PHASE
+                local restEnd = tick() + getRest()
+                while autoRunning and tick() < restEnd do
+                    local remaining = math.ceil(restEnd - tick())
+                    statusLbl.Text = "💤 Resting | " .. remaining .. "s left | Total: " .. totalFired
+                    statusLbl.TextColor3 = Color3.fromRGB(130, 130, 180)
+                    task.wait(0.5)
+                end
             end
             statusLbl.Text = "⏹ Stopped | Total fired: " .. totalFired
             statusLbl.TextColor3 = Color3.fromRGB(130, 130, 140)
