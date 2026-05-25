@@ -5,7 +5,7 @@ local char = player.Character or player.CharacterAdded:Wait()
 local root = char:WaitForChild("HumanoidRootPart")
 
 local startPos = Vector3.new(2, 3, 13)
-local targetPos = Vector3.new(2, 3, 1354)
+local targetPos = Vector3.new(17, 7, 1648)
 local teleportRunning = false
 local rebirthRunning = false
 local upgradeRunning = false
