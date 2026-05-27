@@ -164,9 +164,9 @@ MainTab:CreateToggle({
 
 MainTab:CreateSlider({
     Name = "Claim Delay (seconds)",
-    Range = {1, 10},
+    Range = {1, 60},
     Increment = 1,
-    CurrentValue = 2,
+    CurrentValue = 5,
     Callback = function(val)
         delay = val
     end
