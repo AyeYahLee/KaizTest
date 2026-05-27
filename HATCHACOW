@@ -1,0 +1,410 @@
+local RS = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local LP = Players.LocalPlayer
+
+-- Load Luna Interface Suite
+local Luna = loadstring(game:HttpGet("https://raw.githubusercontent.com/AyeYahLee/KaizTest/refs/heads/main/LunaUI"))()
+
+-- Remotes
+local Remotes = RS:WaitForChild("Remotes")
+
+-- Block AFK teleport
+hookfunction(Remotes:WaitForChild("AFKTeleport").FireServer, function() return end)
+
+-- Prevent idle kick
+local VirtualUser = game:GetService("VirtualUser")
+LP.Idled:Connect(function()
+    VirtualUser:CaptureController()
+    VirtualUser:ClickButton2(Vector2.new())
+end)
+
+-- State
+local delay       = 5
+local buyEggs     = {}
+local hatchEggs   = {}
+local autoBuy     = false
+local autoHatch   = false
+local autoRebirth = false
+local autoClaim   = false
+local autoIndex   = false
+local autoSpin    = false
+local chestRunning    = false
+local chestConnection = nil
+
+-- Find player plot
+local function getPlot()
+    for _, plot in ipairs(workspace.Plots:GetChildren()) do
+        local root = plot:FindFirstChild("Root")
+        if root then
+            local billboard = root:FindFirstChild("PlotBillboard")
+            if billboard then
+                local lbl = billboard:FindFirstChild("TextLabel")
+                if lbl and string.find(lbl.Text, LP.DisplayName, 1, true) then
+                    return plot
+                end
+            end
+        end
+    end
+end
+
+-- Claim cash by touching collect pads
+local function claimCash()
+    local plot = getPlot()
+    if not plot then return end
+    for _, child in ipairs(plot:GetChildren()) do
+        if child.Name:match("^Floor%d+$") then
+            for _, obj in ipairs(child:GetChildren()) do
+                local pad = obj:FindFirstChild("CollectPad")
+                if pad then
+                    local part = pad:FindFirstChild("Part")
+                    if part then
+                        local hrp = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+                        if hrp then
+                            firetouchinterest(hrp, part, 0)
+                            firetouchinterest(hrp, part, 1)
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- Get egg list from shop GUI
+local function getEggs()
+    local eggs = {}
+    local ok, gui = pcall(function()
+        return LP.PlayerGui:WaitForChild("EggShopGui", 5)
+    end)
+    if not ok or not gui then
+        -- fallback list if GUI not found
+        return {
+            "Basic", "Aquatic", "Midnight", "Alien",
+            "Snow", "Candy", "Bird", "Insect", "Elemental"
+        }
+    end
+    local scroll = gui:FindFirstChild("Frame")
+        and gui.Frame:FindFirstChild("Holder")
+        and gui.Frame.Holder:FindFirstChild("ScrollingFrame")
+    if not scroll then return eggs end
+    local list = {}
+    for _, item in ipairs(scroll:GetChildren()) do
+        local nameLabel   = item:FindFirstChild("NameLabel")
+        local rarityLabel = item:FindFirstChild("RarityLuckLabel")
+        if nameLabel and rarityLabel and nameLabel.Text ~= "Name" then
+            local name = nameLabel.Text:gsub("%s*Egg$", "")
+            local tier = tonumber(rarityLabel.Text:match("Tier%s*(%d+)")) or 0
+            table.insert(list, {Name = name, Tier = tier})
+        end
+    end
+    table.sort(list, function(a, b) return a.Tier < b.Tier end)
+    for _, e in ipairs(list) do table.insert(eggs, e.Name) end
+    return eggs
+end
+
+local eggOptions = getEggs()
+
+-- ============================================================
+-- CREATE WINDOW
+-- ============================================================
+local Window = Luna:CreateWindow({
+    Name = "NoxarHub",
+    Subtitle = "Hatch A Cow!",
+    LogoID = nil,
+    LoadingEnabled = true,
+    LoadingTitle = "NoxarHub",
+    LoadingSubtitle = "Hatch A Cow!",
+    ConfigSettings = {
+        ConfigFolder = "NoxarHub"
+    },
+    KeySystem = false,
+    KeySettings = {}
+})
+
+-- ============================================================
+-- TABS
+-- ============================================================
+local MainTab = Window:CreateTab({
+    Name = "Main",
+    Icon = "view_in_ar",
+    ImageSource = "Material",
+    ShowTitle = true
+})
+
+local MiscTab = Window:CreateTab({
+    Name = "Misc",
+    Icon = "settings",
+    ImageSource = "Material",
+    ShowTitle = true
+})
+
+-- ============================================================
+-- MAIN TAB
+-- ============================================================
+
+-- AUTO CLAIM CASH
+MainTab:CreateParagraph({ Title = "Automation", Text = "Automatically claim cash and manage your farm." })
+
+MainTab:CreateToggle({
+    Name = "Auto Claim Cash",
+    Description = "Automatically collects cash from your plot.",
+    CurrentValue = false,
+    Callback = function(on)
+        autoClaim = on
+        if on then
+            task.spawn(function()
+                while autoClaim do
+                    pcall(claimCash)
+                    task.wait(delay)
+                end
+            end)
+        end
+    end
+}, "AutoClaimCash")
+
+MainTab:CreateSlider({
+    Name = "Claim Delay (seconds)",
+    Range = {1, 10},
+    Increment = 1,
+    CurrentValue = 2,
+    Callback = function(val)
+        delay = val
+    end
+}, "ClaimDelay")
+
+-- BUY EGGS
+MainTab:CreateParagraph({ Title = "Buy Eggs", Text = "Select eggs to buy automatically." })
+
+MainTab:CreateDropdown({
+    Name = "Select Egg to Buy",
+    Description = nil,
+    Options = eggOptions,
+    CurrentOption = {eggOptions[1]},
+    MultipleOptions = true,
+    SpecialType = nil,
+    Callback = function(selected)
+        if type(selected) == "table" then
+            buyEggs = selected
+        else
+            buyEggs = {selected}
+        end
+    end
+}, "BuyEggSelect")
+
+MainTab:CreateToggle({
+    Name = "Auto Buy Egg",
+    Description = "Automatically buys the selected egg(s).",
+    CurrentValue = false,
+    Callback = function(on)
+        autoBuy = on
+        if on then
+            task.spawn(function()
+                while autoBuy do
+                    for _, egg in pairs(buyEggs) do
+                        pcall(function()
+                            Remotes.HatchEgg:InvokeServer(egg, 9999)
+                        end)
+                        task.wait(0.1)
+                    end
+                    task.wait(0.1)
+                end
+            end)
+        end
+    end
+}, "AutoBuyEgg")
+
+-- HATCH EGGS
+MainTab:CreateParagraph({ Title = "Hatch Eggs", Text = "Select eggs to hatch automatically." })
+
+MainTab:CreateDropdown({
+    Name = "Select Egg to Hatch",
+    Description = nil,
+    Options = eggOptions,
+    CurrentOption = {eggOptions[1]},
+    MultipleOptions = true,
+    SpecialType = nil,
+    Callback = function(selected)
+        if type(selected) == "table" then
+            hatchEggs = selected
+        else
+            hatchEggs = {selected}
+        end
+    end
+}, "HatchEggSelect")
+
+MainTab:CreateToggle({
+    Name = "Auto Hatch Egg",
+    Description = "Automatically hatches owned eggs.",
+    CurrentValue = false,
+    Callback = function(on)
+        autoHatch = on
+        if on then
+            task.spawn(function()
+                while autoHatch do
+                    for _, egg in pairs(hatchEggs) do
+                        pcall(function()
+                            Remotes.HatchOwnedEgg:InvokeServer(egg)
+                        end)
+                        task.wait(0.01)
+                    end
+                    task.wait(0.1)
+                end
+            end)
+        end
+    end
+}, "AutoHatchEgg")
+
+-- AUTO REBIRTH
+MainTab:CreateParagraph({ Title = "Rebirth", Text = "Automatically rebirth when possible." })
+
+MainTab:CreateToggle({
+    Name = "Auto Rebirth",
+    Description = "Fires rebirth request automatically.",
+    CurrentValue = false,
+    Callback = function(on)
+        autoRebirth = on
+        if on then
+            task.spawn(function()
+                while autoRebirth do
+                    pcall(function()
+                        Remotes.RequestRebirth:FireServer()
+                    end)
+                    task.wait(0.1)
+                end
+            end)
+        end
+    end
+}, "AutoRebirth")
+
+-- ============================================================
+-- MISC TAB
+-- ============================================================
+
+-- GAMEPASSES
+MiscTab:CreateParagraph({ Title = "Gamepasses", Text = "Unlock all gamepasses instantly." })
+
+MiscTab:CreateButton({
+    Name = "Unlock All Gamepasses",
+    Description = "Sets all gamepass attributes to true.",
+    Callback = function()
+        LP:SetAttribute("AutoCollect", true)
+        LP:SetAttribute("AutoFarm", true)
+        LP:SetAttribute("AutoSkipHatch", true)
+        LP:SetAttribute("DoubleCashGamepass", true)
+        LP:SetAttribute("DoubleGemsGamepass", true)
+        LP:SetAttribute("DoublePetLuck", true)
+        LP:SetAttribute("TwentyXPetLuck", true)
+        LP:SetAttribute("Vip", true)
+        LP:SetAttribute("OwnsUltimate", true)
+        LP:SetAttribute("OwnsServerLuckGamepass", true)
+    end
+})
+
+-- AUTO CLAIM INDEX
+MiscTab:CreateParagraph({ Title = "Index", Text = "Auto claim discovery rewards." })
+
+MiscTab:CreateToggle({
+    Name = "Auto Claim Index",
+    Description = "Automatically claims all discovery rewards.",
+    CurrentValue = false,
+    Callback = function(on)
+        autoIndex = on
+        if on then
+            task.spawn(function()
+                while autoIndex do
+                    pcall(function()
+                        Remotes.ClaimAllDiscoveries:InvokeServer()
+                        Remotes.ClaimAllBabyDiscoveries:InvokeServer()
+                    end)
+                    task.wait(5)
+                end
+            end)
+        end
+    end
+}, "AutoClaimIndex")
+
+-- AUTO SPIN
+MiscTab:CreateParagraph({ Title = "Spin", Text = "Automatically spin the wheel." })
+
+MiscTab:CreateToggle({
+    Name = "Auto Spin",
+    Description = "Automatically spins and claims spin results.",
+    CurrentValue = false,
+    Callback = function(on)
+        autoSpin = on
+        if on then
+            task.spawn(function()
+                while autoSpin do
+                    pcall(function()
+                        Remotes.SpinRequest:InvokeServer()
+                        task.wait(0.5)
+                        Remotes.ClaimSpinResult:InvokeServer()
+                    end)
+                    task.wait(0.5)
+                end
+            end)
+        end
+    end
+}, "AutoSpin")
+
+-- CHEST FARMER
+MiscTab:CreateParagraph({ Title = "Chest Farmer", Text = "Teleport to and collect chests automatically." })
+
+MiscTab:CreateToggle({
+    Name = "Auto Collect Chests",
+    Description = "Teleports to chests and collects them when they spawn.",
+    CurrentValue = false,
+    Callback = function(on)
+        chestRunning = on
+        if not on then
+            if chestConnection then
+                chestConnection:Disconnect()
+                chestConnection = nil
+            end
+            return
+        end
+        local char = LP.Character or LP.CharacterAdded:Wait()
+        local root = char:WaitForChild("HumanoidRootPart")
+        local ChestSpawns = workspace:WaitForChild("ChestSpawns")
+        local claimed = false
+        chestConnection = ChestSpawns.ChildAdded:Connect(function(child)
+            if not chestRunning or claimed then return end
+            claimed = true
+            task.wait(0.05)
+            local part = nil
+            if child:IsA("BasePart") then
+                part = child
+            else
+                part = child:FindFirstChildOfClass("BasePart")
+                if not part then
+                    for _, v in pairs(child:GetDescendants()) do
+                        if v:IsA("BasePart") then part = v; break end
+                    end
+                end
+            end
+            if part then
+                root.CFrame = CFrame.new(part.Position + Vector3.new(0, 4, 0))
+            elseif child:IsA("Model") then
+                local ok, pos = pcall(function() return child:GetPivot().Position end)
+                if ok then root.CFrame = CFrame.new(pos + Vector3.new(0, 4, 0)) end
+            end
+            task.wait(0.2)
+            for _, v in pairs(child:GetDescendants()) do
+                if v:IsA("ProximityPrompt") then
+                    pcall(function() fireproximityprompt(v) end)
+                end
+            end
+            pcall(function()
+                local cc = Remotes.ChestClaimed
+                if cc:IsA("RemoteFunction") then
+                    cc:InvokeServer(child)
+                else
+                    cc:FireServer(child)
+                end
+            end)
+            task.delay(8, function()
+                claimed = false
+            end)
+        end)
+    end
+}, "AutoCollectChests")
