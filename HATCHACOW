@@ -19,7 +19,7 @@ LP.Idled:Connect(function()
 end)
 
 -- State
-local delay       = 5
+local delay       = 2
 local buyEggs     = {}
 local hatchEggs   = {}
 local autoBuy     = false
