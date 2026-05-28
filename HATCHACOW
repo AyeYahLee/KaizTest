@@ -2,38 +2,79 @@ local RS = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 local LP = Players.LocalPlayer
 
--- Load Luna Interface Suite
-local Luna = loadstring(game:HttpGet("https://raw.githubusercontent.com/AyeYahLee/KaizTest/refs/heads/main/LunaUI"))()
+local Noxar = loadstring(game:HttpGet("https://raw.githubusercontent.com/AyeYahLee/KaizTest/refs/heads/main/LunaUI"))()
 
--- Remotes
 local Remotes = RS:WaitForChild("Remotes")
 
--- Block AFK teleport
-hookfunction(Remotes:WaitForChild("AFKTeleport").FireServer, function() return end)
+pcall(function()
+    hookfunction(Remotes:WaitForChild("AFKTeleport").FireServer, function() return end)
+end)
 
--- Prevent idle kick
+-- ANTI AFK
 local VirtualUser = game:GetService("VirtualUser")
+
 LP.Idled:Connect(function()
     VirtualUser:CaptureController()
     VirtualUser:ClickButton2(Vector2.new())
 end)
 
--- State
-local delay       = 2
-local buyEggs     = {}
-local hatchEggs   = {}
-local autoBuy     = false
-local autoHatch   = false
-local autoRebirth = false
-local autoClaim   = false
-local autoIndex   = false
-local autoSpin    = false
-local chestRunning    = false
-local chestConnection = nil
+task.spawn(function()
+    while true do
+        task.wait(110)
+        pcall(function()
+            VirtualUser:CaptureController()
+            VirtualUser:ClickButton2(Vector2.new())
+            VirtualUser:SetMouseDelta(Vector2.new(1,0))
+            task.wait(0.1)
+            VirtualUser:SetMouseDelta(Vector2.new(-1,0))
+        end)
+    end
+end)
 
--- Find player plot
+if not _G.NoxarAFKHooked then
+    _G.NoxarAFKHooked = true
+    pcall(function()
+        local mt = getrawmetatable(game)
+        local old = mt.__namecall
+        setreadonly(mt, false)
+        mt.__namecall = newcclosure(function(self, ...)
+            local method = getnamecallmethod()
+            if method == "FireServer" then
+                local name = tostring(self.Name)
+                if name == "AFKTeleport" or name == "AFK" then return end
+            end
+            return old(self, ...)
+        end)
+        setreadonly(mt, true)
+    end)
+end
+
+-- State
+local delay        = 5
+local buyEggs      = {}
+local hatchEggs    = {}
+local autoBuy      = false
+local autoHatch    = false
+local autoRebirth  = false
+local autoClaim    = false
+local autoIndex    = false
+local autoSpin     = false
+local chestRunning = false
+local chestConnections = {}
+local lastClaim    = 0
+
+-- Loop IDs
+local claimId   = 0
+local buyId     = 0
+local hatchId   = 0
+local rebirthId = 0
+local indexId   = 0
+local spinId    = 0
+
 local function getPlot()
-    for _, plot in ipairs(workspace.Plots:GetChildren()) do
+    local plots = workspace:FindFirstChild("Plots")
+    if not plots then return nil end
+    for _, plot in ipairs(plots:GetChildren()) do
         local root = plot:FindFirstChild("Root")
         if root then
             local billboard = root:FindFirstChild("PlotBillboard")
@@ -47,10 +88,13 @@ local function getPlot()
     end
 end
 
--- Claim cash by touching collect pads
 local function claimCash()
+    if tick() - lastClaim < delay - 0.1 then return end
+    lastClaim = tick()
     local plot = getPlot()
     if not plot then return end
+    local hrp = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
     for _, child in ipairs(plot:GetChildren()) do
         if child.Name:match("^Floor%d+$") then
             for _, obj in ipairs(child:GetChildren()) do
@@ -58,11 +102,11 @@ local function claimCash()
                 if pad then
                     local part = pad:FindFirstChild("Part")
                     if part then
-                        local hrp = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
-                        if hrp then
+                        pcall(function()
                             firetouchinterest(hrp, part, 0)
+                            task.wait(0.02)
                             firetouchinterest(hrp, part, 1)
-                        end
+                        end)
                     end
                 end
             end
@@ -70,23 +114,17 @@ local function claimCash()
     end
 end
 
--- Get egg list from shop GUI
 local function getEggs()
-    local eggs = {}
-    local ok, gui = pcall(function()
-        return LP.PlayerGui:WaitForChild("EggShopGui", 5)
+    local fallback = {
+        "Basic", "Aquatic", "Midnight", "Alien",
+        "Snow", "Candy", "Bird", "Insect", "Elemental"
+    }
+    local gui = LP.PlayerGui:FindFirstChild("EggShopGui")
+    if not gui then return fallback end
+    local ok, scroll = pcall(function()
+        return gui.Frame.Holder.ScrollingFrame
     end)
-    if not ok or not gui then
-        -- fallback list if GUI not found
-        return {
-            "Basic", "Aquatic", "Midnight", "Alien",
-            "Snow", "Candy", "Bird", "Insect", "Elemental"
-        }
-    end
-    local scroll = gui:FindFirstChild("Frame")
-        and gui.Frame:FindFirstChild("Holder")
-        and gui.Frame.Holder:FindFirstChild("ScrollingFrame")
-    if not scroll then return eggs end
+    if not ok or not scroll then return fallback end
     local list = {}
     for _, item in ipairs(scroll:GetChildren()) do
         local nameLabel   = item:FindFirstChild("NameLabel")
@@ -94,56 +132,43 @@ local function getEggs()
         if nameLabel and rarityLabel and nameLabel.Text ~= "Name" then
             local name = nameLabel.Text:gsub("%s*Egg$", "")
             local tier = tonumber(rarityLabel.Text:match("Tier%s*(%d+)")) or 0
-            table.insert(list, {Name = name, Tier = tier})
+            table.insert(list, {Name=name, Tier=tier})
         end
     end
-    table.sort(list, function(a, b) return a.Tier < b.Tier end)
+    if #list == 0 then return fallback end
+    table.sort(list, function(a,b) return a.Tier < b.Tier end)
+    local eggs = {}
     for _, e in ipairs(list) do table.insert(eggs, e.Name) end
     return eggs
 end
 
 local eggOptions = getEggs()
 
--- ============================================================
--- CREATE WINDOW
--- ============================================================
-local Window = Luna:CreateWindow({
+local Window = Noxar:CreateWindow({
     Name = "NoxarHub",
-    Subtitle = "Hatch A Cow!",
+    Subtitle = "Hatch A Cow",
     LogoID = nil,
     LoadingEnabled = true,
     LoadingTitle = "NoxarHub",
-    LoadingSubtitle = "Hatch A Cow!",
-    ConfigSettings = {
-        ConfigFolder = "NoxarHub"
-    },
+    LoadingSubtitle = "Hatch A Cow",
+    ConfigSettings = { ConfigFolder = "NoxarHub" },
     KeySystem = false,
     KeySettings = {}
 })
 
--- ============================================================
--- TABS
--- ============================================================
 local MainTab = Window:CreateTab({
-    Name = "Main",
-    Icon = "view_in_ar",
-    ImageSource = "Material",
-    ShowTitle = true
+    Name = "Main", Icon = "view_in_ar",
+    ImageSource = "Material", ShowTitle = true
 })
-
 local MiscTab = Window:CreateTab({
-    Name = "Misc",
-    Icon = "settings",
-    ImageSource = "Material",
-    ShowTitle = true
+    Name = "Misc", Icon = "settings",
+    ImageSource = "Material", ShowTitle = true
 })
 
--- ============================================================
+-- ══════════════════════════════
 -- MAIN TAB
--- ============================================================
-
--- AUTO CLAIM CASH
-MainTab:CreateParagraph({ Title = "Automation", Text = "Automatically claim cash and manage your farm." })
+-- ══════════════════════════════
+MainTab:CreateParagraph({Title="Automation", Text="Automatically claim cash and manage your farm."})
 
 MainTab:CreateToggle({
     Name = "Auto Claim Cash",
@@ -152,8 +177,11 @@ MainTab:CreateToggle({
     Callback = function(on)
         autoClaim = on
         if on then
+            lastClaim = 0
+            claimId = claimId + 1
+            local myId = claimId
             task.spawn(function()
-                while autoClaim do
+                while autoClaim and claimId == myId do
                     pcall(claimCash)
                     task.wait(delay)
                 end
@@ -164,71 +192,60 @@ MainTab:CreateToggle({
 
 MainTab:CreateSlider({
     Name = "Claim Delay (seconds)",
-    Range = {1, 60},
-    Increment = 1,
-    CurrentValue = 5,
-    Callback = function(val)
-        delay = val
-    end
+    Range = {1, 60}, Increment = 1, CurrentValue = 5,
+    Callback = function(val) delay = val end
 }, "ClaimDelay")
 
--- BUY EGGS
-MainTab:CreateParagraph({ Title = "Buy Eggs", Text = "Select eggs to buy automatically." })
+MainTab:CreateParagraph({Title="Buy Eggs", Text="Select eggs to buy automatically."})
 
 MainTab:CreateDropdown({
     Name = "Select Egg to Buy",
-    Description = nil,
     Options = eggOptions,
-    CurrentOption = {eggOptions[1]},
+    CurrentOption = {}, -- FIX: no default selected
     MultipleOptions = true,
-    SpecialType = nil,
     Callback = function(selected)
-        if type(selected) == "table" then
-            buyEggs = selected
-        else
-            buyEggs = {selected}
-        end
+        buyEggs = type(selected)=="table" and selected or {selected}
     end
 }, "BuyEggSelect")
 
 MainTab:CreateToggle({
     Name = "Auto Buy Egg",
-    Description = "Automatically buys the selected egg(s).",
+    Description = "Automatically buys max of selected egg(s).",
     CurrentValue = false,
     Callback = function(on)
         autoBuy = on
         if on then
+            buyId = buyId + 1
+            local myId = buyId
             task.spawn(function()
-                while autoBuy do
+                while autoBuy and buyId == myId do
+                    if #buyEggs == 0 then
+                        task.wait(1)
+                        continue
+                    end
                     for _, egg in pairs(buyEggs) do
+                        if not autoBuy or buyId ~= myId then break end
                         pcall(function()
                             Remotes.HatchEgg:InvokeServer(egg, 9999)
                         end)
-                        task.wait(0.1)
+                        task.wait(0.5)
                     end
-                    task.wait(0.1)
+                    task.wait(0.5)
                 end
             end)
         end
     end
 }, "AutoBuyEgg")
 
--- HATCH EGGS
-MainTab:CreateParagraph({ Title = "Hatch Eggs", Text = "Select eggs to hatch automatically." })
+MainTab:CreateParagraph({Title="Hatch Eggs", Text="Select eggs to hatch automatically."})
 
 MainTab:CreateDropdown({
     Name = "Select Egg to Hatch",
-    Description = nil,
     Options = eggOptions,
-    CurrentOption = {eggOptions[1]},
+    CurrentOption = {}, -- FIX: no default selected
     MultipleOptions = true,
-    SpecialType = nil,
     Callback = function(selected)
-        if type(selected) == "table" then
-            hatchEggs = selected
-        else
-            hatchEggs = {selected}
-        end
+        hatchEggs = type(selected)=="table" and selected or {selected}
     end
 }, "HatchEggSelect")
 
@@ -239,13 +256,20 @@ MainTab:CreateToggle({
     Callback = function(on)
         autoHatch = on
         if on then
+            hatchId = hatchId + 1
+            local myId = hatchId
             task.spawn(function()
-                while autoHatch do
+                while autoHatch and hatchId == myId do
+                    if #hatchEggs == 0 then
+                        task.wait(1)
+                        continue
+                    end
                     for _, egg in pairs(hatchEggs) do
+                        if not autoHatch or hatchId ~= myId then break end
                         pcall(function()
                             Remotes.HatchOwnedEgg:InvokeServer(egg)
                         end)
-                        task.wait(0.01)
+                        task.wait(0.05)
                     end
                     task.wait(0.1)
                 end
@@ -254,8 +278,7 @@ MainTab:CreateToggle({
     end
 }, "AutoHatchEgg")
 
--- AUTO REBIRTH
-MainTab:CreateParagraph({ Title = "Rebirth", Text = "Automatically rebirth when possible." })
+MainTab:CreateParagraph({Title="Rebirth", Text="Automatically rebirth when possible."})
 
 MainTab:CreateToggle({
     Name = "Auto Rebirth",
@@ -264,24 +287,24 @@ MainTab:CreateToggle({
     Callback = function(on)
         autoRebirth = on
         if on then
+            rebirthId = rebirthId + 1
+            local myId = rebirthId
             task.spawn(function()
-                while autoRebirth do
+                while autoRebirth and rebirthId == myId do
                     pcall(function()
                         Remotes.RequestRebirth:FireServer()
                     end)
-                    task.wait(0.1)
+                    task.wait(0.5)
                 end
             end)
         end
     end
 }, "AutoRebirth")
 
--- ============================================================
+-- ══════════════════════════════
 -- MISC TAB
--- ============================================================
-
--- GAMEPASSES
-MiscTab:CreateParagraph({ Title = "Gamepasses", Text = "Unlock all gamepasses instantly." })
+-- ══════════════════════════════
+MiscTab:CreateParagraph({Title="Gamepasses", Text="Unlock all gamepasses instantly."})
 
 MiscTab:CreateButton({
     Name = "Unlock All Gamepasses",
@@ -300,8 +323,7 @@ MiscTab:CreateButton({
     end
 })
 
--- AUTO CLAIM INDEX
-MiscTab:CreateParagraph({ Title = "Index", Text = "Auto claim discovery rewards." })
+MiscTab:CreateParagraph({Title="Index", Text="Auto claim discovery rewards."})
 
 MiscTab:CreateToggle({
     Name = "Auto Claim Index",
@@ -310,8 +332,10 @@ MiscTab:CreateToggle({
     Callback = function(on)
         autoIndex = on
         if on then
+            indexId = indexId + 1
+            local myId = indexId
             task.spawn(function()
-                while autoIndex do
+                while autoIndex and indexId == myId do
                     pcall(function()
                         Remotes.ClaimAllDiscoveries:InvokeServer()
                         Remotes.ClaimAllBabyDiscoveries:InvokeServer()
@@ -323,8 +347,7 @@ MiscTab:CreateToggle({
     end
 }, "AutoClaimIndex")
 
--- AUTO SPIN
-MiscTab:CreateParagraph({ Title = "Spin", Text = "Automatically spin the wheel." })
+MiscTab:CreateParagraph({Title="Spin", Text="Automatically spin the wheel."})
 
 MiscTab:CreateToggle({
     Name = "Auto Spin",
@@ -333,78 +356,95 @@ MiscTab:CreateToggle({
     Callback = function(on)
         autoSpin = on
         if on then
+            spinId = spinId + 1
+            local myId = spinId
             task.spawn(function()
-                while autoSpin do
+                while autoSpin and spinId == myId do
                     pcall(function()
-                        Remotes.SpinRequest:InvokeServer()
-                        task.wait(0.5)
-                        Remotes.ClaimSpinResult:InvokeServer()
+                        local res = Remotes.SpinRequest:InvokeServer()
+                        if type(res)=="table" and res.ok then
+                            task.wait(0.3)
+                            Remotes.ClaimSpinResult:InvokeServer()
+                        end
                     end)
-                    task.wait(0.5)
+                    task.wait(1)
                 end
             end)
         end
     end
 }, "AutoSpin")
 
--- CHEST FARMER
-MiscTab:CreateParagraph({ Title = "Chest Farmer", Text = "Teleport to and collect chests automatically." })
+MiscTab:CreateParagraph({Title="Chest Farmer", Text="Teleport to and collect chests automatically."})
 
 MiscTab:CreateToggle({
     Name = "Auto Collect Chests",
-    Description = "Teleports to chests and collects them when they spawn.",
+    Description = "Watches chests and teleports when one activates.",
     CurrentValue = false,
     Callback = function(on)
         chestRunning = on
-        if not on then
-            if chestConnection then
-                chestConnection:Disconnect()
-                chestConnection = nil
-            end
-            return
+
+        for _, c in pairs(chestConnections) do
+            pcall(function() c:Disconnect() end)
         end
+        chestConnections = {}
+
+        if not on then return end
+
         local char = LP.Character or LP.CharacterAdded:Wait()
         local root = char:WaitForChild("HumanoidRootPart")
         local ChestSpawns = workspace:WaitForChild("ChestSpawns")
         local claimed = false
-        chestConnection = ChestSpawns.ChildAdded:Connect(function(child)
-            if not chestRunning or claimed then return end
-            claimed = true
-            task.wait(0.05)
-            local part = nil
-            if child:IsA("BasePart") then
-                part = child
+
+        local function handleChest(chest)
+    if not chestRunning or claimed then return end
+    claimed = true
+
+    root.CFrame = CFrame.new(chest.Position + Vector3.new(0,4,0))
+    task.wait(0.2)
+
+    for i = 1, 3 do
+        for _,v in pairs(chest:GetDescendants()) do
+            if v:IsA("ProximityPrompt") then
+                pcall(function() fireproximityprompt(v) end)
+            end
+        end
+        pcall(function() fireproximityprompt(chest) end)
+        pcall(function()
+            local cc = Remotes.ChestClaimed
+            if cc:IsA("RemoteFunction") then
+                cc:InvokeServer(chest)
             else
-                part = child:FindFirstChildOfClass("BasePart")
-                if not part then
-                    for _, v in pairs(child:GetDescendants()) do
-                        if v:IsA("BasePart") then part = v; break end
-                    end
-                end
+                cc:FireServer(chest)
             end
-            if part then
-                root.CFrame = CFrame.new(part.Position + Vector3.new(0, 4, 0))
-            elseif child:IsA("Model") then
-                local ok, pos = pcall(function() return child:GetPivot().Position end)
-                if ok then root.CFrame = CFrame.new(pos + Vector3.new(0, 4, 0)) end
-            end
-            task.wait(0.2)
-            for _, v in pairs(child:GetDescendants()) do
-                if v:IsA("ProximityPrompt") then
-                    pcall(function() fireproximityprompt(v) end)
-                end
-            end
-            pcall(function()
-                local cc = Remotes.ChestClaimed
-                if cc:IsA("RemoteFunction") then
-                    cc:InvokeServer(child)
-                else
-                    cc:FireServer(child)
-                end
-            end)
-            task.delay(8, function()
-                claimed = false
-            end)
         end)
+        task.wait(0.1)
+    end
+
+    local conn
+    conn = chest:GetPropertyChangedSignal("Transparency"):Connect(function()
+        if chest.Transparency >= 0.9 then
+            claimed = false
+            if conn then conn:Disconnect(); conn=nil end
+        end
+    end)
+    task.delay(10, function()
+        claimed = false
+        if conn then conn:Disconnect(); conn=nil end
+    end)
+end
+
+        for _, chest in pairs(ChestSpawns:GetChildren()) do
+            if chest:IsA("MeshPart") then
+                if chest.Transparency < 0.5 then
+                    task.spawn(function() handleChest(chest) end)
+                end
+                local c = chest:GetPropertyChangedSignal("Transparency"):Connect(function()
+                    if chest.Transparency < 0.5 and not claimed then
+                        task.spawn(function() handleChest(chest) end)
+                    end
+                end)
+                table.insert(chestConnections, c)
+            end
+        end
     end
 }, "AutoCollectChests")
