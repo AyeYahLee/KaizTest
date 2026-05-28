@@ -148,7 +148,7 @@ local Window = Noxar:CreateWindow({
     Name = "NoxarHub",
     Subtitle = "Hatch A Cow",
     LogoID = nil,
-    LoadingEnabled = true,
+    LoadingEnabled = false,
     LoadingTitle = "NoxarHub",
     LoadingSubtitle = "Hatch A Cow",
     ConfigSettings = { ConfigFolder = "NoxarHub" },
