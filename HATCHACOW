@@ -59,17 +59,19 @@ local autoRebirth  = false
 local autoClaim    = false
 local autoIndex    = false
 local autoSpin     = false
+local autoFastSpin = false
 local chestRunning = false
 local chestConnections = {}
 local lastClaim    = 0
 
 -- Loop IDs
-local claimId   = 0
-local buyId     = 0
-local hatchId   = 0
-local rebirthId = 0
-local indexId   = 0
-local spinId    = 0
+local claimId    = 0
+local buyId      = 0
+local hatchId    = 0
+local rebirthId  = 0
+local indexId    = 0
+local spinId     = 0
+local fastSpinId = 0
 
 local function getPlot()
     local plots = workspace:FindFirstChild("Plots")
@@ -201,7 +203,7 @@ MainTab:CreateParagraph({Title="Buy Eggs", Text="Select eggs to buy automaticall
 MainTab:CreateDropdown({
     Name = "Select Egg to Buy",
     Options = eggOptions,
-    CurrentOption = {}, -- FIX: no default selected
+    CurrentOption = {},
     MultipleOptions = true,
     Callback = function(selected)
         buyEggs = type(selected)=="table" and selected or {selected}
@@ -219,15 +221,10 @@ MainTab:CreateToggle({
             local myId = buyId
             task.spawn(function()
                 while autoBuy and buyId == myId do
-                    if #buyEggs == 0 then
-                        task.wait(1)
-                        continue
-                    end
+                    if #buyEggs == 0 then task.wait(1); continue end
                     for _, egg in pairs(buyEggs) do
                         if not autoBuy or buyId ~= myId then break end
-                        pcall(function()
-                            Remotes.HatchEgg:InvokeServer(egg, 9999)
-                        end)
+                        pcall(function() Remotes.HatchEgg:InvokeServer(egg, 9999) end)
                         task.wait(0.5)
                     end
                     task.wait(0.5)
@@ -242,7 +239,7 @@ MainTab:CreateParagraph({Title="Hatch Eggs", Text="Select eggs to hatch automati
 MainTab:CreateDropdown({
     Name = "Select Egg to Hatch",
     Options = eggOptions,
-    CurrentOption = {}, -- FIX: no default selected
+    CurrentOption = {},
     MultipleOptions = true,
     Callback = function(selected)
         hatchEggs = type(selected)=="table" and selected or {selected}
@@ -260,15 +257,10 @@ MainTab:CreateToggle({
             local myId = hatchId
             task.spawn(function()
                 while autoHatch and hatchId == myId do
-                    if #hatchEggs == 0 then
-                        task.wait(1)
-                        continue
-                    end
+                    if #hatchEggs == 0 then task.wait(1); continue end
                     for _, egg in pairs(hatchEggs) do
                         if not autoHatch or hatchId ~= myId then break end
-                        pcall(function()
-                            Remotes.HatchOwnedEgg:InvokeServer(egg)
-                        end)
+                        pcall(function() Remotes.HatchOwnedEgg:InvokeServer(egg) end)
                         task.wait(0.05)
                     end
                     task.wait(0.1)
@@ -277,6 +269,31 @@ MainTab:CreateToggle({
         end
     end
 }, "AutoHatchEgg")
+
+local autoHatchMutation = false
+local mutationHatchId = 0
+MainTab:CreateToggle({
+    Name = "Auto Hatch Mutation Egg",
+    Description = "Separately hatches Mutation eggs only.",
+    CurrentValue = false,
+    Callback = function(on)
+        autoHatchMutation = on
+        if on then
+            mutationHatchId = mutationHatchId + 1
+            local myId = mutationHatchId
+            task.spawn(function()
+                while autoHatchMutation and mutationHatchId == myId do
+                    pcall(function()
+                        Remotes.HatchOwnedEgg:InvokeServer("Mutation")
+                    end)
+                    task.wait(0.5)
+                end
+            end)
+        end
+    end
+}, "AutoHatchMutation")
+
+
 
 MainTab:CreateParagraph({Title="Rebirth", Text="Automatically rebirth when possible."})
 
@@ -291,9 +308,7 @@ MainTab:CreateToggle({
             local myId = rebirthId
             task.spawn(function()
                 while autoRebirth and rebirthId == myId do
-                    pcall(function()
-                        Remotes.RequestRebirth:FireServer()
-                    end)
+                    pcall(function() Remotes.RebirthRequest:InvokeServer() end)
                     task.wait(0.5)
                 end
             end)
@@ -347,7 +362,7 @@ MiscTab:CreateToggle({
     end
 }, "AutoClaimIndex")
 
-MiscTab:CreateParagraph({Title="Spin", Text="Automatically spin the wheel."})
+MiscTab:CreateParagraph({Title="Spin", Text="Spin the wheel automatically or fast."})
 
 MiscTab:CreateToggle({
     Name = "Auto Spin",
@@ -374,6 +389,71 @@ MiscTab:CreateToggle({
     end
 }, "AutoSpin")
 
+MiscTab:CreateToggle({
+    Name = "Fast Spin",
+    Description = "Fires 2 spins at a time rapidly. Auto stops when spins run out.",
+    CurrentValue = false,
+    Callback = function(on)
+        autoFastSpin = on
+        if on then
+            fastSpinId = fastSpinId + 1
+            local myId = fastSpinId
+            task.spawn(function()
+                while autoFastSpin and fastSpinId == myId do
+                    for i = 1, 2 do
+                        task.spawn(function()
+                            local ok, result = pcall(function()
+                                return Remotes.SpinRequest:InvokeServer()
+                            end)
+                            if ok and result and result.ok ~= false then
+                                pcall(function()
+                                    Remotes.ClaimSpinResult:InvokeServer()
+                                end)
+                            else
+                                autoFastSpin = false
+                            end
+                        end)
+                    end
+                    task.wait(0.1)
+                end
+            end)
+        end
+    end
+}, "FastSpin")
+
+MiscTab:CreateParagraph({Title="Codes", Text="Redeem all active codes automatically."})
+
+MiscTab:CreateButton({
+    Name = "Redeem All Codes",
+    Description = "Redeems all known working codes.",
+    Callback = function()
+        local codes = {
+            "WELCOME", "MOO", "100KVISITS", "1KFAVORITES",
+            "UPDATE", "CAPYBARA", "10KFAVORITES",
+        }
+        task.spawn(function()
+            for _, code in ipairs(codes) do
+                local ok, res = pcall(function()
+                    return Remotes.RedeemCode:InvokeServer(code)
+                end)
+                if ok and type(res) == "table" then
+                    local success = res.ok or res.success or res.Success
+                    local reason = res.reason or res.message or "?"
+                    if success then
+                        print("✅ "..code.." redeemed!")
+                    else
+                        print("❌ "..code..": "..tostring(reason))
+                    end
+                else
+                    print("❌ "..code..": "..tostring(res))
+                end
+                task.wait(0.5)
+            end
+            print("Done!")
+        end)
+    end
+})
+
 MiscTab:CreateParagraph({Title="Chest Farmer", Text="Teleport to and collect chests automatically."})
 
 MiscTab:CreateToggle({
@@ -396,42 +476,42 @@ MiscTab:CreateToggle({
         local claimed = false
 
         local function handleChest(chest)
-    if not chestRunning or claimed then return end
-    claimed = true
+            if not chestRunning or claimed then return end
+            claimed = true
 
-    root.CFrame = CFrame.new(chest.Position + Vector3.new(0,4,0))
-    task.wait(0.2)
+            root.CFrame = CFrame.new(chest.Position + Vector3.new(0,4,0))
+            task.wait(0.2)
 
-    for i = 1, 3 do
-        for _,v in pairs(chest:GetDescendants()) do
-            if v:IsA("ProximityPrompt") then
-                pcall(function() fireproximityprompt(v) end)
+            for i = 1, 3 do
+                for _,v in pairs(chest:GetDescendants()) do
+                    if v:IsA("ProximityPrompt") then
+                        pcall(function() fireproximityprompt(v) end)
+                    end
+                end
+                pcall(function() fireproximityprompt(chest) end)
+                pcall(function()
+                    local cc = Remotes.ChestClaimed
+                    if cc:IsA("RemoteFunction") then
+                        cc:InvokeServer(chest)
+                    else
+                        cc:FireServer(chest)
+                    end
+                end)
+                task.wait(0.1)
             end
-        end
-        pcall(function() fireproximityprompt(chest) end)
-        pcall(function()
-            local cc = Remotes.ChestClaimed
-            if cc:IsA("RemoteFunction") then
-                cc:InvokeServer(chest)
-            else
-                cc:FireServer(chest)
-            end
-        end)
-        task.wait(0.1)
-    end
 
-    local conn
-    conn = chest:GetPropertyChangedSignal("Transparency"):Connect(function()
-        if chest.Transparency >= 0.9 then
-            claimed = false
-            if conn then conn:Disconnect(); conn=nil end
+            local conn
+            conn = chest:GetPropertyChangedSignal("Transparency"):Connect(function()
+                if chest.Transparency >= 0.9 then
+                    claimed = false
+                    if conn then conn:Disconnect(); conn=nil end
+                end
+            end)
+            task.delay(10, function()
+                claimed = false
+                if conn then conn:Disconnect(); conn=nil end
+            end)
         end
-    end)
-    task.delay(10, function()
-        claimed = false
-        if conn then conn:Disconnect(); conn=nil end
-    end)
-end
 
         for _, chest in pairs(ChestSpawns:GetChildren()) do
             if chest:IsA("MeshPart") then
