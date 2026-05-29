@@ -293,6 +293,29 @@ MainTab:CreateToggle({
     end
 }, "AutoHatchMutation")
 
+local autoHatchAdmin = false
+local adminHatchId = 0
+MainTab:CreateToggle({
+    Name = "Auto Hatch Admin Egg",
+    Description = "Separately hatches Admin eggs only.",
+    CurrentValue = false,
+    Callback = function(on)
+        autoHatchAdmin = on
+        if on then
+            adminHatchId = adminHatchId + 1
+            local myId = adminHatchId
+            task.spawn(function()
+                while autoHatchAdmin and adminHatchId == myId do
+                    pcall(function()
+                        Remotes.HatchOwnedEgg:InvokeServer("Admin")
+                    end)
+                    task.wait(0.5)
+                end
+            end)
+        end
+    end
+}, "AutoHatchAdmin")
+
 
 
 MainTab:CreateParagraph({Title="Rebirth", Text="Automatically rebirth when possible."})
