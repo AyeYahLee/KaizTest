@@ -1,791 +1,164 @@
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local player = Players.LocalPlayer
 local char = player.Character or player.CharacterAdded:Wait()
 local root = char:WaitForChild("HumanoidRootPart")
 
-local startPos = Vector3.new(2, 3, 13)
-local targetPos = Vector3.new(17, 7, 1648)
-local teleportRunning = false
-local rebirthRunning = false
-local upgradeRunning = false
-local sellRunning = false
-
-local tpSecondWait = 0.5
-local tpStayWait = 2.2
-local tpReturnWait = 4.1
-local rbFireRate = 0.05
-local rbBurstTime = 60
-local rbRestTime = 5
-local upBurstTime = 20
-local upRestTime = 60
-local SELL_DELAY = 0.7
-
-local floors = {"Floor1","Floor2","Floor3"}
-local floorSel = {Floor1=false, Floor2=false, Floor3=false}
-local slotSel = {}
-for i=1,10 do slotSel[i]=true end
-
-local SELL_RARITIES = {
-    ["Common"] = false,
-    ["Uncommon"] = false,
-    ["Rare"] = false,
-    ["Epic"] = false,
-    ["Legendary"] = false,
-    ["Mythical"] = false,
-    ["Godly"] = false,
-    ["Secret"] = false,
+local islands = {
+    {"Starter Island",   Vector3.new(255, -120, -42)},
+    {"Volcano",          Vector3.new(148, -119, -1002)},
+    {"Frost Isle",       Vector3.new(-2137, -119, -935)},
+    {"Neverland",        Vector3.new(2824, -125, 1640)},
+    {"Duneveil Isle",    Vector3.new(731, -122, -3158)},
+    {"Tideland",         Vector3.new(-2994, -124, 2233)},
+    {"Spirit Grove",     Vector3.new(-3023, -125, 1444)},
+    {"Dragon's Breath",  Vector3.new(2396, -122, -205)},
+    {"Blossom Haven",    Vector3.new(-5843, -121, 245)},
+    {"Mobius Circus",    Vector3.new(457, -120, 3114)},
+    {"Specter Shallows", Vector3.new(6033, -124, -844)},
 }
 
-local RequestSell = ReplicatedStorage:WaitForChild("Events"):WaitForChild("RequestSell")
+local old = player.PlayerGui:FindFirstChild("IslandTeleportGui")
+if old then old:Destroy() end
 
 local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "NoxarHub"
+screenGui.Name = "IslandTeleportGui"
 screenGui.ResetOnSpawn = false
 screenGui.Parent = player.PlayerGui
 
--- ICON
+-- Floating icon
 local iconBtn = Instance.new("TextButton")
-iconBtn.Size = UDim2.new(0,48,0,48)
+iconBtn.Size = UDim2.new(0,50,0,50)
 iconBtn.Position = UDim2.new(0,16,0.5,0)
-iconBtn.BackgroundColor3 = Color3.fromRGB(120,60,255)
-iconBtn.Text = "⚡"
-iconBtn.TextSize = 20
-iconBtn.TextColor3 = Color3.fromRGB(255,255,255)
+iconBtn.BackgroundColor3 = Color3.fromRGB(60,120,255)
+iconBtn.Text = "🏝️"
+iconBtn.TextSize = 22
 iconBtn.Font = Enum.Font.GothamBold
 iconBtn.BorderSizePixel = 0
 iconBtn.Active = true
 iconBtn.Draggable = true
 iconBtn.Parent = screenGui
 Instance.new("UICorner",iconBtn).CornerRadius = UDim.new(1,0)
-local is = Instance.new("UIStroke",iconBtn)
-is.Color = Color3.fromRGB(180,100,255)
-is.Thickness = 2
+local ics = Instance.new("UIStroke",iconBtn)
+ics.Color = Color3.fromRGB(120,170,255)
+ics.Thickness = 2
 
--- MAIN PANEL
+-- Main panel
 local main = Instance.new("Frame")
-main.Size = UDim2.new(0,295,0,370)
-main.Position = UDim2.new(0.5,-147,0.5,-185)
-main.BackgroundColor3 = Color3.fromRGB(15,15,20)
+main.Size = UDim2.new(0,280,0,420)
+main.Position = UDim2.new(0.5,-140,0.5,-210)
+main.BackgroundColor3 = Color3.fromRGB(15,15,22)
 main.BorderSizePixel = 0
 main.Active = true
-main.Draggable = true
 main.Visible = false
 main.Parent = screenGui
 Instance.new("UICorner",main).CornerRadius = UDim.new(0,16)
-local ms = Instance.new("UIStroke",main)
-ms.Color = Color3.fromRGB(120,60,255)
-ms.Thickness = 2
+local mst = Instance.new("UIStroke",main)
+mst.Color = Color3.fromRGB(60,120,255)
+mst.Thickness = 2
 
--- TITLE BAR
+-- Title bar
 local titleBar = Instance.new("Frame",main)
-titleBar.Size = UDim2.new(1,0,0,42)
-titleBar.BackgroundColor3 = Color3.fromRGB(25,25,35)
+titleBar.Size = UDim2.new(1,0,0,44)
+titleBar.BackgroundColor3 = Color3.fromRGB(20,20,30)
 titleBar.BorderSizePixel = 0
 Instance.new("UICorner",titleBar).CornerRadius = UDim.new(0,16)
 local tbp = Instance.new("Frame",titleBar)
 tbp.Size = UDim2.new(1,0,0.5,0)
 tbp.Position = UDim2.new(0,0,0.5,0)
-tbp.BackgroundColor3 = Color3.fromRGB(25,25,35)
+tbp.BackgroundColor3 = Color3.fromRGB(20,20,30)
 tbp.BorderSizePixel = 0
 
 local titleLbl = Instance.new("TextLabel",titleBar)
 titleLbl.Size = UDim2.new(1,-46,1,0)
 titleLbl.Position = UDim2.new(0,14,0,0)
 titleLbl.BackgroundTransparency = 1
-titleLbl.Text = "⚡ NoxarHub"
-titleLbl.TextColor3 = Color3.fromRGB(180,100,255)
+titleLbl.Text = "🏝️ Island Teleport"
+titleLbl.TextColor3 = Color3.fromRGB(100,160,255)
 titleLbl.Font = Enum.Font.GothamBold
-titleLbl.TextSize = 17
+titleLbl.TextSize = 16
 titleLbl.TextXAlignment = Enum.TextXAlignment.Left
 
 local closeBtn = Instance.new("TextButton",titleBar)
-closeBtn.Size = UDim2.new(0,26,0,26)
-closeBtn.Position = UDim2.new(1,-34,0.5,-13)
+closeBtn.Size = UDim2.new(0,28,0,28)
+closeBtn.Position = UDim2.new(1,-34,0.5,-14)
 closeBtn.BackgroundColor3 = Color3.fromRGB(200,50,50)
 closeBtn.Text = "✕"
 closeBtn.TextColor3 = Color3.fromRGB(255,255,255)
 closeBtn.Font = Enum.Font.GothamBold
-closeBtn.TextSize = 12
+closeBtn.TextSize = 13
 closeBtn.BorderSizePixel = 0
-Instance.new("UICorner",closeBtn).CornerRadius = UDim.new(0,7)
+Instance.new("UICorner",closeBtn).CornerRadius = UDim.new(0,8)
 
 closeBtn.MouseButton1Click:Connect(function()
-    main.Visible = false; iconBtn.Visible = true
+    main.Visible=false; iconBtn.Visible=true
 end)
 iconBtn.MouseButton1Click:Connect(function()
-    main.Visible = true; iconBtn.Visible = false
+    main.Visible=true; iconBtn.Visible=false
 end)
 
--- TAB BAR
-local tabBar = Instance.new("Frame",main)
-tabBar.Size = UDim2.new(1,-14,0,30)
-tabBar.Position = UDim2.new(0,7,0,46)
-tabBar.BackgroundTransparency = 1
-local tbl = Instance.new("UIListLayout",tabBar)
-tbl.FillDirection = Enum.FillDirection.Horizontal
-tbl.Padding = UDim.new(0,4)
+-- Manual drag on title bar
+local dragging,dragStart,startPos = false,nil,nil
+titleBar.InputBegan:Connect(function(i)
+    if i.UserInputType==Enum.UserInputType.Touch or
+       i.UserInputType==Enum.UserInputType.MouseButton1 then
+        dragging=true; dragStart=i.Position; startPos=main.Position
+    end
+end)
+titleBar.InputChanged:Connect(function(i)
+    if dragging and (i.UserInputType==Enum.UserInputType.Touch or
+       i.UserInputType==Enum.UserInputType.MouseMovement) then
+        local delta = i.Position - dragStart
+        main.Position = UDim2.new(
+            startPos.X.Scale, startPos.X.Offset + delta.X,
+            startPos.Y.Scale, startPos.Y.Offset + delta.Y
+        )
+    end
+end)
+titleBar.InputEnded:Connect(function(i)
+    if i.UserInputType==Enum.UserInputType.Touch or
+       i.UserInputType==Enum.UserInputType.MouseButton1 then
+        dragging=false
+    end
+end)
 
-local pages,tabBtns = {},{}
+-- Content
+local content = Instance.new("ScrollingFrame",main)
+content.Size = UDim2.new(1,-16,1,-52)
+content.Position = UDim2.new(0,8,0,50)
+content.BackgroundTransparency = 1
+content.BorderSizePixel = 0
+content.ScrollBarThickness = 3
+content.ScrollBarImageColor3 = Color3.fromRGB(60,120,255)
+content.CanvasSize = UDim2.new(0,0,0,0)
+content.AutomaticCanvasSize = Enum.AutomaticSize.Y
 
-local function createTab(name,icon)
-    local tb = Instance.new("TextButton",tabBar)
-    tb.Size = UDim2.new(0,50,1,0)
-    tb.BackgroundColor3 = Color3.fromRGB(30,30,45)
-    tb.Text = icon.." "..name
-    tb.TextColor3 = Color3.fromRGB(150,150,170)
-    tb.Font = Enum.Font.GothamBold
-    tb.TextSize = 9
-    tb.BorderSizePixel = 0
-    Instance.new("UICorner",tb).CornerRadius = UDim.new(0,9)
+local layout = Instance.new("UIListLayout",content)
+layout.Padding = UDim.new(0,8)
+layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+layout.SortOrder = Enum.SortOrder.LayoutOrder
 
-    local pg = Instance.new("ScrollingFrame",main)
-    pg.Size = UDim2.new(1,-14,1,-82)
-    pg.Position = UDim2.new(0,7,0,80)
-    pg.BackgroundTransparency = 1
-    pg.BorderSizePixel = 0
-    pg.ScrollBarThickness = 2
-    pg.ScrollBarImageColor3 = Color3.fromRGB(120,60,255)
-    pg.CanvasSize = UDim2.new(0,0,0,0)
-    pg.AutomaticCanvasSize = Enum.AutomaticSize.Y
-    pg.Visible = false
-    local pgl = Instance.new("UIListLayout",pg)
-    pgl.Padding = UDim.new(0,6)
-    pgl.HorizontalAlignment = Enum.HorizontalAlignment.Center
-    pgl.SortOrder = Enum.SortOrder.LayoutOrder
-    local pgp = Instance.new("UIPadding",pg)
-    pgp.PaddingTop = UDim.new(0,4)
-    pgp.PaddingBottom = UDim.new(0,8)
-
-    pages[name] = pg; tabBtns[name] = tb
-    tb.MouseButton1Click:Connect(function()
-        for n,p in pairs(pages) do
-            p.Visible = false
-            tabBtns[n].BackgroundColor3 = Color3.fromRGB(30,30,45)
-            tabBtns[n].TextColor3 = Color3.fromRGB(150,150,170)
-        end
-        pg.Visible = true
-        tb.BackgroundColor3 = Color3.fromRGB(120,60,255)
-        tb.TextColor3 = Color3.fromRGB(255,255,255)
-    end)
-    return pg
-end
-
-local tpPage   = createTab("TP","🚀")
-local rbPage   = createTab("RB","♻️")
-local basePage = createTab("Base","🏗️")
-local sellPage = createTab("Sell","💰")
-local miscPage = createTab("Misc","🔧")
-
-pages["TP"].Visible = true
-tabBtns["TP"].BackgroundColor3 = Color3.fromRGB(120,60,255)
-tabBtns["TP"].TextColor3 = Color3.fromRGB(255,255,255)
-
--- HELPERS
-local order = 0
-local function nextOrder() order=order+1; return order end
-
-local function makeToggle(parent,offT,onT,offC,onC,cb)
-    local btn = Instance.new("TextButton",parent)
-    btn.Size = UDim2.new(1,0,0,42)
-    btn.BackgroundColor3 = offC
-    btn.Text = offT
+for _, island in ipairs(islands) do
+    local name, pos = island[1], island[2]
+    local btn = Instance.new("TextButton",content)
+    btn.Size = UDim2.new(1,0,0,44)
+    btn.BackgroundColor3 = Color3.fromRGB(30,30,45)
+    btn.Text = name
     btn.TextColor3 = Color3.fromRGB(255,255,255)
     btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 13
+    btn.TextSize = 14
     btn.BorderSizePixel = 0
-    btn.LayoutOrder = nextOrder()
     Instance.new("UICorner",btn).CornerRadius = UDim.new(0,11)
-    local tog = false
+
     btn.MouseButton1Click:Connect(function()
-        tog = not tog
-        btn.BackgroundColor3 = tog and onC or offC
-        btn.Text = tog and onT or offT
-        cb(tog)
-    end)
-    return btn
-end
-
-local function makeStatus(parent)
-    local l = Instance.new("TextLabel",parent)
-    l.Size = UDim2.new(1,0,0,14)
-    l.BackgroundTransparency = 1
-    l.Text = ""
-    l.TextColor3 = Color3.fromRGB(130,130,140)
-    l.Font = Enum.Font.Gotham
-    l.TextSize = 10
-    l.LayoutOrder = nextOrder()
-    return l
-end
-
-local function makeSectionLbl(parent,txt)
-    local l = Instance.new("TextLabel",parent)
-    l.Size = UDim2.new(1,0,0,14)
-    l.BackgroundTransparency = 1
-    l.Text = txt
-    l.TextColor3 = Color3.fromRGB(130,80,220)
-    l.Font = Enum.Font.GothamBold
-    l.TextSize = 10
-    l.TextXAlignment = Enum.TextXAlignment.Left
-    l.LayoutOrder = nextOrder()
-    return l
-end
-
-local function makeDelayRow(parent,lbl,def,onChange)
-    local row = Instance.new("Frame",parent)
-    row.Size = UDim2.new(1,0,0,34)
-    row.BackgroundColor3 = Color3.fromRGB(25,25,38)
-    row.BorderSizePixel = 0
-    row.LayoutOrder = nextOrder()
-    Instance.new("UICorner",row).CornerRadius = UDim.new(0,9)
-    local ll = Instance.new("TextLabel",row)
-    ll.Size = UDim2.new(0.6,0,1,0)
-    ll.Position = UDim2.new(0,8,0,0)
-    ll.BackgroundTransparency = 1
-    ll.Text = lbl
-    ll.TextColor3 = Color3.fromRGB(200,200,210)
-    ll.Font = Enum.Font.Gotham
-    ll.TextSize = 11
-    ll.TextXAlignment = Enum.TextXAlignment.Left
-    local box = Instance.new("TextBox",row)
-    box.Size = UDim2.new(0.3,0,0,24)
-    box.Position = UDim2.new(0.67,0,0.5,-12)
-    box.BackgroundColor3 = Color3.fromRGB(40,40,60)
-    box.Text = tostring(def)
-    box.TextColor3 = Color3.fromRGB(255,255,255)
-    box.Font = Enum.Font.GothamBold
-    box.TextSize = 12
-    box.BorderSizePixel = 0
-    box.ClearTextOnFocus = false
-    Instance.new("UICorner",box).CornerRadius = UDim.new(0,7)
-    box.FocusLost:Connect(function()
-        local v = tonumber(box.Text)
-        if v then onChange(v) else box.Text = tostring(def) end
+        local c = player.Character
+        local r = c and c:FindFirstChild("HumanoidRootPart")
+        if r then
+            r.CFrame = CFrame.new(pos)
+            btn.BackgroundColor3 = Color3.fromRGB(60,160,80)
+            task.wait(0.3)
+            btn.BackgroundColor3 = Color3.fromRGB(30,30,45)
+        end
     end)
 end
 
--- ══════════════════════════════
--- TELEPORT TAB
--- ══════════════════════════════
-order = 0
-makeToggle(tpPage,
-    "🚀 Auto Teleport: OFF","🚀 Auto Teleport: ON",
-    Color3.fromRGB(40,40,60),Color3.fromRGB(80,40,160),
-    function(on)
-        teleportRunning = on
-        if on then
-            task.spawn(function()
-                while teleportRunning do
-                    root.CFrame = CFrame.new(targetPos)
-                    task.wait(tpSecondWait)
-                    if not teleportRunning then break end
-                    root.CFrame = CFrame.new(targetPos)
-                    task.wait(tpStayWait)
-                    if not teleportRunning then break end
-                    root.CFrame = CFrame.new(startPos)
-                    task.wait(tpReturnWait)
-                end
-            end)
-        end
-    end
-)
-makeStatus(tpPage)
-makeSectionLbl(tpPage,"Delays (seconds)")
-makeDelayRow(tpPage,"Double tap gap",  tpSecondWait, function(v) tpSecondWait=v end)
-makeDelayRow(tpPage,"Stay at target",  tpStayWait,   function(v) tpStayWait=v end)
-makeDelayRow(tpPage,"Wait at start",   tpReturnWait, function(v) tpReturnWait=v end)
-
--- ══════════════════════════════
--- REBIRTH TAB
--- ══════════════════════════════
-order = 0
-makeToggle(rbPage,
-    "♻️ Auto Rebirth: OFF","♻️ Auto Rebirth: ON",
-    Color3.fromRGB(40,40,60),Color3.fromRGB(30,130,80),
-    function(on)
-        rebirthRunning = on
-        if on then
-            task.spawn(function()
-                while rebirthRunning do
-                    local t = tick()+rbBurstTime
-                    while rebirthRunning and tick()<t do
-                        ReplicatedStorage.Events.RequestRebirth:FireServer()
-                        task.wait(rbFireRate)
-                    end
-                    if not rebirthRunning then break end
-                    task.wait(rbRestTime)
-                end
-            end)
-        end
-    end
-)
-makeStatus(rbPage)
-makeSectionLbl(rbPage,"Delays (seconds)")
-makeDelayRow(rbPage,"Fire rate",      rbFireRate,  function(v) rbFireRate=v end)
-makeDelayRow(rbPage,"Burst duration", rbBurstTime, function(v) rbBurstTime=v end)
-makeDelayRow(rbPage,"Rest duration",  rbRestTime,  function(v) rbRestTime=v end)
-
--- ══════════════════════════════
--- BASE TAB
--- ══════════════════════════════
-order = 0
-
-local function fireUpgrades()
-    for _,floor in ipairs(floors) do
-        if floorSel[floor] then
-            for slot=1,10 do
-                if slotSel[slot] then
-                    local f,s = floor,"Slot"..slot
-                    task.spawn(function()
-                        ReplicatedStorage.Events.RequestSlotUpgrade:FireServer(f,s)
-                    end)
-                end
-            end
-        end
-    end
-end
-
-local modeRow = Instance.new("Frame",basePage)
-modeRow.Size = UDim2.new(1,0,0,32)
-modeRow.BackgroundColor3 = Color3.fromRGB(25,25,38)
-modeRow.BorderSizePixel = 0
-modeRow.LayoutOrder = nextOrder()
-Instance.new("UICorner",modeRow).CornerRadius = UDim.new(0,10)
-local mrl = Instance.new("UIListLayout",modeRow)
-mrl.FillDirection = Enum.FillDirection.Horizontal
-mrl.HorizontalAlignment = Enum.HorizontalAlignment.Center
-mrl.VerticalAlignment = Enum.VerticalAlignment.Center
-mrl.Padding = UDim.new(0,4)
-local mrp = Instance.new("UIPadding",modeRow)
-mrp.PaddingLeft = UDim.new(0,5)
-mrp.PaddingRight = UDim.new(0,5)
-
-local allModeBtn = Instance.new("TextButton",modeRow)
-allModeBtn.Size = UDim2.new(0.48,0,0,24)
-allModeBtn.BackgroundColor3 = Color3.fromRGB(120,60,255)
-allModeBtn.Text = "ALL"
-allModeBtn.TextColor3 = Color3.fromRGB(255,255,255)
-allModeBtn.Font = Enum.Font.GothamBold
-allModeBtn.TextSize = 12
-allModeBtn.BorderSizePixel = 0
-Instance.new("UICorner",allModeBtn).CornerRadius = UDim.new(0,8)
-
-local specificModeBtn = Instance.new("TextButton",modeRow)
-specificModeBtn.Size = UDim2.new(0.48,0,0,24)
-specificModeBtn.BackgroundColor3 = Color3.fromRGB(35,35,50)
-specificModeBtn.Text = "Specific ▼"
-specificModeBtn.TextColor3 = Color3.fromRGB(180,180,190)
-specificModeBtn.Font = Enum.Font.GothamBold
-specificModeBtn.TextSize = 12
-specificModeBtn.BorderSizePixel = 0
-Instance.new("UICorner",specificModeBtn).CornerRadius = UDim.new(0,8)
-
-local specificPanel = Instance.new("Frame",basePage)
-specificPanel.Size = UDim2.new(1,0,0,0)
-specificPanel.BackgroundColor3 = Color3.fromRGB(22,22,32)
-specificPanel.BorderSizePixel = 0
-specificPanel.ClipsDescendants = true
-specificPanel.Visible = false
-specificPanel.LayoutOrder = nextOrder()
-Instance.new("UICorner",specificPanel).CornerRadius = UDim.new(0,10)
-
-local spLayout = Instance.new("UIListLayout",specificPanel)
-spLayout.Padding = UDim.new(0,5)
-spLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-spLayout.SortOrder = Enum.SortOrder.LayoutOrder
-local spPad = Instance.new("UIPadding",specificPanel)
-spPad.PaddingTop = UDim.new(0,6)
-spPad.PaddingBottom = UDim.new(0,6)
-spPad.PaddingLeft = UDim.new(0,6)
-spPad.PaddingRight = UDim.new(0,6)
-
-local floorLbl = Instance.new("TextLabel",specificPanel)
-floorLbl.Size = UDim2.new(1,0,0,14)
-floorLbl.BackgroundTransparency = 1
-floorLbl.Text = "Floors"
-floorLbl.TextColor3 = Color3.fromRGB(130,80,220)
-floorLbl.Font = Enum.Font.GothamBold
-floorLbl.TextSize = 10
-floorLbl.TextXAlignment = Enum.TextXAlignment.Left
-floorLbl.LayoutOrder = 1
-
-local floorChipRow = Instance.new("Frame",specificPanel)
-floorChipRow.Size = UDim2.new(1,0,0,28)
-floorChipRow.BackgroundTransparency = 1
-floorChipRow.LayoutOrder = 2
-local fcrl = Instance.new("UIListLayout",floorChipRow)
-fcrl.FillDirection = Enum.FillDirection.Horizontal
-fcrl.Padding = UDim.new(0,5)
-
-local slotLbl = Instance.new("TextLabel",specificPanel)
-slotLbl.Size = UDim2.new(1,0,0,14)
-slotLbl.BackgroundTransparency = 1
-slotLbl.Text = "Slots"
-slotLbl.TextColor3 = Color3.fromRGB(130,80,220)
-slotLbl.Font = Enum.Font.GothamBold
-slotLbl.TextSize = 10
-slotLbl.TextXAlignment = Enum.TextXAlignment.Left
-slotLbl.LayoutOrder = 3
-
-local slotChipGrid = Instance.new("Frame",specificPanel)
-slotChipGrid.Size = UDim2.new(1,0,0,68)
-slotChipGrid.BackgroundTransparency = 1
-slotChipGrid.LayoutOrder = 4
-local scg = Instance.new("UIGridLayout",slotChipGrid)
-scg.CellSize = UDim2.new(0,38,0,28)
-scg.CellPadding = UDim2.new(0,5,0,5)
-scg.HorizontalAlignment = Enum.HorizontalAlignment.Center
-
-local function makeChip(parent,txt,isOn,onChange)
-    local btn = Instance.new("TextButton",parent)
-    btn.Size = UDim2.new(0,50,1,0)
-    btn.BackgroundColor3 = isOn and Color3.fromRGB(120,60,255) or Color3.fromRGB(40,40,58)
-    btn.Text = txt
-    btn.TextColor3 = Color3.fromRGB(255,255,255)
-    btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 11
-    btn.BorderSizePixel = 0
-    Instance.new("UICorner",btn).CornerRadius = UDim.new(0,7)
-    local on = isOn
-    btn.MouseButton1Click:Connect(function()
-        on = not on
-        btn.BackgroundColor3 = on and Color3.fromRGB(120,60,255) or Color3.fromRGB(40,40,58)
-        onChange(on)
-    end)
-    return btn
-end
-
-for _,f in ipairs(floors) do
-    makeChip(floorChipRow,f:gsub("Floor","F"),false,function(v) floorSel[f]=v end)
-end
-
-for i=1,10 do
-    slotSel[i] = false
-    local b = Instance.new("TextButton",slotChipGrid)
-    b.BackgroundColor3 = Color3.fromRGB(40,40,58)
-    b.Text = "S"..i
-    b.TextColor3 = Color3.fromRGB(255,255,255)
-    b.Font = Enum.Font.GothamBold
-    b.TextSize = 11
-    b.BorderSizePixel = 0
-    Instance.new("UICorner",b).CornerRadius = UDim.new(0,7)
-    local on = false
-    b.MouseButton1Click:Connect(function()
-        on = not on
-        b.BackgroundColor3 = on and Color3.fromRGB(120,60,255) or Color3.fromRGB(40,40,58)
-        slotSel[i]=on
-    end)
-end
-
-local specificOpen = false
-specificModeBtn.MouseButton1Click:Connect(function()
-    specificOpen = not specificOpen
-    if specificOpen then
-        specificPanel.Visible = true
-        specificPanel.Size = UDim2.new(1,0,0,145)
-        specificModeBtn.Text = "Specific ▲"
-        specificModeBtn.BackgroundColor3 = Color3.fromRGB(120,60,255)
-        specificModeBtn.TextColor3 = Color3.fromRGB(255,255,255)
-        allModeBtn.BackgroundColor3 = Color3.fromRGB(35,35,50)
-        allModeBtn.TextColor3 = Color3.fromRGB(180,180,190)
-    else
-        specificPanel.Visible = false
-        specificModeBtn.Text = "Specific ▼"
-        specificModeBtn.BackgroundColor3 = Color3.fromRGB(35,35,50)
-        specificModeBtn.TextColor3 = Color3.fromRGB(180,180,190)
-    end
-end)
-
-allModeBtn.MouseButton1Click:Connect(function()
-    specificOpen = false
-    specificPanel.Visible = false
-    specificModeBtn.Text = "Specific ▼"
-    specificModeBtn.BackgroundColor3 = Color3.fromRGB(35,35,50)
-    specificModeBtn.TextColor3 = Color3.fromRGB(180,180,190)
-    allModeBtn.BackgroundColor3 = Color3.fromRGB(120,60,255)
-    allModeBtn.TextColor3 = Color3.fromRGB(255,255,255)
-    for _,f in ipairs(floors) do floorSel[f]=true end
-    for i=1,10 do slotSel[i]=true end
-end)
-
-makeToggle(basePage,
-    "🏗️ Auto Upgrade: OFF","🏗️ Auto Upgrade: ON",
-    Color3.fromRGB(40,40,60),Color3.fromRGB(160,100,20),
-    function(on)
-        upgradeRunning = on
-        if on then
-            task.spawn(function()
-                while upgradeRunning do
-                    local t = tick()+upBurstTime
-                    while upgradeRunning and tick()<t do
-                        fireUpgrades()
-                        task.wait(0.1)
-                    end
-                    if not upgradeRunning then break end
-                    task.wait(upRestTime)
-                end
-            end)
-        end
-    end
-)
-makeStatus(basePage)
-makeSectionLbl(basePage,"Delays (seconds)")
-makeDelayRow(basePage,"Burst duration",upBurstTime,function(v) upBurstTime=v end)
-makeDelayRow(basePage,"Rest duration", upRestTime, function(v) upRestTime=v end)
-
--- ══════════════════════════════
--- SELL TAB
--- ══════════════════════════════
-order = 0
-
-local rarities = {"Common","Uncommon","Rare","Epic","Legendary","Mythical","Godly","Secret"}
-local rarityColors = {
-    ["Common"]   = Color3.fromRGB(180,180,180),
-    ["Uncommon"] = Color3.fromRGB(100,220,100),
-    ["Rare"]     = Color3.fromRGB(80,120,255),
-    ["Epic"]     = Color3.fromRGB(160,60,255),
-    ["Legendary"]= Color3.fromRGB(255,160,30),
-    ["Mythical"] = Color3.fromRGB(255,60,120),
-    ["Godly"]    = Color3.fromRGB(255,50,50),
-    ["Secret"]   = Color3.fromRGB(60,60,60),
-}
-
-local autoSellRunning = false
-local autoSellConnection = nil
-
-local sellStatusLbl = Instance.new("TextLabel", sellPage)
-sellStatusLbl.Size = UDim2.new(1,0,0,20)
-sellStatusLbl.BackgroundTransparency = 1
-sellStatusLbl.Text = "Select rarities then use Sell Now or Auto Sell"
-sellStatusLbl.TextColor3 = Color3.fromRGB(130,130,140)
-sellStatusLbl.Font = Enum.Font.Gotham
-sellStatusLbl.TextSize = 10
-sellStatusLbl.LayoutOrder = nextOrder()
-
--- COLLAPSIBLE RARITY PANEL
-local rarityHeader = Instance.new("TextButton", sellPage)
-rarityHeader.Size = UDim2.new(1,0,0,32)
-rarityHeader.BackgroundColor3 = Color3.fromRGB(25,25,38)
-rarityHeader.Text = "🎯 Rarity Filter  ▼"
-rarityHeader.TextColor3 = Color3.fromRGB(180,100,255)
-rarityHeader.Font = Enum.Font.GothamBold
-rarityHeader.TextSize = 12
-rarityHeader.BorderSizePixel = 0
-rarityHeader.LayoutOrder = nextOrder()
-Instance.new("UICorner", rarityHeader).CornerRadius = UDim.new(0,9)
-
-local rarityPanel = Instance.new("Frame", sellPage)
-rarityPanel.Size = UDim2.new(1,0,0,0)
-rarityPanel.BackgroundColor3 = Color3.fromRGB(20,20,30)
-rarityPanel.BorderSizePixel = 0
-rarityPanel.ClipsDescendants = true
-rarityPanel.Visible = false
-rarityPanel.LayoutOrder = nextOrder()
-Instance.new("UICorner", rarityPanel).CornerRadius = UDim.new(0,9)
-
-local rarityLayout = Instance.new("UIListLayout", rarityPanel)
-rarityLayout.Padding = UDim.new(0,4)
-rarityLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-rarityLayout.SortOrder = Enum.SortOrder.LayoutOrder
-local rarityPad = Instance.new("UIPadding", rarityPanel)
-rarityPad.PaddingTop = UDim.new(0,6)
-rarityPad.PaddingBottom = UDim.new(0,6)
-rarityPad.PaddingLeft = UDim.new(0,6)
-rarityPad.PaddingRight = UDim.new(0,6)
-
-local rarityPanelOpen = false
-local RARITY_ROW_HEIGHT = 30
-local RARITY_PANEL_HEIGHT = (#rarities * (RARITY_ROW_HEIGHT + 4)) + 16
-
-rarityHeader.MouseButton1Click:Connect(function()
-    rarityPanelOpen = not rarityPanelOpen
-    if rarityPanelOpen then
-        rarityPanel.Visible = true
-        rarityPanel.Size = UDim2.new(1,0,0,RARITY_PANEL_HEIGHT)
-        rarityHeader.Text = "🎯 Rarity Filter  ▲"
-    else
-        rarityPanel.Visible = false
-        rarityPanel.Size = UDim2.new(1,0,0,0)
-        rarityHeader.Text = "🎯 Rarity Filter  ▼"
-    end
-end)
-
-for i, rarity in ipairs(rarities) do
-    local row = Instance.new("Frame", rarityPanel)
-    row.Size = UDim2.new(1,0,0,RARITY_ROW_HEIGHT)
-    row.BackgroundColor3 = Color3.fromRGB(28,28,40)
-    row.BorderSizePixel = 0
-    row.LayoutOrder = i
-    Instance.new("UICorner", row).CornerRadius = UDim.new(0,8)
-
-    local label = Instance.new("TextLabel", row)
-    label.Size = UDim2.new(0.55,0,1,0)
-    label.Position = UDim2.new(0,10,0,0)
-    label.BackgroundTransparency = 1
-    label.Text = rarity
-    label.TextColor3 = rarityColors[rarity]
-    label.TextSize = 12
-    label.Font = Enum.Font.GothamBold
-    label.TextXAlignment = Enum.TextXAlignment.Left
-
-    local btn = Instance.new("TextButton", row)
-    btn.Size = UDim2.new(0,90,0,22)
-    btn.Position = UDim2.new(1,-98,0.5,-11)
-    btn.BorderSizePixel = 0
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0,6)
-
-    if rarity == "Secret" then
-        btn.BackgroundColor3 = Color3.fromRGB(40,40,40)
-        btn.Text = "🔒 LOCKED"
-        btn.TextColor3 = Color3.fromRGB(100,100,100)
-        btn.TextSize = 10
-        btn.Font = Enum.Font.GothamBold
-        btn.Active = false
-    else
-        btn.BackgroundColor3 = Color3.fromRGB(50,50,60)
-        btn.Text = "OFF"
-        btn.TextColor3 = Color3.fromRGB(180,180,180)
-        btn.TextSize = 11
-        btn.Font = Enum.Font.GothamBold
-        btn.MouseButton1Click:Connect(function()
-            SELL_RARITIES[rarity] = not SELL_RARITIES[rarity]
-            if SELL_RARITIES[rarity] then
-                btn.Text = "✓ SELL"
-                btn.BackgroundColor3 = Color3.fromRGB(200,50,50)
-                btn.TextColor3 = Color3.fromRGB(255,255,255)
-            else
-                btn.Text = "OFF"
-                btn.BackgroundColor3 = Color3.fromRGB(50,50,60)
-                btn.TextColor3 = Color3.fromRGB(180,180,180)
-            end
-        end)
-    end
-end
-
-makeSectionLbl(sellPage, "Sell delay (seconds)")
-makeDelayRow(sellPage, "Delay between sells", SELL_DELAY, function(v) SELL_DELAY = v end)
-
-local function getSellMenu()
-    local ok, result = pcall(function()
-        return player.PlayerGui.GUI.Frames.Sell.ShopContainer.ScrollingFrame
-    end)
-    if ok then return result end
-    return nil
-end
-
-local function trySellItem(item)
-    if not (item:IsA("Frame") or item:IsA("ImageButton") or item:IsA("TextButton")) then return end
-    local rarityLabel = item:FindFirstChild("Rarity", true)
-    if rarityLabel and rarityLabel:IsA("TextLabel") then
-        local rarity = rarityLabel.Text
-        if SELL_RARITIES[rarity] then
-            pcall(function()
-                RequestSell:FireServer("Single", item.Name)
-            end)
-            sellStatusLbl.Text = "⚡ Auto sold: " .. rarity .. " (" .. item.Name:sub(1,8) .. "...)"
-            return true
-        end
-    end
-    return false
-end
-
--- SELL NOW button
-local sellNowBtn = Instance.new("TextButton", sellPage)
-sellNowBtn.Size = UDim2.new(1,0,0,38)
-sellNowBtn.BackgroundColor3 = Color3.fromRGB(60,60,80)
-sellNowBtn.Text = "💰  SELL NOW"
-sellNowBtn.TextColor3 = Color3.fromRGB(255,255,255)
-sellNowBtn.TextSize = 13
-sellNowBtn.Font = Enum.Font.GothamBold
-sellNowBtn.BorderSizePixel = 0
-sellNowBtn.LayoutOrder = nextOrder()
-Instance.new("UICorner", sellNowBtn).CornerRadius = UDim.new(0,11)
-
-sellNowBtn.MouseButton1Click:Connect(function()
-    if sellRunning then return end
-    local scrolling = getSellMenu()
-    if not scrolling then
-        sellStatusLbl.Text = "❌ Open the Sell menu first!"
-        return
-    end
-    sellRunning = true
-    sellNowBtn.Text = "Selling..."
-    sellNowBtn.BackgroundColor3 = Color3.fromRGB(40,40,60)
-    task.spawn(function()
-        local sold = 0
-        for _, item in ipairs(scrolling:GetChildren()) do
-            if not sellRunning then break end
-            if trySellItem(item) then
-                sold += 1
-                task.wait(SELL_DELAY)
-            end
-        end
-        sellStatusLbl.Text = "✅ Done! Sold " .. sold .. " items."
-        sellRunning = false
-        sellNowBtn.Text = "💰  SELL NOW"
-        sellNowBtn.BackgroundColor3 = Color3.fromRGB(60,60,80)
-    end)
-end)
-
--- AUTO SELL toggle
-local autoSellBtn = Instance.new("TextButton", sellPage)
-autoSellBtn.Size = UDim2.new(1,0,0,38)
-autoSellBtn.BackgroundColor3 = Color3.fromRGB(40,40,60)
-autoSellBtn.Text = "🤖  AUTO SELL: OFF"
-autoSellBtn.TextColor3 = Color3.fromRGB(255,255,255)
-autoSellBtn.TextSize = 13
-autoSellBtn.Font = Enum.Font.GothamBold
-autoSellBtn.BorderSizePixel = 0
-autoSellBtn.LayoutOrder = nextOrder()
-Instance.new("UICorner", autoSellBtn).CornerRadius = UDim.new(0,11)
-
-autoSellBtn.MouseButton1Click:Connect(function()
-    autoSellRunning = not autoSellRunning
-
-    if autoSellRunning then
-        autoSellBtn.Text = "🤖  AUTO SELL: ON"
-        autoSellBtn.BackgroundColor3 = Color3.fromRGB(180,40,40)
-        sellStatusLbl.Text = "👀 Watching for items..."
-
-        -- First sell anything already in the menu
-        local scrolling = getSellMenu()
-        if scrolling then
-            for _, item in ipairs(scrolling:GetChildren()) do
-                if trySellItem(item) then
-                    task.wait(SELL_DELAY)
-                end
-            end
-            -- Then watch for new items added
-            autoSellConnection = scrolling.ChildAdded:Connect(function(item)
-                if not autoSellRunning then return end
-                task.wait(0.2) -- wait for rarity label to populate
-                if trySellItem(item) then
-                    task.wait(SELL_DELAY)
-                end
-            end)
-        else
-            sellStatusLbl.Text = "❌ Open the Sell menu first!"
-            autoSellRunning = false
-            autoSellBtn.Text = "🤖  AUTO SELL: OFF"
-            autoSellBtn.BackgroundColor3 = Color3.fromRGB(40,40,60)
-        end
-    else
-        autoSellBtn.Text = "🤖  AUTO SELL: OFF"
-        autoSellBtn.BackgroundColor3 = Color3.fromRGB(40,40,60)
-        sellStatusLbl.Text = "⏹ Auto sell stopped."
-        if autoSellConnection then
-            autoSellConnection:Disconnect()
-            autoSellConnection = nil
-        end
-    end
-end)
-
--- ══════════════════════════════
--- MISC TAB
--- ══════════════════════════════
-order = 0
-makeToggle(miscPage,
-    "🏠 Go to Start","🏠 Go to Start",
-    Color3.fromRGB(40,60,40),Color3.fromRGB(40,60,40),
-    function() root.CFrame = CFrame.new(startPos) end
-)
+print("Island Teleport GUI loaded!")
