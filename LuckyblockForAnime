@@ -1,164 +1,318 @@
 local Players = game:GetService("Players")
-local player = Players.LocalPlayer
-local char = player.Character or player.CharacterAdded:Wait()
-local root = char:WaitForChild("HumanoidRootPart")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
 
-local islands = {
-    {"Starter Island",   Vector3.new(255, -120, -42)},
-    {"Volcano",          Vector3.new(148, -119, -1002)},
-    {"Frost Isle",       Vector3.new(-2137, -119, -935)},
-    {"Neverland",        Vector3.new(2824, -125, 1640)},
-    {"Duneveil Isle",    Vector3.new(731, -122, -3158)},
-    {"Tideland",         Vector3.new(-2994, -124, 2233)},
-    {"Spirit Grove",     Vector3.new(-3023, -125, 1444)},
-    {"Dragon's Breath",  Vector3.new(2396, -122, -205)},
-    {"Blossom Haven",    Vector3.new(-5843, -121, 245)},
-    {"Mobius Circus",    Vector3.new(457, -120, 3114)},
-    {"Specter Shallows", Vector3.new(6033, -124, -844)},
-}
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
-local old = player.PlayerGui:FindFirstChild("IslandTeleportGui")
-if old then old:Destroy() end
+local DataPullFunc = ReplicatedStorage:WaitForChild("CommonLibrary")
+    :WaitForChild("Tool")
+    :WaitForChild("RemoteManager")
+    :WaitForChild("Funcs")
+    :WaitForChild("DataPullFunc")
 
-local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "IslandTeleportGui"
-screenGui.ResetOnSpawn = false
-screenGui.Parent = player.PlayerGui
+-- CLAIM FUNCTIONS
+local function claimAll()
+    local ok1 = pcall(function()
+        DataPullFunc:InvokeServer("TowerTakeDailyRewardAllChannel")
+    end)
+    local ok2 = pcall(function()
+        DataPullFunc:InvokeServer("ChestRewardTakeDailyChestChannel", 1)
+    end)
+    local ok3 = pcall(function()
+        DataPullFunc:InvokeServer("TaskClaimRewardChannel", 205)
+    end)
+    local ok4 = pcall(function()
+        DataPullFunc:InvokeServer("TaskClaimRewardChannel", 102)
+    end)
+    local ok5 = pcall(function()
+        DataPullFunc:InvokeServer("ChestRewardTakeDailyRewardChannel", 1)
+    end)
+    return ok1 and ok2 and ok3 and ok4 and ok5
+end
 
--- Floating icon
-local iconBtn = Instance.new("TextButton")
-iconBtn.Size = UDim2.new(0,50,0,50)
-iconBtn.Position = UDim2.new(0,16,0.5,0)
-iconBtn.BackgroundColor3 = Color3.fromRGB(60,120,255)
-iconBtn.Text = "🏝️"
-iconBtn.TextSize = 22
-iconBtn.Font = Enum.Font.GothamBold
-iconBtn.BorderSizePixel = 0
-iconBtn.Active = true
-iconBtn.Draggable = true
-iconBtn.Parent = screenGui
-Instance.new("UICorner",iconBtn).CornerRadius = UDim.new(1,0)
-local ics = Instance.new("UIStroke",iconBtn)
-ics.Color = Color3.fromRGB(120,170,255)
-ics.Thickness = 2
+local function getSecondsUntilReset()
+    local t = os.date("!*t")
+    local now = t.hour * 3600 + t.min * 60 + t.sec
+    local diff = 86400 - now
+    if diff <= 30 then diff = diff + 86400 end
+    return diff
+end
 
--- Main panel
-local main = Instance.new("Frame")
-main.Size = UDim2.new(0,280,0,420)
-main.Position = UDim2.new(0.5,-140,0.5,-210)
-main.BackgroundColor3 = Color3.fromRGB(15,15,22)
-main.BorderSizePixel = 0
-main.Active = true
-main.Visible = false
-main.Parent = screenGui
-Instance.new("UICorner",main).CornerRadius = UDim.new(0,16)
-local mst = Instance.new("UIStroke",main)
-mst.Color = Color3.fromRGB(60,120,255)
-mst.Thickness = 2
+local function formatTime(s)
+    local h = math.floor(s / 3600)
+    local m = math.floor((s % 3600) / 60)
+    local sec = math.floor(s % 60)
+    return string.format("%02d:%02d:%02d", h, m, sec)
+end
 
--- Title bar
-local titleBar = Instance.new("Frame",main)
-titleBar.Size = UDim2.new(1,0,0,44)
-titleBar.BackgroundColor3 = Color3.fromRGB(20,20,30)
-titleBar.BorderSizePixel = 0
-Instance.new("UICorner",titleBar).CornerRadius = UDim.new(0,16)
-local tbp = Instance.new("Frame",titleBar)
-tbp.Size = UDim2.new(1,0,0.5,0)
-tbp.Position = UDim2.new(0,0,0.5,0)
-tbp.BackgroundColor3 = Color3.fromRGB(20,20,30)
-tbp.BorderSizePixel = 0
+-- GUI
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "DailyRewardGui"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent = PlayerGui
 
-local titleLbl = Instance.new("TextLabel",titleBar)
-titleLbl.Size = UDim2.new(1,-46,1,0)
-titleLbl.Position = UDim2.new(0,14,0,0)
-titleLbl.BackgroundTransparency = 1
-titleLbl.Text = "🏝️ Island Teleport"
-titleLbl.TextColor3 = Color3.fromRGB(100,160,255)
-titleLbl.Font = Enum.Font.GothamBold
-titleLbl.TextSize = 16
-titleLbl.TextXAlignment = Enum.TextXAlignment.Left
+local Main = Instance.new("Frame")
+Main.Name = "Main"
+Main.Size = UDim2.new(0, 280, 0, 200)
+Main.Position = UDim2.new(0.5, -140, 0.5, -100)
+Main.BackgroundColor3 = Color3.fromRGB(12, 8, 18)
+Main.BorderSizePixel = 0
+Main.ClipsDescendants = true
+Main.Parent = ScreenGui
+Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 12)
 
-local closeBtn = Instance.new("TextButton",titleBar)
-closeBtn.Size = UDim2.new(0,28,0,28)
-closeBtn.Position = UDim2.new(1,-34,0.5,-14)
-closeBtn.BackgroundColor3 = Color3.fromRGB(200,50,50)
-closeBtn.Text = "✕"
-closeBtn.TextColor3 = Color3.fromRGB(255,255,255)
-closeBtn.Font = Enum.Font.GothamBold
-closeBtn.TextSize = 13
-closeBtn.BorderSizePixel = 0
-Instance.new("UICorner",closeBtn).CornerRadius = UDim.new(0,8)
+local Stroke = Instance.new("UIStroke", Main)
+Stroke.Color = Color3.fromRGB(120, 0, 160)
+Stroke.Thickness = 1.5
 
-closeBtn.MouseButton1Click:Connect(function()
-    main.Visible=false; iconBtn.Visible=true
-end)
-iconBtn.MouseButton1Click:Connect(function()
-    main.Visible=true; iconBtn.Visible=false
-end)
+local TitleBar = Instance.new("Frame")
+TitleBar.Size = UDim2.new(1, 0, 0, 36)
+TitleBar.BackgroundColor3 = Color3.fromRGB(25, 8, 35)
+TitleBar.BorderSizePixel = 0
+TitleBar.Parent = Main
+Instance.new("UICorner", TitleBar).CornerRadius = UDim.new(0, 12)
 
--- Manual drag on title bar
-local dragging,dragStart,startPos = false,nil,nil
-titleBar.InputBegan:Connect(function(i)
-    if i.UserInputType==Enum.UserInputType.Touch or
-       i.UserInputType==Enum.UserInputType.MouseButton1 then
-        dragging=true; dragStart=i.Position; startPos=main.Position
+local TitleFix = Instance.new("Frame")
+TitleFix.Size = UDim2.new(1, 0, 0.5, 0)
+TitleFix.Position = UDim2.new(0, 0, 0.5, 0)
+TitleFix.BackgroundColor3 = Color3.fromRGB(25, 8, 35)
+TitleFix.BorderSizePixel = 0
+TitleFix.Parent = TitleBar
+
+local TitleLabel = Instance.new("TextLabel")
+TitleLabel.Size = UDim2.new(1, -80, 1, 0)
+TitleLabel.Position = UDim2.new(0, 12, 0, 0)
+TitleLabel.BackgroundTransparency = 1
+TitleLabel.Text = "⚔ Daily Reward Auto Claimer"
+TitleLabel.TextColor3 = Color3.fromRGB(200, 150, 255)
+TitleLabel.TextSize = 12
+TitleLabel.Font = Enum.Font.GothamBold
+TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+TitleLabel.Parent = TitleBar
+
+local MinBtn = Instance.new("TextButton")
+MinBtn.Size = UDim2.new(0, 28, 0, 22)
+MinBtn.Position = UDim2.new(1, -62, 0.5, -11)
+MinBtn.BackgroundColor3 = Color3.fromRGB(40, 20, 55)
+MinBtn.Text = "—"
+MinBtn.TextColor3 = Color3.fromRGB(200, 150, 255)
+MinBtn.TextSize = 14
+MinBtn.Font = Enum.Font.GothamBold
+MinBtn.BorderSizePixel = 0
+MinBtn.Parent = TitleBar
+Instance.new("UICorner", MinBtn).CornerRadius = UDim.new(0, 6)
+
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Size = UDim2.new(0, 28, 0, 22)
+CloseBtn.Position = UDim2.new(1, -30, 0.5, -11)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(80, 20, 20)
+CloseBtn.Text = "✕"
+CloseBtn.TextColor3 = Color3.fromRGB(255, 100, 100)
+CloseBtn.TextSize = 14
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.BorderSizePixel = 0
+CloseBtn.Parent = TitleBar
+Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 6)
+
+local Body = Instance.new("Frame")
+Body.Name = "Body"
+Body.Size = UDim2.new(1, 0, 1, -36)
+Body.Position = UDim2.new(0, 0, 0, 36)
+Body.BackgroundTransparency = 1
+Body.Parent = Main
+
+local StatusLabel = Instance.new("TextLabel")
+StatusLabel.Size = UDim2.new(1, -20, 0, 20)
+StatusLabel.Position = UDim2.new(0, 10, 0, 10)
+StatusLabel.BackgroundTransparency = 1
+StatusLabel.Text = "Status: Idle"
+StatusLabel.TextColor3 = Color3.fromRGB(160, 160, 160)
+StatusLabel.TextSize = 12
+StatusLabel.Font = Enum.Font.Gotham
+StatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+StatusLabel.Parent = Body
+
+local TimerLabel = Instance.new("TextLabel")
+TimerLabel.Size = UDim2.new(1, -20, 0, 20)
+TimerLabel.Position = UDim2.new(0, 10, 0, 34)
+TimerLabel.BackgroundTransparency = 1
+TimerLabel.Text = "Next Reset: --:--:--"
+TimerLabel.TextColor3 = Color3.fromRGB(120, 80, 180)
+TimerLabel.TextSize = 12
+TimerLabel.Font = Enum.Font.GothamBold
+TimerLabel.TextXAlignment = Enum.TextXAlignment.Left
+TimerLabel.Parent = Body
+
+local LastLabel = Instance.new("TextLabel")
+LastLabel.Size = UDim2.new(1, -20, 0, 20)
+LastLabel.Position = UDim2.new(0, 10, 0, 58)
+LastLabel.BackgroundTransparency = 1
+LastLabel.Text = "Last Claim: Never"
+LastLabel.TextColor3 = Color3.fromRGB(120, 120, 120)
+LastLabel.TextSize = 11
+LastLabel.Font = Enum.Font.Gotham
+LastLabel.TextXAlignment = Enum.TextXAlignment.Left
+LastLabel.Parent = Body
+
+local ToggleBtn = Instance.new("TextButton")
+ToggleBtn.Size = UDim2.new(1, -20, 0, 36)
+ToggleBtn.Position = UDim2.new(0, 10, 0, 90)
+ToggleBtn.BackgroundColor3 = Color3.fromRGB(30, 130, 60)
+ToggleBtn.Text = "● AUTO CLAIM: ON"
+ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleBtn.TextSize = 13
+ToggleBtn.Font = Enum.Font.GothamBold
+ToggleBtn.BorderSizePixel = 0
+ToggleBtn.Parent = Body
+Instance.new("UICorner", ToggleBtn).CornerRadius = UDim.new(0, 8)
+
+local ClaimNowBtn = Instance.new("TextButton")
+ClaimNowBtn.Size = UDim2.new(1, -20, 0, 32)
+ClaimNowBtn.Position = UDim2.new(0, 10, 0, 136)
+ClaimNowBtn.BackgroundColor3 = Color3.fromRGB(80, 0, 120)
+ClaimNowBtn.Text = "⚡ Claim Now"
+ClaimNowBtn.TextColor3 = Color3.fromRGB(220, 180, 255)
+ClaimNowBtn.TextSize = 13
+ClaimNowBtn.Font = Enum.Font.GothamBold
+ClaimNowBtn.BorderSizePixel = 0
+ClaimNowBtn.Parent = Body
+Instance.new("UICorner", ClaimNowBtn).CornerRadius = UDim.new(0, 8)
+Instance.new("UIStroke", ClaimNowBtn).Color = Color3.fromRGB(120, 0, 160)
+
+-- STATE
+local autoEnabled = true
+local minimized = false
+local normalSize = UDim2.new(0, 280, 0, 200)
+local miniSize = UDim2.new(0, 280, 0, 36)
+
+-- TOGGLE
+ToggleBtn.MouseButton1Click:Connect(function()
+    autoEnabled = not autoEnabled
+    if autoEnabled then
+        ToggleBtn.BackgroundColor3 = Color3.fromRGB(30, 130, 60)
+        ToggleBtn.Text = "● AUTO CLAIM: ON"
+        StatusLabel.Text = "Status: Waiting for reset..."
+        StatusLabel.TextColor3 = Color3.fromRGB(100, 200, 100)
+    else
+        ToggleBtn.BackgroundColor3 = Color3.fromRGB(100, 30, 30)
+        ToggleBtn.Text = "● AUTO CLAIM: OFF"
+        StatusLabel.Text = "Status: Disabled"
+        StatusLabel.TextColor3 = Color3.fromRGB(160, 160, 160)
     end
 end)
-titleBar.InputChanged:Connect(function(i)
-    if dragging and (i.UserInputType==Enum.UserInputType.Touch or
-       i.UserInputType==Enum.UserInputType.MouseMovement) then
-        local delta = i.Position - dragStart
-        main.Position = UDim2.new(
+
+-- CLAIM NOW
+ClaimNowBtn.MouseButton1Click:Connect(function()
+    ClaimNowBtn.Text = "Claiming..."
+    ClaimNowBtn.BackgroundColor3 = Color3.fromRGB(50, 0, 80)
+    local ok = claimAll()
+    if ok then
+        StatusLabel.Text = "Status: Claimed!"
+        StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 150)
+        LastLabel.Text = "Last Claim: " .. os.date("%H:%M:%S")
+        ClaimNowBtn.Text = "✓ Claimed!"
+        ClaimNowBtn.BackgroundColor3 = Color3.fromRGB(20, 100, 50)
+    else
+        StatusLabel.Text = "Status: Failed!"
+        StatusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
+        ClaimNowBtn.Text = "✕ Failed"
+        ClaimNowBtn.BackgroundColor3 = Color3.fromRGB(100, 20, 20)
+    end
+    task.wait(2)
+    ClaimNowBtn.Text = "⚡ Claim Now"
+    ClaimNowBtn.BackgroundColor3 = Color3.fromRGB(80, 0, 120)
+end)
+
+-- MINIMIZE
+MinBtn.MouseButton1Click:Connect(function()
+    minimized = not minimized
+    TweenService:Create(Main, TweenInfo.new(0.3), {
+        Size = minimized and miniSize or normalSize
+    }):Play()
+    MinBtn.Text = minimized and "▢" or "—"
+    Body.Visible = not minimized
+end)
+
+-- CLOSE
+CloseBtn.MouseButton1Click:Connect(function()
+    ScreenGui:Destroy()
+end)
+
+-- DRAG
+local dragging, dragStart, startPos
+TitleBar.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch or
+       input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        dragStart = input.Position
+        startPos = Main.Position
+    end
+end)
+
+game:GetService("UserInputService").InputChanged:Connect(function(input)
+    if dragging and (input.UserInputType == Enum.UserInputType.Touch or
+       input.UserInputType == Enum.UserInputType.MouseMovement) then
+        local delta = input.Position - dragStart
+        Main.Position = UDim2.new(
             startPos.X.Scale, startPos.X.Offset + delta.X,
             startPos.Y.Scale, startPos.Y.Offset + delta.Y
         )
     end
 end)
-titleBar.InputEnded:Connect(function(i)
-    if i.UserInputType==Enum.UserInputType.Touch or
-       i.UserInputType==Enum.UserInputType.MouseButton1 then
-        dragging=false
+
+game:GetService("UserInputService").InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch or
+       input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = false
     end
 end)
 
--- Content
-local content = Instance.new("ScrollingFrame",main)
-content.Size = UDim2.new(1,-16,1,-52)
-content.Position = UDim2.new(0,8,0,50)
-content.BackgroundTransparency = 1
-content.BorderSizePixel = 0
-content.ScrollBarThickness = 3
-content.ScrollBarImageColor3 = Color3.fromRGB(60,120,255)
-content.CanvasSize = UDim2.new(0,0,0,0)
-content.AutomaticCanvasSize = Enum.AutomaticSize.Y
+-- TIMER LOOP
+task.spawn(function()
+    while task.wait(1) do
+        local secs = getSecondsUntilReset()
+        TimerLabel.Text = "Next Reset: " .. formatTime(secs)
+    end
+end)
 
-local layout = Instance.new("UIListLayout",content)
-layout.Padding = UDim.new(0,8)
-layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-layout.SortOrder = Enum.SortOrder.LayoutOrder
-
-for _, island in ipairs(islands) do
-    local name, pos = island[1], island[2]
-    local btn = Instance.new("TextButton",content)
-    btn.Size = UDim2.new(1,0,0,44)
-    btn.BackgroundColor3 = Color3.fromRGB(30,30,45)
-    btn.Text = name
-    btn.TextColor3 = Color3.fromRGB(255,255,255)
-    btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 14
-    btn.BorderSizePixel = 0
-    Instance.new("UICorner",btn).CornerRadius = UDim.new(0,11)
-
-    btn.MouseButton1Click:Connect(function()
-        local c = player.Character
-        local r = c and c:FindFirstChild("HumanoidRootPart")
-        if r then
-            r.CFrame = CFrame.new(pos)
-            btn.BackgroundColor3 = Color3.fromRGB(60,160,80)
-            task.wait(0.3)
-            btn.BackgroundColor3 = Color3.fromRGB(30,30,45)
+-- AUTO CLAIM LOOP
+task.spawn(function()
+    task.wait(2)
+    if autoEnabled then
+        StatusLabel.Text = "Status: Claiming..."
+        StatusLabel.TextColor3 = Color3.fromRGB(255, 220, 50)
+        local ok = claimAll()
+        if ok then
+            StatusLabel.Text = "Status: Claimed!"
+            StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 150)
+            LastLabel.Text = "Last Claim: " .. os.date("%H:%M:%S")
+        else
+            StatusLabel.Text = "Status: Failed"
+            StatusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
         end
-    end)
-end
+    end
 
-print("Island Teleport GUI loaded!")
+    while true do
+        local secs = getSecondsUntilReset()
+        task.wait(secs + 30)
+        if autoEnabled then
+            StatusLabel.Text = "Status: Claiming..."
+            StatusLabel.TextColor3 = Color3.fromRGB(255, 220, 50)
+            local ok = claimAll()
+            if ok then
+                StatusLabel.Text = "Status: Claimed!"
+                StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 150)
+                LastLabel.Text = "Last Claim: " .. os.date("%H:%M:%S")
+            else
+                StatusLabel.Text = "Status: Failed - retrying..."
+                StatusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
+                task.wait(30)
+                claimAll()
+            end
+        end
+    end
+end)
+
+print("Daily Reward GUI loaded!")
