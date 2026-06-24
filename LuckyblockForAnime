@@ -20,15 +20,21 @@ local function claimAll()
         DataPullFunc:InvokeServer("ChestRewardTakeDailyChestChannel", 1)
     end)
     local ok3 = pcall(function()
-        DataPullFunc:InvokeServer("TaskClaimRewardChannel", 205)
-    end)
-    local ok4 = pcall(function()
-        DataPullFunc:InvokeServer("TaskClaimRewardChannel", 102)
-    end)
-    local ok5 = pcall(function()
         DataPullFunc:InvokeServer("ChestRewardTakeDailyRewardChannel", 1)
     end)
-    return ok1 and ok2 and ok3 and ok4 and ok5
+    for _, id in ipairs({101, 102, 103, 104, 105}) do
+        pcall(function()
+            DataPullFunc:InvokeServer("TaskClaimRewardChannel", id)
+        end)
+        task.wait(0.1)
+    end
+    for _, id in ipairs({201, 202, 203, 204, 205}) do
+        pcall(function()
+            DataPullFunc:InvokeServer("TaskClaimRewardChannel", id)
+        end)
+        task.wait(0.1)
+    end
+    return ok1 and ok2 and ok3
 end
 
 local function getSecondsUntilReset()
