@@ -51,31 +51,45 @@ local function collectEgg(egg, statusLbl)
     task.wait(COLLECT_DELAY)
 end
 
+local MIN_EGGS = 4  -- minimum eggs before starting a collect run
+
+local function returnToSaved(statusLbl)
+    if savedPos then
+        statusLbl.Text = "🏠 Returning to saved pos..."
+        teleportTo(savedPos)
+    end
+end
+
 local function startCollecting(statusLbl)
     local myId = runId
     local total = 0
     while running and runId == myId do
         local eggs = getFireEggs()
-        if #eggs == 0 then
-            statusLbl.Text = "🔍 No fire eggs found\nWaiting..."
+
+        if #eggs < MIN_EGGS then
+            -- Not enough eggs yet — return to saved pos and wait
+            returnToSaved(statusLbl)
+            statusLbl.Text = "⏳ "..#eggs.."/"..MIN_EGGS.." eggs...\nWaiting for more..."
             task.wait(LOOP_DELAY)
             continue
         end
+
+        -- Enough eggs — go collect them all
         for _, egg in ipairs(eggs) do
             if not running or runId ~= myId then break end
             collectEgg(egg, statusLbl)
             total += 1
         end
+
         if running and runId == myId then
-            -- TP back to saved position after each loop
-            if savedPos then
-                statusLbl.Text = "🏠 Returning to saved pos..."
-                teleportTo(savedPos)
-            end
+            -- Always return after collecting
+            returnToSaved(statusLbl)
             statusLbl.Text = "♻️ Loop done! Total: "..total.."\nWaiting "..LOOP_DELAY.."s..."
             task.wait(LOOP_DELAY)
         end
     end
+    -- Return to saved pos when stopped too
+    returnToSaved(statusLbl)
     statusLbl.Text = "Stopped. Total collected: "..total
 end
 
