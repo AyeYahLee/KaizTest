@@ -1,0 +1,196 @@
+local Players = game:GetService("Players")
+local RS = game:GetService("ReplicatedStorage")
+local LP = Players.LocalPlayer
+
+local DataPullFunc = RS.CommonLibrary.Tool.RemoteManager.Funcs.DataPullFunc
+local AreaPickUp = workspace:WaitForChild("AreaPickUp")
+
+local FIRE_EGG_TMPL = 201   -- TmplId for fire eggs
+local COLLECT_DELAY = 0.2   -- delay between each collect
+local LOOP_DELAY = 2        -- delay before looping again
+local TP_OFFSET = Vector3.new(0, 3, 0)
+
+local running = false
+local runId = 0
+
+-- ── Helpers ───────────────────────────────────────────────────────────────────
+local function teleportTo(pos)
+    local char = LP.Character
+    if not char then return end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    root.CFrame = CFrame.new(pos + TP_OFFSET)
+    task.wait(0.1)
+end
+
+local function getFireEggs()
+    local eggs = {}
+    for _, part in ipairs(AreaPickUp:GetChildren()) do
+        if part:IsA("BasePart") then
+            local tmpl = part:GetAttribute("TmplId")
+            if tmpl == FIRE_EGG_TMPL then
+                local id = tonumber(part.Name)
+                if id then
+                    table.insert(eggs, {id = id, pos = part.Position, part = part})
+                end
+            end
+        end
+    end
+    return eggs
+end
+
+local function collectEgg(egg, statusLbl)
+    -- TP to egg
+    teleportTo(egg.pos)
+    -- Fire remote
+    local ok, err = pcall(function()
+        DataPullFunc:InvokeServer("AreaPickUpChannel", egg.id)
+    end)
+    if statusLbl then
+        statusLbl.Text = (ok and "✅" or "❌").." ID: "..egg.id
+    end
+    task.wait(COLLECT_DELAY)
+end
+
+local function startCollecting(statusLbl)
+    local myId = runId
+    local total = 0
+    while running and runId == myId do
+        local eggs = getFireEggs()
+        if #eggs == 0 then
+            statusLbl.Text = "🔍 No fire eggs found\nWaiting..."
+            task.wait(LOOP_DELAY)
+            continue
+        end
+        for _, egg in ipairs(eggs) do
+            if not running or runId ~= myId then break end
+            collectEgg(egg, statusLbl)
+            total += 1
+        end
+        if running and runId == myId then
+            statusLbl.Text = "♻️ Loop done! Total: "..total.."\nWaiting "..LOOP_DELAY.."s..."
+            task.wait(LOOP_DELAY)
+        end
+    end
+    statusLbl.Text = "Stopped. Total collected: "..total
+end
+
+-- ── GUI ───────────────────────────────────────────────────────────────────────
+local UIS = game:GetService("UserInputService")
+
+local old = LP.PlayerGui:FindFirstChild("FireEggGui")
+if old then old:Destroy() end
+
+local sg = Instance.new("ScreenGui")
+sg.Name = "FireEggGui"; sg.ResetOnSpawn = false; sg.Parent = LP.PlayerGui
+
+local frame = Instance.new("Frame", sg)
+frame.Size = UDim2.new(0, 220, 0, 180)
+frame.Position = UDim2.new(0.5, -110, 0, 100)
+frame.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+frame.BorderSizePixel = 0
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 12)
+
+-- Drag
+local dragging, dragStart, dragOrigin = false, nil, nil
+frame.InputBegan:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true; dragStart = i.Position; dragOrigin = frame.Position end end)
+frame.InputEnded:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = false end end)
+UIS.InputChanged:Connect(function(i)
+    if dragging and (i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseMovement) then
+        local d = i.Position - dragStart
+        frame.Position = UDim2.new(dragOrigin.X.Scale, dragOrigin.X.Offset + d.X, dragOrigin.Y.Scale, dragOrigin.Y.Offset + d.Y)
+    end end)
+
+local title = Instance.new("TextLabel", frame)
+title.Size = UDim2.new(1, 0, 0, 32)
+title.BackgroundTransparency = 1
+title.Text = "🔥 Auto Fire Eggs"
+title.TextColor3 = Color3.fromRGB(255, 160, 50)
+title.Font = Enum.Font.GothamBold
+title.TextSize = 14
+
+-- Egg count label
+local countLbl = Instance.new("TextLabel", frame)
+countLbl.Size = UDim2.new(1, -16, 0, 24)
+countLbl.Position = UDim2.new(0, 8, 0, 34)
+countLbl.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+countLbl.BorderSizePixel = 0
+countLbl.TextColor3 = Color3.fromRGB(180, 180, 180)
+countLbl.Font = Enum.Font.Gotham
+countLbl.TextSize = 11
+countLbl.Text = "Fire eggs: "..#getFireEggs()
+Instance.new("UICorner", countLbl).CornerRadius = UDim.new(0, 6)
+
+-- Refresh count every 2s
+task.spawn(function()
+    while task.wait(2) do
+        local n = #getFireEggs()
+        countLbl.Text = "Fire eggs found: "..n
+    end
+end)
+
+-- Status
+local statusLbl = Instance.new("TextLabel", frame)
+statusLbl.Size = UDim2.new(1, -16, 0, 50)
+statusLbl.Position = UDim2.new(0, 8, 0, 64)
+statusLbl.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+statusLbl.BorderSizePixel = 0
+statusLbl.Text = "Press Start to begin"
+statusLbl.TextColor3 = Color3.fromRGB(180, 255, 180)
+statusLbl.Font = Enum.Font.Gotham
+statusLbl.TextSize = 11
+statusLbl.TextWrapped = true
+Instance.new("UICorner", statusLbl).CornerRadius = UDim.new(0, 8)
+
+-- Delay row
+local delayRow = Instance.new("Frame", frame)
+delayRow.Size = UDim2.new(1, -16, 0, 26)
+delayRow.Position = UDim2.new(0, 8, 0, 120)
+delayRow.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+delayRow.BorderSizePixel = 0
+Instance.new("UICorner", delayRow).CornerRadius = UDim.new(0, 6)
+local dlbl = Instance.new("TextLabel", delayRow)
+dlbl.Size = UDim2.new(0.55, 0, 1, 0); dlbl.Position = UDim2.new(0, 8, 0, 0)
+dlbl.BackgroundTransparency = 1; dlbl.Text = "Loop delay (s):"
+dlbl.TextColor3 = Color3.fromRGB(150, 150, 150); dlbl.Font = Enum.Font.Gotham
+dlbl.TextSize = 10; dlbl.TextXAlignment = Enum.TextXAlignment.Left
+local dbox = Instance.new("TextBox", delayRow)
+dbox.Size = UDim2.new(0.35, 0, 0, 20); dbox.Position = UDim2.new(0.62, 0, 0.5, -10)
+dbox.BackgroundColor3 = Color3.fromRGB(40, 40, 40); dbox.Text = tostring(LOOP_DELAY)
+dbox.TextColor3 = Color3.fromRGB(255, 255, 255); dbox.Font = Enum.Font.GothamBold
+dbox.TextSize = 11; dbox.BorderSizePixel = 0; dbox.ClearTextOnFocus = false
+Instance.new("UICorner", dbox).CornerRadius = UDim.new(0, 4)
+dbox.FocusLost:Connect(function() LOOP_DELAY = tonumber(dbox.Text) or 2; dbox.Text = tostring(LOOP_DELAY) end)
+
+-- Start/Stop button
+local btn = Instance.new("TextButton", frame)
+btn.Size = UDim2.new(1, -16, 0, 36)
+btn.Position = UDim2.new(0, 8, 0, 152)
+btn.BackgroundColor3 = Color3.fromRGB(200, 80, 20)
+btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+btn.Font = Enum.Font.GothamBold
+btn.TextSize = 14
+btn.Text = "▶ Start"
+btn.BorderSizePixel = 0
+Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 10)
+
+btn.MouseButton1Click:Connect(function()
+    running = not running
+    if running then
+        runId += 1
+        btn.BackgroundColor3 = Color3.fromRGB(160, 30, 10)
+        btn.Text = "⏹ Stop"
+        statusLbl.Text = "Starting..."
+        task.spawn(function() startCollecting(statusLbl) end)
+    else
+        btn.BackgroundColor3 = Color3.fromRGB(200, 80, 20)
+        btn.Text = "▶ Start"
+        statusLbl.Text = "Stopping..."
+    end
+end)
+
+print("[FireEggs] Ready! Found "..#getFireEggs().." fire eggs.")
