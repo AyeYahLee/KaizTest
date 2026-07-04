@@ -5,13 +5,14 @@ local LP = Players.LocalPlayer
 local DataPullFunc = RS.CommonLibrary.Tool.RemoteManager.Funcs.DataPullFunc
 local AreaPickUp = workspace:WaitForChild("AreaPickUp")
 
-local FIRE_EGG_TMPL = 201   -- TmplId for fire eggs
-local COLLECT_DELAY = 0.2   -- delay between each collect
-local LOOP_DELAY = 2        -- delay before looping again
+local FIRE_EGG_TMPL = 201
+local COLLECT_DELAY = 0.2
+local LOOP_DELAY = 2
 local TP_OFFSET = Vector3.new(0, 3, 0)
 
 local running = false
 local runId = 0
+local savedPos = nil  -- saved return position
 
 -- ── Helpers ───────────────────────────────────────────────────────────────────
 local function teleportTo(pos)
@@ -40,10 +41,8 @@ local function getFireEggs()
 end
 
 local function collectEgg(egg, statusLbl)
-    -- TP to egg
     teleportTo(egg.pos)
-    -- Fire remote
-    local ok, err = pcall(function()
+    local ok = pcall(function()
         DataPullFunc:InvokeServer("AreaPickUpChannel", egg.id)
     end)
     if statusLbl then
@@ -68,6 +67,11 @@ local function startCollecting(statusLbl)
             total += 1
         end
         if running and runId == myId then
+            -- TP back to saved position after each loop
+            if savedPos then
+                statusLbl.Text = "🏠 Returning to saved pos..."
+                teleportTo(savedPos)
+            end
             statusLbl.Text = "♻️ Loop done! Total: "..total.."\nWaiting "..LOOP_DELAY.."s..."
             task.wait(LOOP_DELAY)
         end
@@ -85,7 +89,7 @@ local sg = Instance.new("ScreenGui")
 sg.Name = "FireEggGui"; sg.ResetOnSpawn = false; sg.Parent = LP.PlayerGui
 
 local frame = Instance.new("Frame", sg)
-frame.Size = UDim2.new(0, 220, 0, 180)
+frame.Size = UDim2.new(0, 220, 0, 220)
 frame.Position = UDim2.new(0.5, -110, 0, 100)
 frame.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
 frame.BorderSizePixel = 0
@@ -105,6 +109,7 @@ UIS.InputChanged:Connect(function(i)
         frame.Position = UDim2.new(dragOrigin.X.Scale, dragOrigin.X.Offset + d.X, dragOrigin.Y.Scale, dragOrigin.Y.Offset + d.Y)
     end end)
 
+-- Title
 local title = Instance.new("TextLabel", frame)
 title.Size = UDim2.new(1, 0, 0, 32)
 title.BackgroundTransparency = 1
@@ -113,7 +118,7 @@ title.TextColor3 = Color3.fromRGB(255, 160, 50)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 14
 
--- Egg count label
+-- Egg count
 local countLbl = Instance.new("TextLabel", frame)
 countLbl.Size = UDim2.new(1, -16, 0, 24)
 countLbl.Position = UDim2.new(0, 8, 0, 34)
@@ -122,20 +127,17 @@ countLbl.BorderSizePixel = 0
 countLbl.TextColor3 = Color3.fromRGB(180, 180, 180)
 countLbl.Font = Enum.Font.Gotham
 countLbl.TextSize = 11
-countLbl.Text = "Fire eggs: "..#getFireEggs()
+countLbl.Text = "Fire eggs found: "..#getFireEggs()
 Instance.new("UICorner", countLbl).CornerRadius = UDim.new(0, 6)
-
--- Refresh count every 2s
 task.spawn(function()
     while task.wait(2) do
-        local n = #getFireEggs()
-        countLbl.Text = "Fire eggs found: "..n
+        countLbl.Text = "Fire eggs found: "..#getFireEggs()
     end
 end)
 
 -- Status
 local statusLbl = Instance.new("TextLabel", frame)
-statusLbl.Size = UDim2.new(1, -16, 0, 50)
+statusLbl.Size = UDim2.new(1, -16, 0, 40)
 statusLbl.Position = UDim2.new(0, 8, 0, 64)
 statusLbl.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
 statusLbl.BorderSizePixel = 0
@@ -149,7 +151,7 @@ Instance.new("UICorner", statusLbl).CornerRadius = UDim.new(0, 8)
 -- Delay row
 local delayRow = Instance.new("Frame", frame)
 delayRow.Size = UDim2.new(1, -16, 0, 26)
-delayRow.Position = UDim2.new(0, 8, 0, 120)
+delayRow.Position = UDim2.new(0, 8, 0, 110)
 delayRow.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
 delayRow.BorderSizePixel = 0
 Instance.new("UICorner", delayRow).CornerRadius = UDim.new(0, 6)
@@ -166,10 +168,63 @@ dbox.TextSize = 11; dbox.BorderSizePixel = 0; dbox.ClearTextOnFocus = false
 Instance.new("UICorner", dbox).CornerRadius = UDim.new(0, 4)
 dbox.FocusLost:Connect(function() LOOP_DELAY = tonumber(dbox.Text) or 2; dbox.Text = tostring(LOOP_DELAY) end)
 
--- Start/Stop button
+-- Save position row (two buttons side by side)
+local savePosBtn = Instance.new("TextButton", frame)
+savePosBtn.Size = UDim2.new(0.58, -4, 0, 30)
+savePosBtn.Position = UDim2.new(0, 8, 0, 142)
+savePosBtn.BackgroundColor3 = Color3.fromRGB(40, 80, 160)
+savePosBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+savePosBtn.Font = Enum.Font.GothamBold
+savePosBtn.TextSize = 11
+savePosBtn.Text = "📍 Save Position"
+savePosBtn.BorderSizePixel = 0
+Instance.new("UICorner", savePosBtn).CornerRadius = UDim.new(0, 8)
+
+local clearPosBtn = Instance.new("TextButton", frame)
+clearPosBtn.Size = UDim2.new(0.42, -12, 0, 30)
+clearPosBtn.Position = UDim2.new(0.58, 4, 0, 142)
+clearPosBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+clearPosBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+clearPosBtn.Font = Enum.Font.GothamBold
+clearPosBtn.TextSize = 11
+clearPosBtn.Text = "❌ Clear"
+clearPosBtn.BorderSizePixel = 0
+Instance.new("UICorner", clearPosBtn).CornerRadius = UDim.new(0, 8)
+
+-- Saved pos label
+local posLbl = Instance.new("TextLabel", frame)
+posLbl.Size = UDim2.new(1, -16, 0, 20)
+posLbl.Position = UDim2.new(0, 8, 0, 176)
+posLbl.BackgroundTransparency = 1
+posLbl.Text = "No position saved"
+posLbl.TextColor3 = Color3.fromRGB(120, 120, 120)
+posLbl.Font = Enum.Font.Gotham
+posLbl.TextSize = 10
+posLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+savePosBtn.MouseButton1Click:Connect(function()
+    local char = LP.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if root then
+        savedPos = root.Position
+        posLbl.Text = string.format("📍 %.0f, %.0f, %.0f", savedPos.X, savedPos.Y, savedPos.Z)
+        posLbl.TextColor3 = Color3.fromRGB(100, 220, 100)
+        savePosBtn.BackgroundColor3 = Color3.fromRGB(30, 120, 60)
+        savePosBtn.Text = "📍 Saved!"
+        task.delay(1.5, function() savePosBtn.Text = "📍 Save Position"; savePosBtn.BackgroundColor3 = Color3.fromRGB(40, 80, 160) end)
+    end
+end)
+
+clearPosBtn.MouseButton1Click:Connect(function()
+    savedPos = nil
+    posLbl.Text = "No position saved"
+    posLbl.TextColor3 = Color3.fromRGB(120, 120, 120)
+end)
+
+-- Start/Stop
 local btn = Instance.new("TextButton", frame)
 btn.Size = UDim2.new(1, -16, 0, 36)
-btn.Position = UDim2.new(0, 8, 0, 152)
+btn.Position = UDim2.new(0, 8, 0, 180)
 btn.BackgroundColor3 = Color3.fromRGB(200, 80, 20)
 btn.TextColor3 = Color3.fromRGB(255, 255, 255)
 btn.Font = Enum.Font.GothamBold
