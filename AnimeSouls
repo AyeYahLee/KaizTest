@@ -1,0 +1,536 @@
+-- ══════════════════════════════════════════════════════════════════
+--  AutoFarm  –  Anime Souls
+-- ══════════════════════════════════════════════════════════════════
+
+local Players        = game:GetService("Players")
+local RunService     = game:GetService("RunService")
+
+local lp   = Players.LocalPlayer
+local char = lp.Character or lp.CharacterAdded:Wait()
+local root = char:WaitForChild("HumanoidRootPart")
+
+lp.CharacterAdded:Connect(function(c)
+    char = c
+    root = c:WaitForChild("HumanoidRootPart")
+end)
+
+-- ── State ─────────────────────────────────────────────────────────
+local farmRunning = false
+local farmThread  = nil
+local targetNames = {}
+
+-- ── Helpers ───────────────────────────────────────────────────────
+
+local function extractNameFromGui(gui)
+    local lastName = nil
+    for _, d in pairs(gui:GetDescendants()) do
+        if d:IsA("TextLabel") then
+            local t = d.Text
+            if t and t ~= "" and t ~= "PetName"
+                and not t:match("^Lv%.")
+                and not t:match("^%d")
+                and not t:match("%%")
+                and not t:match("^x ") then
+                lastName = t
+            end
+        end
+    end
+    return lastName
+end
+
+local function getMonsterName(m)
+    local guiFolder = workspace:FindFirstChild("SelfGUI")
+    if not guiFolder then return nil end
+    local gui = guiFolder:FindFirstChild(m.Name)
+    if not gui then return nil end
+    return extractNameFromGui(gui)
+end
+
+local function getHumanoid(m)
+    local shower = m:FindFirstChild("Shower")
+    if not shower then return nil end
+    return shower:FindFirstChildOfClass("Humanoid")
+end
+
+local function isAlive(m)
+    local hum = getHumanoid(m)
+    return hum and hum.Health > 0
+end
+
+local function getNearest()
+    local cm = workspace:FindFirstChild("ClientMonsters")
+    if not cm then return nil end
+    local nearest, nearDist = nil, math.huge
+    for _, m in pairs(cm:GetChildren()) do
+        if m:IsA("Model") then
+            local name = getMonsterName(m)
+            if name and targetNames[name:lower()] and isAlive(m) then
+                local r = m:FindFirstChild("Root")
+                if r then
+                    local d = (root.Position - r.Position).Magnitude
+                    if d < nearDist then
+                        nearest = m
+                        nearDist = d
+                    end
+                end
+            end
+        end
+    end
+    return nearest
+end
+
+local function tpTo(m)
+    local r = m:FindFirstChild("Root")
+    if r and root then
+        -- Teleport once, flat on same Y so no up/down shake
+        local pos = r.CFrame.Position
+        root.CFrame = CFrame.new(pos.X + 3, pos.Y, pos.Z)
+    end
+end
+
+-- ── Farm loop ─────────────────────────────────────────────────────
+-- No clicking needed — game has auto attack built in.
+-- We just teleport on top of the nearest alive target every frame.
+-- The moment it dies, getNearest() returns a different one instantly.
+local function farmLoop()
+    local lastTarget = nil
+    while farmRunning do
+        local target = getNearest()
+        if target then
+            -- Only teleport if target changed, avoids any jitter
+            if target ~= lastTarget then
+                tpTo(target)
+                lastTarget = target
+            end
+        else
+            lastTarget = nil
+        end
+        RunService.Heartbeat:Wait()
+    end
+end
+
+-- ══════════════════════════════════════════════════════════════════
+--  ANIME UI  — AutoFarm
+-- ══════════════════════════════════════════════════════════════════
+
+local TweenService = game:GetService("TweenService")
+
+-- Remove any existing GUI first to prevent duplicates
+local existingGui = (gethui and gethui() or game:GetService("CoreGui")):FindFirstChild("AutoFarmGui")
+if existingGui then existingGui:Destroy() end
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "AutoFarmGui"
+screenGui.ResetOnSpawn = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.IgnoreGuiInset = true
+screenGui.Parent = gethui and gethui() or game:GetService("CoreGui")
+
+-- ── Colours ───────────────────────────────────────────────────────
+local C = {
+    bg        = Color3.fromRGB(8,  6,  14),
+    bgMid     = Color3.fromRGB(16, 10, 28),
+    header1   = Color3.fromRGB(38, 10, 72),
+    header2   = Color3.fromRGB(12,  4, 30),
+    accent    = Color3.fromRGB(168, 85, 255),
+    accentDim = Color3.fromRGB(90,  30, 160),
+    glow      = Color3.fromRGB(200, 120, 255),
+    textMain  = Color3.fromRGB(235, 215, 255),
+    textDim   = Color3.fromRGB(150, 130, 175),
+    textLabel = Color3.fromRGB(185, 100, 255),
+    btnOff    = Color3.fromRGB(20,  13, 36),
+    btnOn     = Color3.fromRGB(55,  18, 100),
+    green     = Color3.fromRGB(80,  220, 130),
+    red       = Color3.fromRGB(220, 60,  80),
+    divider   = Color3.fromRGB(55,  30,  80),
+}
+
+local function corner(r, p) local c=Instance.new("UICorner",p); c.CornerRadius=UDim.new(0,r); return c end
+local function stroke(w, col, p) local s=Instance.new("UIStroke",p); s.Thickness=w; s.Color=col; return s end
+local function tween(obj, t, props) TweenService:Create(obj, TweenInfo.new(t, Enum.EasingStyle.Quad), props):Play() end
+
+-- ── Root frame ────────────────────────────────────────────────────
+local W, H = 270, 344
+local frame = Instance.new("Frame")
+frame.Size            = UDim2.new(0, W, 0, H)
+frame.Position        = UDim2.new(0.5, -W/2, 0.5, -H/2)
+frame.BackgroundColor3 = C.bg
+frame.BackgroundTransparency = 1
+frame.BorderSizePixel = 0
+frame.Active          = true
+frame.Draggable       = true
+frame.ClipsDescendants = true
+frame.Parent          = screenGui
+corner(14, frame)
+local outerGlow = stroke(2, C.accent, frame)
+outerGlow.Transparency = 1
+
+local frameScale = Instance.new("UIScale", frame)
+frameScale.Scale = 0.85
+
+-- Entrance animation: fade + scale in
+tween(frame, 0.35, {BackgroundTransparency = 0})
+tween(outerGlow, 0.35, {Transparency = 0})
+TweenService:Create(frameScale, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = 1}):Play()
+
+-- Pulsing glow animation on border
+task.spawn(function()
+    while frame.Parent do
+        tween(outerGlow, 1.4, {Color = C.glow, Thickness = 2.5})
+        task.wait(1.4)
+        tween(outerGlow, 1.4, {Color = C.accentDim, Thickness = 1.5})
+        task.wait(1.4)
+    end
+end)
+
+-- ── Header ────────────────────────────────────────────────────────
+local HEADER_H = 52
+local header = Instance.new("Frame")
+header.Size            = UDim2.new(1, 0, 0, HEADER_H)
+header.BackgroundColor3 = C.header1
+header.BorderSizePixel = 0
+header.Parent          = frame
+corner(14, header)
+-- fix bottom corners
+local hfix = Instance.new("Frame", header)
+hfix.Size = UDim2.new(1,0,0,14)
+hfix.Position = UDim2.new(0,0,1,-14)
+hfix.BackgroundColor3 = C.header1
+hfix.BorderSizePixel = 0
+
+-- Subtle bottom divider line under header
+local hline = Instance.new("Frame", frame)
+hline.Size = UDim2.new(1,0,0,1)
+hline.Position = UDim2.new(0,0,0,HEADER_H)
+hline.BackgroundColor3 = C.accent
+hline.BorderSizePixel = 0
+hline.BackgroundTransparency = 0.4
+
+-- Icon + title
+local icon = Instance.new("TextLabel", header)
+icon.Size = UDim2.new(0, 36, 0, 36)
+icon.Position = UDim2.new(0, 12, 0.5, -18)
+icon.BackgroundTransparency = 1
+icon.Text = "⚔"
+icon.TextColor3 = C.glow
+icon.Font = Enum.Font.GothamBold
+icon.TextSize = 22
+
+local title = Instance.new("TextLabel", header)
+title.Size = UDim2.new(1, -100, 1, 0)
+title.Position = UDim2.new(0, 46, 0, 0)
+title.BackgroundTransparency = 1
+title.Text = "AutoFarm"
+title.TextColor3 = C.textMain
+title.Font = Enum.Font.GothamBold
+title.TextSize = 17
+title.TextXAlignment = Enum.TextXAlignment.Left
+
+local subtitle = Instance.new("TextLabel", header)
+subtitle.Size = UDim2.new(1,-100,0,14)
+subtitle.Position = UDim2.new(0,46,1,-17)
+subtitle.BackgroundTransparency = 1
+subtitle.Text = "NoxarK"
+subtitle.TextColor3 = C.accentDim
+subtitle.Font = Enum.Font.Gotham
+subtitle.TextSize = 10
+subtitle.TextXAlignment = Enum.TextXAlignment.Left
+
+-- Minimize button
+local minimized = false
+local minBtn = Instance.new("TextButton", header)
+minBtn.Size = UDim2.new(0, 34, 0, 28)
+minBtn.Position = UDim2.new(1, -42, 0.5, -14)
+minBtn.BackgroundColor3 = C.accentDim
+minBtn.BorderSizePixel = 0
+minBtn.Text = "—"
+minBtn.TextColor3 = C.textMain
+minBtn.Font = Enum.Font.GothamBold
+minBtn.TextSize = 15
+corner(8, minBtn)
+
+local function setMinimized(state)
+    minimized = state
+    tween(frame, 0.25, {Size = UDim2.new(0, W, 0, state and HEADER_H or H)})
+    minBtn.Text = state and "▢" or "—"
+    hfix.Visible = not state
+end
+minBtn.MouseButton1Click:Connect(function() setMinimized(not minimized) end)
+
+-- ── Status pill ───────────────────────────────────────────────────
+local statusPill = Instance.new("Frame", frame)
+statusPill.Size = UDim2.new(1,-24,0,30)
+statusPill.Position = UDim2.new(0,12,0,HEADER_H+8)
+statusPill.BackgroundColor3 = C.bgMid
+statusPill.BorderSizePixel = 0
+corner(8, statusPill)
+stroke(1, C.divider, statusPill)
+
+local statusDot = Instance.new("Frame", statusPill)
+statusDot.Size = UDim2.new(0,8,0,8)
+statusDot.Position = UDim2.new(0,10,0.5,-4)
+statusDot.BackgroundColor3 = C.textDim
+statusDot.BorderSizePixel = 0
+corner(4, statusDot)
+
+local statusLbl = Instance.new("TextLabel", statusPill)
+statusLbl.Size = UDim2.new(1,-28,1,0)
+statusLbl.Position = UDim2.new(0,26,0,0)
+statusLbl.BackgroundTransparency = 1
+statusLbl.Text = "Stopped — select monsters below"
+statusLbl.TextColor3 = C.textDim
+statusLbl.Font = Enum.Font.Gotham
+statusLbl.TextSize = 11
+statusLbl.TextXAlignment = Enum.TextXAlignment.Left
+statusLbl.TextTruncate = Enum.TextTruncate.AtEnd
+
+local function setStatus(text, active)
+    statusLbl.Text = text
+    if active then
+        statusLbl.TextColor3 = C.green
+        tween(statusDot, 0.3, {BackgroundColor3 = C.green})
+    else
+        statusLbl.TextColor3 = C.textDim
+        tween(statusDot, 0.3, {BackgroundColor3 = C.textDim})
+    end
+end
+
+-- Uptime tracker
+local uptimeLbl = Instance.new("TextLabel", frame)
+uptimeLbl.Size = UDim2.new(1,-24,0,18)
+uptimeLbl.Position = UDim2.new(0,12,0,HEADER_H+42)
+uptimeLbl.BackgroundTransparency = 1
+uptimeLbl.Text = "⏱  Uptime: 00:00"
+uptimeLbl.TextColor3 = C.textDim
+uptimeLbl.Font = Enum.Font.Gotham
+uptimeLbl.TextSize = 11
+uptimeLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+local function formatUptime(seconds)
+    seconds = math.floor(seconds)
+    local h = math.floor(seconds / 3600)
+    local m = math.floor((seconds % 3600) / 60)
+    local s = seconds % 60
+    if h > 0 then
+        return string.format("%02d:%02d:%02d", h, m, s)
+    end
+    return string.format("%02d:%02d", m, s)
+end
+
+local scriptStartTime = tick()
+task.spawn(function()
+    while uptimeLbl.Parent do
+        uptimeLbl.Text = "⏱  Uptime: " .. formatUptime(tick() - scriptStartTime)
+        task.wait(1)
+    end
+end)
+
+-- ── Section label ─────────────────────────────────────────────────
+local sectionLbl = Instance.new("TextLabel", frame)
+sectionLbl.Size = UDim2.new(1,-24,0,16)
+sectionLbl.Position = UDim2.new(0,12,0,HEADER_H+64)
+sectionLbl.BackgroundTransparency = 1
+sectionLbl.Text = "▸  SELECT MONSTERS"
+sectionLbl.TextColor3 = C.textLabel
+sectionLbl.Font = Enum.Font.GothamBold
+sectionLbl.TextSize = 11
+sectionLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+-- ── Monster scroll list ───────────────────────────────────────────
+local scroll = Instance.new("ScrollingFrame", frame)
+scroll.Size = UDim2.new(1,-24,0,118)
+scroll.Position = UDim2.new(0,12,0,HEADER_H+84)
+scroll.BackgroundTransparency = 1
+scroll.BorderSizePixel = 0
+scroll.ScrollBarThickness = 2
+scroll.ScrollBarImageColor3 = C.accent
+scroll.CanvasSize = UDim2.new(0,0,0,0)
+scroll.ElasticBehavior = Enum.ElasticBehavior.Never
+local listLayout = Instance.new("UIListLayout", scroll)
+listLayout.Padding = UDim.new(0,5)
+
+local checkboxes = {}
+
+local function makeCheckbox(monName, index)
+    local btn = Instance.new("TextButton", scroll)
+    btn.Size = UDim2.new(1,0,0,30)
+    btn.BackgroundColor3 = C.btnOff
+    btn.BackgroundTransparency = 1
+    btn.BorderSizePixel = 0
+    btn.Font = Enum.Font.Gotham
+    btn.TextSize = 13
+    btn.TextColor3 = C.textDim
+    btn.TextTransparency = 1
+    btn.TextXAlignment = Enum.TextXAlignment.Left
+    btn.Text = "   ○  " .. monName
+    btn.LayoutOrder = index or 0
+    corner(8, btn)
+    local btnStroke = stroke(1, C.divider, btn)
+    btnStroke.Transparency = 1
+
+    -- Staggered fade-in as the list populates
+    task.delay((index or 1) * 0.045, function()
+        if not btn.Parent then return end
+        tween(btn, 0.2, {BackgroundTransparency = 0})
+        tween(btnStroke, 0.2, {Transparency = 0})
+        TweenService:Create(btn, TweenInfo.new(0.2), {TextTransparency = 0}):Play()
+    end)
+
+    local btnScale = Instance.new("UIScale", btn)
+
+    local sel = false
+    btn.MouseButton1Click:Connect(function()
+        sel = not sel
+        if sel then
+            targetNames[monName:lower()] = true
+            tween(btn, 0.15, {BackgroundColor3 = C.btnOn})
+            btn.TextColor3 = C.glow
+            btn.Text = "   ●  " .. monName
+        else
+            targetNames[monName:lower()] = nil
+            tween(btn, 0.15, {BackgroundColor3 = C.btnOff})
+            btn.TextColor3 = C.textDim
+            btn.Text = "   ○  " .. monName
+        end
+        TweenService:Create(btnScale, TweenInfo.new(0.08), {Scale = 0.96}):Play()
+        task.delay(0.08, function()
+            TweenService:Create(btnScale, TweenInfo.new(0.12, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = 1}):Play()
+        end)
+    end)
+    checkboxes[monName] = btn
+end
+
+-- ── Bottom buttons ────────────────────────────────────────────────
+local SCAN_Y  = HEADER_H + 210
+local START_Y = HEADER_H + 248
+
+local scanBtn = Instance.new("TextButton", frame)
+scanBtn.Size = UDim2.new(1,-24,0,30)
+scanBtn.Position = UDim2.new(0,12,0,SCAN_Y)
+scanBtn.BackgroundColor3 = C.bgMid
+scanBtn.BorderSizePixel = 0
+scanBtn.Font = Enum.Font.GothamBold
+scanBtn.TextSize = 12
+scanBtn.TextColor3 = C.accent
+scanBtn.Text = "🔍   Scan Monsters"
+corner(8, scanBtn)
+stroke(1, C.accentDim, scanBtn)
+
+local startBtn = Instance.new("TextButton", frame)
+startBtn.Size = UDim2.new(1,-24,0,34)
+startBtn.Position = UDim2.new(0,12,0,START_Y)
+startBtn.BackgroundColor3 = C.accentDim
+startBtn.BorderSizePixel = 0
+startBtn.Font = Enum.Font.GothamBold
+startBtn.TextSize = 14
+startBtn.TextColor3 = Color3.new(1,1,1)
+startBtn.Text = "▶   Start Farming"
+corner(10, startBtn)
+stroke(1.5, C.accent, startBtn)
+local startGrad = Instance.new("UIGradient", startBtn)
+startGrad.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(200, 130, 255)),
+    ColorSequenceKeypoint.new(1, C.accentDim),
+})
+startGrad.Rotation = 90
+
+local startScale = Instance.new("UIScale", startBtn)
+local scanScale = Instance.new("UIScale", scanBtn)
+
+-- Hover effects
+scanBtn.MouseEnter:Connect(function() tween(scanBtn,0.12,{BackgroundColor3=C.accentDim}) end)
+scanBtn.MouseLeave:Connect(function() tween(scanBtn,0.12,{BackgroundColor3=C.bgMid}) end)
+startBtn.MouseEnter:Connect(function() tween(startBtn,0.12,{BackgroundColor3=C.accent}) end)
+startBtn.MouseLeave:Connect(function()
+    tween(startBtn,0.12,{BackgroundColor3=farmRunning and C.red or C.accentDim})
+end)
+
+-- Press-down micro animation (tactile feedback)
+scanBtn.MouseButton1Down:Connect(function() tween(scanScale, 0.08, {Scale = 0.95}) end)
+scanBtn.MouseButton1Up:Connect(function() tween(scanScale, 0.12, {Scale = 1}) end)
+startBtn.MouseButton1Down:Connect(function() tween(startScale, 0.08, {Scale = 0.95}) end)
+startBtn.MouseButton1Up:Connect(function() tween(startScale, 0.12, {Scale = 1}) end)
+
+-- ── Scan logic ────────────────────────────────────────────────────
+local currentWorld = nil
+
+local function getWorldName()
+    -- Try to detect world from workspace area objects
+    local area = workspace:FindFirstChild("Area")
+    if area then return area.Name end
+    return tostring(workspace.DistributedGameTime) -- fallback unique value
+end
+
+local function scanMonsters()
+    for _, c in pairs(checkboxes) do c:Destroy() end
+    checkboxes = {}
+    targetNames = {}
+
+    local found = {}
+    local guiFolder = workspace:FindFirstChild("SelfGUI")
+    if guiFolder then
+        for _, gui in pairs(guiFolder:GetChildren()) do
+            local lastName = extractNameFromGui(gui)
+            if lastName and not found[lastName] then
+                found[lastName] = true
+            end
+        end
+    end
+
+    local names = {}
+    for n in pairs(found) do table.insert(names, n) end
+    table.sort(names)
+    for i, n in ipairs(names) do makeCheckbox(n, i) end
+    scroll.CanvasSize = UDim2.new(0,0,0,#names*35)
+
+    if #names > 0 then
+        setStatus("Found " .. #names .. " monster type(s)", false)
+    else
+        setStatus("No monsters — are you in a world?", false)
+    end
+
+    currentWorld = getWorldName()
+end
+
+-- Auto re-scan when world changes
+task.spawn(function()
+    while true do
+        task.wait(3)
+        local w = getWorldName()
+        if currentWorld and w ~= currentWorld then
+            scanMonsters()
+            setStatus("World changed — rescanned!", false)
+        end
+    end
+end)
+
+-- ── Start/Stop ────────────────────────────────────────────────────
+startBtn.MouseButton1Click:Connect(function()
+    if farmRunning then
+        farmRunning = false
+        if farmThread then task.cancel(farmThread) end
+        farmThread = nil
+        tween(startBtn, 0.2, {BackgroundColor3 = C.accentDim})
+        startBtn.Text = "▶   Start Farming"
+        setStatus("Stopped", false)
+    else
+        if next(targetNames) == nil then
+            setStatus("⚠  Select at least one monster!", false)
+            tween(startBtn, 0.1, {BackgroundColor3 = C.red})
+            task.delay(0.5, function() tween(startBtn,0.2,{BackgroundColor3=C.accentDim}) end)
+            return
+        end
+        farmRunning = true
+        tween(startBtn, 0.2, {BackgroundColor3 = C.red})
+        startBtn.Text = "⏹   Stop Farming"
+        local names = {}
+        for n in pairs(targetNames) do table.insert(names, n) end
+        setStatus("Farming: " .. table.concat(names, ", "), true)
+        farmThread = task.spawn(farmLoop)
+    end
+end)
+
+scanBtn.MouseButton1Click:Connect(scanMonsters)
+task.delay(1, scanMonsters)
+
+print("[AutoFarm] Loaded — Anime UI ready.")
