@@ -1,5 +1,5 @@
 -- ══════════════════════════════════════════════════════════════════
---  AutoFarm  –  Anime Souls
+--  AutoFarm  –  Anime Vanguards
 -- ══════════════════════════════════════════════════════════════════
 
 local Players        = game:GetService("Players")
@@ -854,7 +854,7 @@ spinDelayBox.Size = UDim2.new(0, 50, 0, 24)
 spinDelayBox.Position = UDim2.new(0, 8, 0.5, -12)
 spinDelayBox.BackgroundColor3 = C.btnOff
 spinDelayBox.BorderSizePixel = 0
-spinDelayBox.Text = "0.5"
+spinDelayBox.Text = "0.1"
 spinDelayBox.TextColor3 = C.textMain
 spinDelayBox.Font = Enum.Font.Gotham
 spinDelayBox.TextSize = 13
@@ -1058,7 +1058,7 @@ gamblePullsBox.Size = UDim2.new(0, 50, 0, 22)
 gamblePullsBox.Position = UDim2.new(0, 8, 0.5, -11)
 gamblePullsBox.BackgroundColor3 = C.btnOff
 gamblePullsBox.BorderSizePixel = 0
-gamblePullsBox.Text = "1"
+gamblePullsBox.Text = "3"
 gamblePullsBox.TextColor3 = C.textMain
 gamblePullsBox.Font = Enum.Font.Gotham
 gamblePullsBox.TextSize = 12
