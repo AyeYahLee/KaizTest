@@ -5,7 +5,7 @@ local TARGET_PLACE_ID = 98664161516921 -- ⚠️ REPLACE THIS WITH YOUR GAME'S P
 
 if game.PlaceId ~= TARGET_PLACE_ID then
     warn("[Noxar Panel] Execution blocked: Incorrect Game/Place ID. Current ID: " .. tostring(game.PlaceId))
-    return -- This completely stops the script from running any further
+    return
 end
 
 local Players = game:GetService("Players")
@@ -13,6 +13,7 @@ local RS = game:GetService("ReplicatedStorage")
 local UIS = game:GetService("UserInputService")
 local TS = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
 local LP = Players.LocalPlayer
 
 -- ==========================================
@@ -35,10 +36,10 @@ local normalSize = UDim2.new(0, 285, 0, 345)
 local miniSize = UDim2.new(0, 285, 0, 36)
 local isMinimized = false
 
--- Core Farm/Claim States
+-- Core Farm/Claim States (Defaults)
 local ATTACK_DELAY = 0.05
 local EQUIP_DELAY = 0.5
-local HOVER_HEIGHT = 11 -- Adjust this if you want to float higher or lower
+local HOVER_HEIGHT = 11
 
 local running = false
 local runId = 0
@@ -53,10 +54,43 @@ local DataPullFunc = RS:WaitForChild("CommonLibrary"):WaitForChild("Tool"):WaitF
 local clientMonsters = workspace:WaitForChild("ClientMonsters")
 local selfGui = workspace:FindFirstChild("SelfGUI")
 
--- Raycast Setup
 local groundRayParams = RaycastParams.new()
 groundRayParams.FilterType = Enum.RaycastFilterType.Exclude
 local rayDirection = Vector3.new(0, -200, 0)
+
+-- ==========================================
+-- 1.5 FULL SAVE & LOAD SYSTEM
+-- ==========================================
+local configFileName = "NoxarSave.json"
+
+local function saveConfig()
+    if writefile then
+        local data = { 
+            target = selectedMonster,
+            attackDelay = ATTACK_DELAY,
+            equipDelay = EQUIP_DELAY,
+            isFarming = running
+        }
+        pcall(function()
+            writefile(configFileName, HttpService:JSONEncode(data))
+        end)
+    end
+end
+
+local function loadConfig()
+    if isfile and isfile(configFileName) and readfile then
+        pcall(function()
+            local data = HttpService:JSONDecode(readfile(configFileName))
+            if data.target ~= nil then selectedMonster = data.target end
+            if data.attackDelay ~= nil then ATTACK_DELAY = data.attackDelay end
+            if data.equipDelay ~= nil then EQUIP_DELAY = data.equipDelay end
+            if data.isFarming ~= nil then running = data.isFarming end
+        end)
+    end
+end
+
+-- Load everything before building the UI
+loadConfig()
 
 -- ==========================================
 -- 2. CORE LOGIC (OPTIMIZED STATIC LOCK)
@@ -87,17 +121,13 @@ local function unglueTarget()
     end
 end
 
--- 🌟 NEW: Locks position ONCE upon targeting, completely ignoring animations 🌟
 local function glueToTarget(targetRoot)
     unglueTarget()
-    
     if not targetRoot or not targetRoot.Parent then return end
 
-    -- 1. Get the monster's initial position the moment we target it
     local initialPos = targetRoot.Position
     local _, monsterYRotation, _ = targetRoot.CFrame:ToOrientation()
 
-    -- 2. Raycast to find the ground ONCE (Massive performance boost)
     groundRayParams.FilterDescendantsInstances = {
         LP.Character, 
         targetRoot.Parent, 
@@ -108,10 +138,8 @@ local function glueToTarget(targetRoot)
     local raycastResult = workspace:Raycast(rayOrigin, rayDirection, groundRayParams)
     local groundY = raycastResult and raycastResult.Position.Y or (initialPos.Y - 4)
 
-    -- 3. Calculate your fixed hovering spot
     local lockedCFrame = CFrame.new(initialPos.X, groundY + HOVER_HEIGHT, initialPos.Z) * CFrame.fromOrientation(0, monsterYRotation, 0)
 
-    -- 4. Freeze you perfectly in that spot until the monster is dead
     glueConnection = RunService.Heartbeat:Connect(function()
         local r = getRoot()
         if r and targetRoot and targetRoot.Parent then
@@ -207,7 +235,6 @@ local function startFarming(statusLbl)
         local target = monsters[1]
         currentTarget = target.model
 
-        -- Stick to the new target seamlessly
         if target.root then
             glueToTarget(target.root)
         end
@@ -392,8 +419,8 @@ Instance.new("UIPadding", FarmTab).PaddingTop = UDim.new(0, 6)
 local TargetLbl = Instance.new("TextLabel", FarmTab)
 TargetLbl.Size = UDim2.new(1, -20, 0, 18)
 TargetLbl.BackgroundTransparency = 1
-TargetLbl.Text = "Target: All Monsters"
-TargetLbl.TextColor3 = C.green
+TargetLbl.Text = selectedMonster and ("Target: " .. selectedMonster) or "Target: All Monsters"
+TargetLbl.TextColor3 = selectedMonster and C.gold or C.green
 TargetLbl.Font = Enum.Font.GothamBold
 TargetLbl.TextSize = 11
 TargetLbl.TextXAlignment = Enum.TextXAlignment.Left
@@ -439,6 +466,7 @@ local function populateList(types)
         selectedMonster = nil
         TargetLbl.Text = "Target: All Monsters"
         TargetLbl.TextColor3 = C.green
+        saveConfig()
     end)
     
     for _, t in ipairs(types) do
@@ -457,6 +485,7 @@ local function populateList(types)
             selectedMonster = t.displayName
             TargetLbl.Text = "Target: " .. t.displayName
             TargetLbl.TextColor3 = C.gold
+            saveConfig()
         end)
     end
     ScrollFarm.CanvasSize = UDim2.new(0, 0, 0, ScrollList.AbsoluteContentSize.Y + 8)
@@ -505,6 +534,7 @@ Instance.new("UICorner", SpamBox).CornerRadius = UDim.new(0, 4)
 SpamBox.FocusLost:Connect(function()
     ATTACK_DELAY = tonumber(SpamBox.Text) or 0.05
     SpamBox.Text = tostring(ATTACK_DELAY)
+    saveConfig()
 end)
 
 local EquipBg = Instance.new("Frame", DelaysFrame)
@@ -536,6 +566,7 @@ Instance.new("UICorner", EquipBox).CornerRadius = UDim.new(0, 4)
 EquipBox.FocusLost:Connect(function()
     EQUIP_DELAY = tonumber(EquipBox.Text) or 0.5
     EquipBox.Text = tostring(EQUIP_DELAY)
+    saveConfig()
 end)
 
 local FarmStatus = Instance.new("TextLabel", FarmTab)
@@ -557,8 +588,15 @@ StartFarmBtn.TextSize = 12
 Instance.new("UICorner", StartFarmBtn).CornerRadius = UDim.new(0, 5)
 StartFarmBtn.LayoutOrder = 6
 
-StartFarmBtn.MouseButton1Click:Connect(function()
-    running = not running
+local function toggleFarming(forceState)
+    if forceState ~= nil then
+        running = forceState
+    else
+        running = not running
+    end
+    
+    saveConfig()
+
     if running then
         runId += 1
         StartFarmBtn.BackgroundColor3 = C.red
@@ -571,7 +609,21 @@ StartFarmBtn.MouseButton1Click:Connect(function()
         StartFarmBtn.Text = "▶ Start Auto Farm"
         unglueTarget()
     end
+end
+
+StartFarmBtn.MouseButton1Click:Connect(function()
+    toggleFarming()
 end)
+
+-- Auto-start farming if it was saved as running
+if running then
+    -- Visually flip the button and start the loop
+    runId += 1
+    StartFarmBtn.BackgroundColor3 = C.red
+    StartFarmBtn.TextColor3 = C.text
+    StartFarmBtn.Text = "⏹ Halt Farming"
+    task.spawn(function() startFarming(FarmStatus) end)
+end
 
 -- ==========================================
 -- 6. CLAIM TAB GENERATION
