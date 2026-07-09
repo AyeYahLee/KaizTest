@@ -1,17 +1,56 @@
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
 local UIS = game:GetService("UserInputService")
+local TS = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
 local LP = Players.LocalPlayer
 
+-- ==========================================
+-- 1. CONFIGURATION & COMPACT MOBILE STATE
+-- ==========================================
+local C = {
+    bg      = Color3.fromRGB(11, 11, 16),
+    surface = Color3.fromRGB(20, 20, 28),
+    card    = Color3.fromRGB(28, 28, 38),
+    border  = Color3.fromRGB(50, 50, 70),
+    accent  = Color3.fromRGB(130, 95, 255),
+    green   = Color3.fromRGB(46, 204, 113),
+    red     = Color3.fromRGB(231, 76, 60),
+    text    = Color3.fromRGB(240, 240, 255),
+    sub     = Color3.fromRGB(140, 140, 160),
+    gold    = Color3.fromRGB(241, 196, 15)
+}
+
+local normalSize = UDim2.new(0, 285, 0, 345) 
+local miniSize = UDim2.new(0, 285, 0, 36)
+local isMinimized = false
+
+-- Core Farm/Claim States
 local ATTACK_DELAY = 0.05
-local EQUIP_DELAY = 0.5   -- delay after teleporting before equipping
+local EQUIP_DELAY = 0.5
+local HOVER_HEIGHT = 11 -- Adjust this if you want to float higher or lower
+
 local running = false
 local runId = 0
 local selectedMonster = nil
-
-local DataPullFunc = RS.CommonLibrary.Tool.RemoteManager.Funcs.DataPullFunc
 local monstersEquipped = false
+local currentTarget = nil
+local nameCache = {}
+local glueConnection = nil
+local autoClaimEnabled = false
 
+local DataPullFunc = RS:WaitForChild("CommonLibrary"):WaitForChild("Tool"):WaitForChild("RemoteManager"):WaitForChild("Funcs"):WaitForChild("DataPullFunc")
+local clientMonsters = workspace:WaitForChild("ClientMonsters")
+local selfGui = workspace:FindFirstChild("SelfGUI")
+
+-- Raycast Setup
+local groundRayParams = RaycastParams.new()
+groundRayParams.FilterType = Enum.RaycastFilterType.Exclude
+local rayDirection = Vector3.new(0, -200, 0)
+
+-- ==========================================
+-- 2. CORE LOGIC (OPTIMIZED STATIC LOCK)
+-- ==========================================
 local function equipBest()
     if not monstersEquipped then
         pcall(function() DataPullFunc:InvokeServer("PetEquipBestChannel") end)
@@ -26,119 +65,93 @@ local function unequipAll()
     end
 end
 
-local currentTarget = nil
-
 local function getRoot()
     local char = LP.Character
     return char and char:FindFirstChild("HumanoidRootPart")
 end
 
-local function teleportTo(pos)
-    local root = getRoot()
-    if root then
-        root.CFrame = CFrame.new(pos)
-        task.wait(0.05)
+local function unglueTarget()
+    if glueConnection then
+        glueConnection:Disconnect()
+        glueConnection = nil
     end
 end
 
--- ── Build name map from workspace.SelfGUI ──
--- SelfGUI contains BillboardGuis whose Adornee is the monster's Root part
-local nameCache = {}
+-- 🌟 NEW: Locks position ONCE upon targeting, completely ignoring animations 🌟
+local function glueToTarget(targetRoot)
+    unglueTarget()
+    
+    if not targetRoot or not targetRoot.Parent then return end
+
+    -- 1. Get the monster's initial position the moment we target it
+    local initialPos = targetRoot.Position
+    local _, monsterYRotation, _ = targetRoot.CFrame:ToOrientation()
+
+    -- 2. Raycast to find the ground ONCE (Massive performance boost)
+    groundRayParams.FilterDescendantsInstances = {
+        LP.Character, 
+        targetRoot.Parent, 
+        clientMonsters
+    }
+    
+    local rayOrigin = Vector3.new(initialPos.X, initialPos.Y + 5, initialPos.Z)
+    local raycastResult = workspace:Raycast(rayOrigin, rayDirection, groundRayParams)
+    local groundY = raycastResult and raycastResult.Position.Y or (initialPos.Y - 4)
+
+    -- 3. Calculate your fixed hovering spot
+    local lockedCFrame = CFrame.new(initialPos.X, groundY + HOVER_HEIGHT, initialPos.Z) * CFrame.fromOrientation(0, monsterYRotation, 0)
+
+    -- 4. Freeze you perfectly in that spot until the monster is dead
+    glueConnection = RunService.Heartbeat:Connect(function()
+        local r = getRoot()
+        if r and targetRoot and targetRoot.Parent then
+            r.CFrame = lockedCFrame
+            r.AssemblyLinearVelocity = Vector3.zero
+            r.AssemblyAngularVelocity = Vector3.zero
+        else
+            unglueTarget()
+        end
+    end)
+end
 
 local function buildNameCache()
-    nameCache = {}
-    local clientMonsters = workspace:FindFirstChild("ClientMonsters")
+    table.clear(nameCache) 
     if not clientMonsters then return end
 
-    -- Method 1: read from SelfGUI BillboardGuis
-    local selfGui = workspace:FindFirstChild("SelfGUI")
     if selfGui then
         for _, gui in ipairs(selfGui:GetChildren()) do
             if not gui:IsA("BillboardGui") then continue end
             local adornee = gui.Adornee
             if not adornee then continue end
-            -- adornee could be topGUI attachment OR the Root part itself
-            -- try both: adornee.Parent.Parent and adornee.Parent
-            local candidates = {
-                adornee.Parent and adornee.Parent.Parent,
-                adornee.Parent,
-            }
+            local candidates = { adornee.Parent and adornee.Parent.Parent, adornee.Parent }
             for _, monster in ipairs(candidates) do
                 if monster and monster.Parent == clientMonsters then
-                    -- search all TextLabels inside this gui for LabName
                     local labName = gui:FindFirstChild("LabName", true)
                     local labLv = gui:FindFirstChild("LabLv", true)
                     if labName and labName:IsA("TextLabel") and labName.Text ~= "" then
-                        nameCache[monster.Name] = {
-                            name = labName.Text,
-                            level = labLv and labLv.Text or ""
-                        }
+                        nameCache[monster.Name] = { name = labName.Text, level = labLv and labLv.Text or "" }
                     end
                     break
                 end
             end
         end
     end
-
-    -- Method 2: search directly inside each monster for any BillboardGui
-    for _, monster in ipairs(clientMonsters:GetChildren()) do
-        if nameCache[monster.Name] then continue end -- already found
-        for _, desc in ipairs(monster:GetDescendants()) do
-            if desc:IsA("BillboardGui") then
-                local labName = desc:FindFirstChild("LabName", true)
-                local labLv = desc:FindFirstChild("LabLv", true)
-                if labName and labName:IsA("TextLabel") and labName.Text ~= "" then
-                    nameCache[monster.Name] = {
-                        name = labName.Text,
-                        level = labLv and labLv.Text or ""
-                    }
-                    break
-                end
-            end
-        end
-    end
 end
 
-local function getMonsterDisplayName(monster)
-    local info = nameCache[monster.Name]
-    if info then return info.name end
-    return monster.Name
-end
-
-local function getMonsterLevel(monster)
-    local info = nameCache[monster.Name]
-    if info then return info.level end
-    return ""
-end
-
--- ── Attack a monster by firing its ClickDetector (same as clicking it) ──
-local function attackMonster(monster)
-    local root = monster:FindFirstChild("Root")
-    if not root then return end
-    local cd = root:FindFirstChildOfClass("ClickDetector")
-    if not cd then return end
-    pcall(function()
-        fireclickdetector(cd)
-    end)
-end
-
--- ── Scan monster types ──
 local function scanMonsterTypes()
-    buildNameCache()  -- refresh names from SelfGUI
+    buildNameCache()
     local seen = {}
     local types = {}
-    local clientMonsters = workspace:FindFirstChild("ClientMonsters")
-    if not clientMonsters then return types end
 
     for _, m in ipairs(clientMonsters:GetChildren()) do
-        local displayName = getMonsterDisplayName(m)
+        local info = nameCache[m.Name]
+        local displayName = info and info.name or m.Name
         local root = m:FindFirstChild("Root")
-        local pos = root and root:IsA("BasePart") and root.Position
-            or (m.PrimaryPart and m.PrimaryPart.Position)
+        local pos = root and root:IsA("BasePart") and root.Position or (m.PrimaryPart and m.PrimaryPart.Position)
+        
         if not seen[displayName] then
             seen[displayName] = true
-            local lvl = getMonsterLevel(m)
-            table.insert(types, {displayName=displayName, level=lvl, count=1, pos=pos})
+            table.insert(types, {displayName = displayName, level = info and info.level or "", count = 1, pos = pos})
         else
             for _, t in ipairs(types) do
                 if t.displayName == displayName then t.count += 1; break end
@@ -149,29 +162,21 @@ local function scanMonsterTypes()
     return types
 end
 
--- ── Get target monsters ──
 local function getTargetMonsters()
-    local clientMonsters = workspace:FindFirstChild("ClientMonsters")
-    if not clientMonsters then return {} end
     local monsters = {}
     for _, m in ipairs(clientMonsters:GetChildren()) do
-        if selectedMonster then
-            local displayName = getMonsterDisplayName(m)
-            if not displayName:lower():find(selectedMonster:lower(), 1, true) then
-                continue
-            end
+        local info = nameCache[m.Name]
+        local displayName = info and info.name or m.Name
+        if selectedMonster and not displayName:lower():find(selectedMonster:lower(), 1, true) then
+            continue
         end
         local root = m:FindFirstChild("Root")
-        local pos = root and root:IsA("BasePart") and root.Position
-            or (m.PrimaryPart and m.PrimaryPart.Position)
-        if pos then
-            table.insert(monsters, {model=m, pos=pos})
-        end
+        local pos = root and root:IsA("BasePart") and root.Position or (m.PrimaryPart and m.PrimaryPart.Position)
+        if pos then table.insert(monsters, {model = m, pos = pos, root = root}) end
     end
     return monsters
 end
 
--- ── Main farm loop ──
 local function startFarming(statusLbl)
     local myId = runId
     local killed = 0
@@ -181,10 +186,10 @@ local function startFarming(statusLbl)
         local monsters = getTargetMonsters()
 
         if #monsters == 0 then
-            -- No monsters alive — unequip immediately and wait
             currentTarget = nil
+            unglueTarget()
             unequipAll()
-            statusLbl.Text = "🔍 Waiting for monsters..."
+            statusLbl.Text = "Status: Waiting for spawns..."
             task.wait(0.5)
             continue
         end
@@ -192,310 +197,552 @@ local function startFarming(statusLbl)
         local target = monsters[1]
         currentTarget = target.model
 
-        -- Teleport first, THEN wait delay, THEN equip
-        teleportTo(target.pos)
-        unequipAll()  -- make sure unequipped during travel
-        task.wait(EQUIP_DELAY)  -- tweakable delay before equipping
+        -- Stick to the new target seamlessly
+        if target.root then
+            glueToTarget(target.root)
+        end
+        
+        unequipAll()
+        task.wait(EQUIP_DELAY)
+        
         if not running or runId ~= myId then break end
-        -- Only equip if monster still alive after delay
-        if workspace.ClientMonsters:FindFirstChild(target.model.Name) then
+        
+        if clientMonsters:FindFirstChild(target.model.Name) then
             equipBest()
         else
-            continue  -- monster died during delay, loop back
+            continue
         end
 
-        -- Attack loop
-        local spamCount = 0
         while running and runId == myId do
-            local stillAlive = workspace.ClientMonsters:FindFirstChild(target.model.Name)
-            if not stillAlive then
+            if not clientMonsters:FindFirstChild(target.model.Name) then
                 killed += 1
-                unequipAll()  -- unequip the moment monster dies
+                unglueTarget()
+                unequipAll()
                 currentTarget = nil
-                statusLbl.Text = "⚔️ "..(selectedMonster or "All").." | Killed: "..killed
+                statusLbl.Text = "Status: Killed " .. killed .. " (" .. (selectedMonster or "All") .. ")"
                 break
             end
-            attackMonster(target.model)
-            spamCount += 1
-            if spamCount % 20 == 0 then
-                local newRoot = target.model:FindFirstChild("Root")
-                if newRoot and newRoot:IsA("BasePart") then
-                    local r = getRoot()
-                    if r then r.CFrame = CFrame.new(newRoot.Position) end
-                end
-            end
+            
+            local root = target.model:FindFirstChild("Root")
+            local cd = root and root:FindFirstChildOfClass("ClickDetector")
+            if cd then pcall(function() fireclickdetector(cd) end) end
+            
             task.wait(ATTACK_DELAY)
         end
     end
-
+    
     currentTarget = nil
+    unglueTarget()
     unequipAll()
-    statusLbl.Text = "Stopped. Killed: "..killed
+    statusLbl.Text = "Status: Stopped. Killed: " .. killed
 end
 
--- ── GUI ──
-local old = LP.PlayerGui:FindFirstChild("AutoFarmGui")
+-- ==========================================
+-- 3. CORE LOGIC (OPTIMIZED CLAIM)
+-- ==========================================
+local function claimAll()
+    local ok1 = pcall(function() DataPullFunc:InvokeServer("TowerTakeDailyRewardAllChannel") end)
+    local ok2 = pcall(function() DataPullFunc:InvokeServer("ChestRewardTakeDailyChestChannel", 1) end)
+    local ok3 = pcall(function() DataPullFunc:InvokeServer("ChestRewardTakeDailyRewardChannel", 1) end)
+    
+    for _, id in ipairs({101, 102, 103, 104, 105, 201, 202, 203, 204, 205}) do
+        pcall(function() DataPullFunc:InvokeServer("TaskClaimRewardChannel", id) end)
+        task.wait(0.05)
+    end
+    return ok1 and ok2 and ok3
+end
+
+local function getSecondsUntilReset()
+    local t = os.date("!*t")
+    local now = t.hour * 3600 + t.min * 60 + t.sec
+    local diff = 86400 - now
+    if diff <= 30 then diff = diff + 86400 end
+    return diff
+end
+
+local function formatTime(s)
+    local h = math.floor(s / 3600)
+    local m = math.floor((s % 3600) / 60)
+    local sec = math.floor(s % 60)
+    return string.format("%02d:%02d:%02d", h, m, sec)
+end
+
+-- ==========================================
+-- 4. COMPACT MOBILE UI SYSTEM
+-- ==========================================
+local old = LP.PlayerGui:FindFirstChild("NoxarMobilePanel")
 if old then old:Destroy() end
 
 local sg = Instance.new("ScreenGui")
-sg.Name = "AutoFarmGui"; sg.ResetOnSpawn = false; sg.Parent = LP.PlayerGui
+sg.Name = "NoxarMobilePanel"
+sg.ResetOnSpawn = false
+sg.Parent = LP.PlayerGui
 
-local C = {
-    bg      = Color3.fromRGB(10, 10, 16),
-    surface = Color3.fromRGB(18, 18, 26),
-    card    = Color3.fromRGB(26, 26, 38),
-    card2   = Color3.fromRGB(32, 32, 48),
-    border  = Color3.fromRGB(48, 48, 70),
-    accent  = Color3.fromRGB(120, 90, 255),
-    green   = Color3.fromRGB(52, 211, 153),
-    greenD  = Color3.fromRGB(30, 160, 110),
-    red     = Color3.fromRGB(239, 68, 68),
-    blue    = Color3.fromRGB(60, 100, 200),
-    blueD   = Color3.fromRGB(40, 70, 160),
-    text    = Color3.fromRGB(230, 230, 255),
-    sub     = Color3.fromRGB(110, 110, 150),
-    gold    = Color3.fromRGB(251, 191, 36),
-}
+local Main = Instance.new("Frame", sg)
+Main.Size = normalSize
+Main.Position = UDim2.new(0.5, -142, 0.4, -172)
+Main.BackgroundColor3 = C.bg
+Main.ClipsDescendants = true
+Main.BorderSizePixel = 0
+Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 10)
+Instance.new("UIStroke", Main).Color = C.border
 
-local W, H = 240, 320
+local TitleBar = Instance.new("Frame", Main)
+TitleBar.Size = UDim2.new(1, 0, 0, 36)
+TitleBar.BackgroundColor3 = C.surface
+TitleBar.BorderSizePixel = 0
+local TitleFix = Instance.new("Frame", TitleBar)
+TitleFix.Size = UDim2.new(1, 0, 0.5, 0)
+TitleFix.Position = UDim2.new(0, 0, 0.5, 0)
+TitleFix.BackgroundColor3 = C.surface
+TitleFix.BorderSizePixel = 0
 
-local frame = Instance.new("Frame", sg)
-frame.Size = UDim2.new(0, W, 0, H + 36)
-frame.Position = UDim2.new(0.5, -W/2, 0, 60)
-frame.BackgroundColor3 = C.bg
-frame.BorderSizePixel = 0
-frame.ClipsDescendants = true
-Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 14)
-local fs = Instance.new("UIStroke", frame)
-fs.Color = C.border; fs.Thickness = 1.5
+local TitleLbl = Instance.new("TextLabel", TitleBar)
+TitleLbl.Size = UDim2.new(1, -90, 1, 0)
+TitleLbl.Position = UDim2.new(0, 12, 0, 0)
+TitleLbl.BackgroundTransparency = 1
+TitleLbl.Text = "Noxar Mobile Admin"
+TitleLbl.TextColor3 = C.accent
+TitleLbl.Font = Enum.Font.GothamBold
+TitleLbl.TextSize = 13
+TitleLbl.TextXAlignment = Enum.TextXAlignment.Left
 
--- gradient
-local fg = Instance.new("UIGradient", frame)
-fg.Color = ColorSequence.new({
-    ColorSequenceKeypoint.new(0, Color3.fromRGB(18,16,28)),
-    ColorSequenceKeypoint.new(1, Color3.fromRGB(10,10,16)),
-})
-fg.Rotation = 120
+local MinBtn = Instance.new("TextButton", TitleBar)
+MinBtn.Size = UDim2.new(0, 26, 0, 22)
+MinBtn.Position = UDim2.new(1, -62, 0.5, -11)
+MinBtn.BackgroundColor3 = C.card
+MinBtn.Text = "—"
+MinBtn.TextColor3 = C.text
+MinBtn.Font = Enum.Font.GothamBold
+MinBtn.TextSize = 12
+Instance.new("UICorner", MinBtn).CornerRadius = UDim.new(0, 5)
 
--- title bar
-local TB = Instance.new("Frame", frame)
-TB.Size = UDim2.new(1,0,0,38); TB.BackgroundColor3 = C.surface; TB.BorderSizePixel = 0
-Instance.new("UICorner", TB).CornerRadius = UDim.new(0,14)
-Instance.new("Frame", TB).Size = UDim2.new(1,0,0.5,0)
-local tbfix = TB:FindFirstChildOfClass("Frame")
-tbfix.Position = UDim2.new(0,0,0.5,0); tbfix.BackgroundColor3 = C.surface; tbfix.BorderSizePixel = 0
+local CloseBtn = Instance.new("TextButton", TitleBar)
+CloseBtn.Size = UDim2.new(0, 26, 0, 22)
+CloseBtn.Position = UDim2.new(1, -31, 0.5, -11)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(75, 25, 25)
+CloseBtn.Text = "✕"
+CloseBtn.TextColor3 = C.red
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.TextSize = 11
+Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 5)
 
-local tline = Instance.new("Frame", TB)
-tline.Size = UDim2.new(1,0,0,1); tline.Position = UDim2.new(0,0,1,-1)
-tline.BackgroundColor3 = C.border; tline.BorderSizePixel = 0
-local tlg = Instance.new("UIGradient", tline)
-tlg.Color = ColorSequence.new({
-    ColorSequenceKeypoint.new(0, C.accent),
-    ColorSequenceKeypoint.new(0.5, C.gold),
-    ColorSequenceKeypoint.new(1, C.accent),
-})
+local TabBar = Instance.new("Frame", Main)
+TabBar.Size = UDim2.new(1, 0, 0, 30)
+TabBar.Position = UDim2.new(0, 0, 0, 36)
+TabBar.BackgroundColor3 = C.surface
+TabBar.BorderSizePixel = 0
 
-local titleLbl = Instance.new("TextLabel", TB)
-titleLbl.Size = UDim2.new(1,-10,1,0); titleLbl.Position = UDim2.new(0,12,0,0)
-titleLbl.BackgroundTransparency = 1; titleLbl.Text = "⚔️  Auto Farm"
-titleLbl.TextColor3 = C.text; titleLbl.Font = Enum.Font.GothamBold
-titleLbl.TextSize = 13; titleLbl.TextXAlignment = Enum.TextXAlignment.Left
+local TabFarmBtn = Instance.new("TextButton", TabBar)
+TabFarmBtn.Size = UDim2.new(0.5, 0, 1, 0)
+TabFarmBtn.BackgroundTransparency = 1
+TabFarmBtn.Text = "⚔️ Auto Farm"
+TabFarmBtn.TextColor3 = C.text
+TabFarmBtn.Font = Enum.Font.GothamBold
+TabFarmBtn.TextSize = 11
 
--- target label
-local selLbl = Instance.new("TextLabel", frame)
-selLbl.Size = UDim2.new(1,-16,0,20); selLbl.Position = UDim2.new(0,8,0,42)
-selLbl.BackgroundTransparency = 1; selLbl.Text = "Target: All monsters"
-selLbl.TextColor3 = C.green; selLbl.Font = Enum.Font.GothamBold
-selLbl.TextSize = 11; selLbl.TextXAlignment = Enum.TextXAlignment.Left
+local TabClaimBtn = Instance.new("TextButton", TabBar)
+TabClaimBtn.Size = UDim2.new(0.5, 0, 1, 0)
+TabClaimBtn.Position = UDim2.new(0.5, 0, 0, 0)
+TabClaimBtn.BackgroundTransparency = 1
+TabClaimBtn.Text = "🎁 Auto Claim"
+TabClaimBtn.TextColor3 = C.sub
+TabClaimBtn.Font = Enum.Font.GothamBold
+TabClaimBtn.TextSize = 11
 
--- scan button
-local scanBtn = Instance.new("TextButton", frame)
-scanBtn.Size = UDim2.new(1,-16,0,28); scanBtn.Position = UDim2.new(0,8,0,64)
-scanBtn.BackgroundColor3 = C.blue; scanBtn.TextColor3 = C.text
-scanBtn.Font = Enum.Font.GothamBold; scanBtn.TextSize = 11
-scanBtn.Text = "🔍 Scan Monsters"; scanBtn.BorderSizePixel = 0
-Instance.new("UICorner", scanBtn).CornerRadius = UDim.new(0,8)
+local TabIndicator = Instance.new("Frame", TabBar)
+TabIndicator.Size = UDim2.new(0.5, 0, 0, 2)
+TabIndicator.Position = UDim2.new(0, 0, 1, -2)
+TabIndicator.BackgroundColor3 = C.accent
+TabIndicator.BorderSizePixel = 0
 
--- monster scroll list
-local scrollFrame = Instance.new("ScrollingFrame", frame)
-scrollFrame.Size = UDim2.new(1,-16,0,110); scrollFrame.Position = UDim2.new(0,8,0,96)
-scrollFrame.BackgroundColor3 = C.surface; scrollFrame.BorderSizePixel = 0
-scrollFrame.ScrollBarThickness = 2; scrollFrame.CanvasSize = UDim2.new(0,0,0,0)
-scrollFrame.ScrollBarImageColor3 = C.accent
-Instance.new("UICorner", scrollFrame).CornerRadius = UDim.new(0,8)
-local sfs = Instance.new("UIStroke", scrollFrame); sfs.Color = C.border; sfs.Thickness = 1
-local uil = Instance.new("UIListLayout", scrollFrame); uil.Padding = UDim.new(0,3)
-local sp = Instance.new("UIPadding", scrollFrame)
-sp.PaddingTop = UDim.new(0,4); sp.PaddingLeft = UDim.new(0,4); sp.PaddingRight = UDim.new(0,4)
-uil:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-    scrollFrame.CanvasSize = UDim2.new(0,0,0,uil.AbsoluteContentSize.Y+8)
-end)
+local ContentArea = Instance.new("Frame", Main)
+ContentArea.Size = UDim2.new(1, 0, 1, -66)
+ContentArea.Position = UDim2.new(0, 0, 0, 66)
+ContentArea.BackgroundTransparency = 1
+
+local FarmTab = Instance.new("Frame", ContentArea)
+FarmTab.Size = UDim2.new(1, 0, 1, 0)
+FarmTab.BackgroundTransparency = 1
+
+local ClaimTab = Instance.new("Frame", ContentArea)
+ClaimTab.Size = UDim2.new(1, 0, 1, 0)
+ClaimTab.BackgroundTransparency = 1
+ClaimTab.Visible = false
+
+-- ==========================================
+-- 5. FARM TAB GENERATION
+-- ==========================================
+local UIListFarm = Instance.new("UIListLayout", FarmTab)
+UIListFarm.Padding = UDim.new(0, 6)
+UIListFarm.HorizontalAlignment = Enum.HorizontalAlignment.Center
+UIListFarm.SortOrder = Enum.SortOrder.LayoutOrder
+Instance.new("UIPadding", FarmTab).PaddingTop = UDim.new(0, 6)
+
+local TargetLbl = Instance.new("TextLabel", FarmTab)
+TargetLbl.Size = UDim2.new(1, -20, 0, 18)
+TargetLbl.BackgroundTransparency = 1
+TargetLbl.Text = "Target: All Monsters"
+TargetLbl.TextColor3 = C.green
+TargetLbl.Font = Enum.Font.GothamBold
+TargetLbl.TextSize = 11
+TargetLbl.TextXAlignment = Enum.TextXAlignment.Left
+TargetLbl.LayoutOrder = 1
+
+local ScanBtn = Instance.new("TextButton", FarmTab)
+ScanBtn.Size = UDim2.new(1, -20, 0, 28)
+ScanBtn.BackgroundColor3 = C.accent
+ScanBtn.TextColor3 = C.text
+ScanBtn.Text = "🔍 Scan Game Monsters"
+ScanBtn.Font = Enum.Font.GothamBold
+ScanBtn.TextSize = 11
+Instance.new("UICorner", ScanBtn).CornerRadius = UDim.new(0, 5)
+ScanBtn.LayoutOrder = 2
+
+local ScrollFarm = Instance.new("ScrollingFrame", FarmTab)
+ScrollFarm.Size = UDim2.new(1, -20, 0, 85)
+ScrollFarm.BackgroundColor3 = C.surface
+ScrollFarm.ScrollBarThickness = 3
+ScrollFarm.ScrollBarImageColor3 = C.accent
+ScrollFarm.BorderSizePixel = 0
+Instance.new("UICorner", ScrollFarm).CornerRadius = UDim.new(0, 5)
+ScrollFarm.LayoutOrder = 3
+local ScrollList = Instance.new("UIListLayout", ScrollFarm)
+ScrollList.Padding = UDim.new(0, 3)
+Instance.new("UIPadding", ScrollFarm).PaddingTop = UDim.new(0, 3)
 
 local function populateList(types)
-    for _, c in ipairs(scrollFrame:GetChildren()) do
+    for _, c in ipairs(ScrollFarm:GetChildren()) do
         if c:IsA("TextButton") then c:Destroy() end
     end
-
-    local allBtn = Instance.new("TextButton", scrollFrame)
-    allBtn.Size = UDim2.new(1,-4,0,26); allBtn.BackgroundColor3 = C.greenD
-    allBtn.TextColor3 = C.text; allBtn.Font = Enum.Font.GothamBold
-    allBtn.TextSize = 10; allBtn.Text = "⚔️  All Monsters"; allBtn.BorderSizePixel = 0
-    Instance.new("UICorner", allBtn).CornerRadius = UDim.new(0,6)
+    
+    local allBtn = Instance.new("TextButton", ScrollFarm)
+    allBtn.Size = UDim2.new(1, -10, 0, 24)
+    allBtn.BackgroundColor3 = C.green
+    allBtn.TextColor3 = C.bg
+    allBtn.Font = Enum.Font.GothamBold
+    allBtn.TextSize = 10
+    allBtn.Text = "⚔️ Farm Everything"
+    Instance.new("UICorner", allBtn).CornerRadius = UDim.new(0, 4)
+    
     allBtn.MouseButton1Click:Connect(function()
         selectedMonster = nil
-        selLbl.Text = "Target: All monsters"
-        selLbl.TextColor3 = C.green
-        for _, c in ipairs(scrollFrame:GetChildren()) do
-            if c:IsA("TextButton") then c.BackgroundColor3 = C.card end
-        end
-        allBtn.BackgroundColor3 = C.greenD
+        TargetLbl.Text = "Target: All Monsters"
+        TargetLbl.TextColor3 = C.green
     end)
-
+    
     for _, t in ipairs(types) do
-        local btn = Instance.new("TextButton", scrollFrame)
-        btn.Size = UDim2.new(1,-4,0,26); btn.BackgroundColor3 = C.card
-        btn.TextColor3 = C.text; btn.Font = Enum.Font.Gotham
-        btn.TextSize = 10; btn.BorderSizePixel = 0
-        local lvlStr = (t.level and t.level ~= "") and " "..t.level or ""
-        btn.Text = t.displayName..lvlStr.." (x"..t.count..")"
+        local btn = Instance.new("TextButton", ScrollFarm)
+        btn.Size = UDim2.new(1, -10, 0, 24)
+        btn.BackgroundColor3 = C.card
+        btn.TextColor3 = C.text
+        btn.Font = Enum.Font.Gotham
+        btn.TextSize = 10
+        local lvlStr = (t.level ~= "") and " " .. t.level or ""
+        btn.Text = "  " .. t.displayName .. lvlStr .. " (x" .. t.count .. ")"
         btn.TextXAlignment = Enum.TextXAlignment.Left
-        Instance.new("UICorner", btn).CornerRadius = UDim.new(0,6)
-        Instance.new("UIPadding", btn).PaddingLeft = UDim.new(0,8)
-        local tname = t.displayName
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
+        
         btn.MouseButton1Click:Connect(function()
-            selectedMonster = tname
-            selLbl.Text = "Target: "..tname
-            selLbl.TextColor3 = C.gold
-            for _, c in ipairs(scrollFrame:GetChildren()) do
-                if c:IsA("TextButton") then c.BackgroundColor3 = C.card end
-            end
-            btn.BackgroundColor3 = C.card2
+            selectedMonster = t.displayName
+            TargetLbl.Text = "Target: " .. t.displayName
+            TargetLbl.TextColor3 = C.gold
         end)
     end
+    ScrollFarm.CanvasSize = UDim2.new(0, 0, 0, ScrollList.AbsoluteContentSize.Y + 8)
 end
 
-scanBtn.MouseButton1Click:Connect(function()
-    scanBtn.Text = "⏳ Loading..."
+ScanBtn.MouseButton1Click:Connect(function()
+    ScanBtn.Text = "⏳ Reading Workspace..."
     task.spawn(function()
-        task.wait(0.5) -- wait for SelfGUI to populate
+        task.wait(0.3)
         local types = scanMonsterTypes()
         populateList(types)
-        scanBtn.Text = "🔍 Scan Monsters ("..#types.." types)"
+        ScanBtn.Text = "🔍 Rescan (" .. #types .. " Found)"
     end)
 end)
 
--- delay row
-local delayRow = Instance.new("Frame", frame)
-delayRow.Size = UDim2.new(1,-16,0,26); delayRow.Position = UDim2.new(0,8,0,212)
-delayRow.BackgroundColor3 = C.card; delayRow.BorderSizePixel = 0
-Instance.new("UICorner", delayRow).CornerRadius = UDim.new(0,8)
-Instance.new("UIStroke", delayRow).Color = C.border
+local DelaysFrame = Instance.new("Frame", FarmTab)
+DelaysFrame.Size = UDim2.new(1, -20, 0, 26)
+DelaysFrame.BackgroundTransparency = 1
+DelaysFrame.LayoutOrder = 4
 
-local dlbl = Instance.new("TextLabel", delayRow)
-dlbl.Size = UDim2.new(0.6,0,1,0); dlbl.Position = UDim2.new(0,8,0,0)
-dlbl.BackgroundTransparency = 1; dlbl.Text = "Spam delay (s):"
-dlbl.TextColor3 = C.sub; dlbl.Font = Enum.Font.Gotham
-dlbl.TextSize = 10; dlbl.TextXAlignment = Enum.TextXAlignment.Left
+local SpamBg = Instance.new("Frame", DelaysFrame)
+SpamBg.Size = UDim2.new(0.48, 0, 1, 0)
+SpamBg.BackgroundColor3 = C.card
+Instance.new("UICorner", SpamBg).CornerRadius = UDim.new(0, 5)
 
-local dbox = Instance.new("TextBox", delayRow)
-dbox.Size = UDim2.new(0.32,0,0,18); dbox.Position = UDim2.new(0.66,0,0.5,-9)
-dbox.BackgroundColor3 = C.card2; dbox.Text = tostring(ATTACK_DELAY)
-dbox.TextColor3 = C.text; dbox.Font = Enum.Font.GothamBold
-dbox.TextSize = 11; dbox.BorderSizePixel = 0; dbox.ClearTextOnFocus = false
-Instance.new("UICorner", dbox).CornerRadius = UDim.new(0,4)
-dbox.FocusLost:Connect(function()
-    ATTACK_DELAY = tonumber(dbox.Text) or 0.05
-    dbox.Text = tostring(ATTACK_DELAY)
+local SpamLbl = Instance.new("TextLabel", SpamBg)
+SpamLbl.Size = UDim2.new(0.5, 0, 1, 0)
+SpamLbl.Position = UDim2.new(0, 8, 0, 0)
+SpamLbl.BackgroundTransparency = 1
+SpamLbl.Text = "Spam:"
+SpamLbl.TextColor3 = C.sub
+SpamLbl.Font = Enum.Font.Gotham
+SpamLbl.TextSize = 10
+SpamLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+local SpamBox = Instance.new("TextBox", SpamBg)
+SpamBox.Size = UDim2.new(0.35, 0, 0, 18)
+SpamBox.Position = UDim2.new(0.55, 0, 0.5, -9)
+SpamBox.BackgroundColor3 = C.surface
+SpamBox.TextColor3 = C.text
+SpamBox.Font = Enum.Font.GothamBold
+SpamBox.TextSize = 10
+SpamBox.Text = tostring(ATTACK_DELAY)
+Instance.new("UICorner", SpamBox).CornerRadius = UDim.new(0, 4)
+
+SpamBox.FocusLost:Connect(function()
+    ATTACK_DELAY = tonumber(SpamBox.Text) or 0.05
+    SpamBox.Text = tostring(ATTACK_DELAY)
 end)
 
--- equip delay row
-local equipDelayRow = Instance.new("Frame", frame)
-equipDelayRow.Size = UDim2.new(1,-16,0,26); equipDelayRow.Position = UDim2.new(0,8,0,242)
-equipDelayRow.BackgroundColor3 = C.card; equipDelayRow.BorderSizePixel = 0
-Instance.new("UICorner", equipDelayRow).CornerRadius = UDim.new(0,8)
-Instance.new("UIStroke", equipDelayRow).Color = C.border
+local EquipBg = Instance.new("Frame", DelaysFrame)
+EquipBg.Size = UDim2.new(0.48, 0, 1, 0)
+EquipBg.Position = UDim2.new(0.52, 0, 0, 0)
+EquipBg.BackgroundColor3 = C.card
+Instance.new("UICorner", EquipBg).CornerRadius = UDim.new(0, 5)
 
-local edlbl = Instance.new("TextLabel", equipDelayRow)
-edlbl.Size = UDim2.new(0.6,0,1,0); edlbl.Position = UDim2.new(0,8,0,0)
-edlbl.BackgroundTransparency = 1; edlbl.Text = "Equip delay (s):"
-edlbl.TextColor3 = C.sub; edlbl.Font = Enum.Font.Gotham
-edlbl.TextSize = 10; edlbl.TextXAlignment = Enum.TextXAlignment.Left
+local EquipLbl = Instance.new("TextLabel", EquipBg)
+EquipLbl.Size = UDim2.new(0.5, 0, 1, 0)
+EquipLbl.Position = UDim2.new(0, 8, 0, 0)
+EquipLbl.BackgroundTransparency = 1
+EquipLbl.Text = "Equip:"
+EquipLbl.TextColor3 = C.sub
+EquipLbl.Font = Enum.Font.Gotham
+EquipLbl.TextSize = 10
+EquipLbl.TextXAlignment = Enum.TextXAlignment.Left
 
-local edbox = Instance.new("TextBox", equipDelayRow)
-edbox.Size = UDim2.new(0.32,0,0,18); edbox.Position = UDim2.new(0.66,0,0.5,-9)
-edbox.BackgroundColor3 = C.card2; edbox.Text = tostring(EQUIP_DELAY)
-edbox.TextColor3 = C.text; edbox.Font = Enum.Font.GothamBold
-edbox.TextSize = 11; edbox.BorderSizePixel = 0; edbox.ClearTextOnFocus = false
-Instance.new("UICorner", edbox).CornerRadius = UDim.new(0,4)
-edbox.FocusLost:Connect(function()
-    EQUIP_DELAY = tonumber(edbox.Text) or 0.5
-    edbox.Text = tostring(EQUIP_DELAY)
+local EquipBox = Instance.new("TextBox", EquipBg)
+EquipBox.Size = UDim2.new(0.35, 0, 0, 18)
+EquipBox.Position = UDim2.new(0.55, 0, 0.5, -9)
+EquipBox.BackgroundColor3 = C.surface
+EquipBox.TextColor3 = C.text
+EquipBox.Font = Enum.Font.GothamBold
+EquipBox.TextSize = 10
+EquipBox.Text = tostring(EQUIP_DELAY)
+Instance.new("UICorner", EquipBox).CornerRadius = UDim.new(0, 4)
+
+EquipBox.FocusLost:Connect(function()
+    EQUIP_DELAY = tonumber(EquipBox.Text) or 0.5
+    EquipBox.Text = tostring(EQUIP_DELAY)
 end)
 
+local FarmStatus = Instance.new("TextLabel", FarmTab)
+FarmStatus.Size = UDim2.new(1, -20, 0, 18)
+FarmStatus.BackgroundTransparency = 1
+FarmStatus.Text = "Status: Idle"
+FarmStatus.TextColor3 = C.sub
+FarmStatus.Font = Enum.Font.Gotham
+FarmStatus.TextSize = 10
+FarmStatus.LayoutOrder = 5
 
--- status
-local statusLbl = Instance.new("TextLabel", frame)
-statusLbl.Size = UDim2.new(1,-16,0,28); statusLbl.Position = UDim2.new(0,8,0,302)
-statusLbl.BackgroundColor3 = C.card; statusLbl.BorderSizePixel = 0
-statusLbl.Text = "Scan monsters then pick one"
-statusLbl.TextColor3 = C.sub; statusLbl.Font = Enum.Font.Gotham
-statusLbl.TextSize = 10; statusLbl.TextWrapped = true
-Instance.new("UICorner", statusLbl).CornerRadius = UDim.new(0,8)
-Instance.new("UIStroke", statusLbl).Color = C.border
+local StartFarmBtn = Instance.new("TextButton", FarmTab)
+StartFarmBtn.Size = UDim2.new(1, -20, 0, 32)
+StartFarmBtn.BackgroundColor3 = C.green
+StartFarmBtn.TextColor3 = C.bg
+StartFarmBtn.Text = "▶ Start Auto Farm"
+StartFarmBtn.Font = Enum.Font.GothamBold
+StartFarmBtn.TextSize = 12
+Instance.new("UICorner", StartFarmBtn).CornerRadius = UDim.new(0, 5)
+StartFarmBtn.LayoutOrder = 6
 
-
--- start/stop (shifted down)
-local startBtn = Instance.new("TextButton", frame)
-startBtn.Size = UDim2.new(1,-16,0,34); startBtn.Position = UDim2.new(0,8,0,308)
-startBtn.BackgroundColor3 = C.greenD; startBtn.TextColor3 = C.text
-startBtn.Font = Enum.Font.GothamBold; startBtn.TextSize = 13
-startBtn.Text = "▶  Start"; startBtn.BorderSizePixel = 0
-Instance.new("UICorner", startBtn).CornerRadius = UDim.new(0,10)
-
-startBtn.MouseButton1Click:Connect(function()
+StartFarmBtn.MouseButton1Click:Connect(function()
     running = not running
     if running then
         runId += 1
-        startBtn.BackgroundColor3 = C.red
-        startBtn.Text = "⏹  Stop"
-        statusLbl.Text = "Starting..."
-        task.spawn(function() startFarming(statusLbl) end)
+        StartFarmBtn.BackgroundColor3 = C.red
+        StartFarmBtn.TextColor3 = C.text
+        StartFarmBtn.Text = "⏹ Halt Farming"
+        task.spawn(function() startFarming(FarmStatus) end)
     else
-        startBtn.BackgroundColor3 = C.greenD
-        startBtn.Text = "▶  Start"
+        StartFarmBtn.BackgroundColor3 = C.green
+        StartFarmBtn.TextColor3 = C.bg
+        StartFarmBtn.Text = "▶ Start Auto Farm"
+        unglueTarget()
     end
 end)
 
--- drag
-local dragging, dragStart, dragOrigin = false, nil, nil
-TB.InputBegan:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.Touch
-    or i.UserInputType == Enum.UserInputType.MouseButton1 then
-        dragging = true; dragStart = i.Position; dragOrigin = frame.Position
+-- ==========================================
+-- 6. CLAIM TAB GENERATION
+-- ==========================================
+local UIListClaim = Instance.new("UIListLayout", ClaimTab)
+UIListClaim.Padding = UDim.new(0, 10)
+UIListClaim.HorizontalAlignment = Enum.HorizontalAlignment.Center
+UIListClaim.SortOrder = Enum.SortOrder.LayoutOrder
+Instance.new("UIPadding", ClaimTab).PaddingTop = UDim.new(0, 8)
+
+local ClaimStatus = Instance.new("TextLabel", ClaimTab)
+ClaimStatus.Size = UDim2.new(1, -20, 0, 22)
+ClaimStatus.BackgroundColor3 = C.surface
+ClaimStatus.Text = "Status: Idle"
+ClaimStatus.TextColor3 = C.text
+ClaimStatus.Font = Enum.Font.Gotham
+ClaimStatus.TextSize = 11
+Instance.new("UICorner", ClaimStatus).CornerRadius = UDim.new(0, 5)
+ClaimStatus.LayoutOrder = 1
+
+local ClaimTimer = Instance.new("TextLabel", ClaimTab)
+ClaimTimer.Size = UDim2.new(1, -20, 0, 22)
+ClaimTimer.BackgroundTransparency = 1
+ClaimTimer.Text = "Next Reset: --:--:--"
+ClaimTimer.TextColor3 = C.accent
+ClaimTimer.Font = Enum.Font.GothamBold
+ClaimTimer.TextSize = 14
+ClaimTimer.LayoutOrder = 2
+
+local LastClaimLbl = Instance.new("TextLabel", ClaimTab)
+LastClaimLbl.Size = UDim2.new(1, -20, 0, 16)
+LastClaimLbl.BackgroundTransparency = 1
+LastClaimLbl.Text = "Last Claim: Never"
+LastClaimLbl.TextColor3 = C.sub
+LastClaimLbl.Font = Enum.Font.Gotham
+LastClaimLbl.TextSize = 10
+LastClaimLbl.LayoutOrder = 3
+
+local ToggleClaimBtn = Instance.new("TextButton", ClaimTab)
+ToggleClaimBtn.Size = UDim2.new(1, -20, 0, 32)
+ToggleClaimBtn.BackgroundColor3 = C.green
+ToggleClaimBtn.TextColor3 = C.bg
+ToggleClaimBtn.Text = "● AUTO CLAIM: ON"
+ToggleClaimBtn.Font = Enum.Font.GothamBold
+ToggleClaimBtn.TextSize = 11
+Instance.new("UICorner", ToggleClaimBtn).CornerRadius = UDim.new(0, 5)
+ToggleClaimBtn.LayoutOrder = 4
+
+local ClaimNowBtn = Instance.new("TextButton", ClaimTab)
+ClaimNowBtn.Size = UDim2.new(1, -20, 0, 32)
+ClaimNowBtn.BackgroundColor3 = C.card
+ClaimNowBtn.TextColor3 = C.text
+ClaimNowBtn.Text = "⚡ Manual Claim"
+ClaimNowBtn.Font = Enum.Font.GothamBold
+ClaimNowBtn.TextSize = 11
+Instance.new("UICorner", ClaimNowBtn).CornerRadius = UDim.new(0, 5)
+Instance.new("UIStroke", ClaimNowBtn).Color = C.border
+ClaimNowBtn.LayoutOrder = 5
+
+ToggleClaimBtn.MouseButton1Click:Connect(function()
+    autoClaimEnabled = not autoClaimEnabled
+    if autoClaimEnabled then
+        ToggleClaimBtn.BackgroundColor3 = C.green
+        ToggleClaimBtn.TextColor3 = C.bg
+        ToggleClaimBtn.Text = "● AUTO CLAIM: ON"
+        ClaimStatus.Text = "Status: Monitoring timings..."
+    else
+        ToggleClaimBtn.BackgroundColor3 = C.red
+        ToggleClaimBtn.TextColor3 = C.text
+        ToggleClaimBtn.Text = "● AUTO CLAIM: OFF"
+        ClaimStatus.Text = "Status: Suspended"
     end
 end)
-TB.InputEnded:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.Touch
-    or i.UserInputType == Enum.UserInputType.MouseButton1 then
+
+ClaimNowBtn.MouseButton1Click:Connect(function()
+    ClaimNowBtn.Text = "Invoking Server..."
+    local ok = claimAll()
+    if ok then
+        ClaimStatus.Text = "Status: Success!"
+        LastClaimLbl.Text = "Last Claim: " .. os.date("%H:%M:%S")
+        ClaimNowBtn.Text = "✓ Processed"
+    else
+        ClaimStatus.Text = "Status: Partial Failure"
+        ClaimNowBtn.Text = "✕ Failed"
+    end
+    task.wait(1.5)
+    ClaimNowBtn.Text = "⚡ Manual Claim"
+end)
+
+-- ==========================================
+-- 7. TABBING & INTERACTIVE TWEEN MECHANICS
+-- ==========================================
+TabFarmBtn.MouseButton1Click:Connect(function()
+    FarmTab.Visible = true
+    ClaimTab.Visible = false
+    TabFarmBtn.TextColor3 = C.text
+    TabClaimBtn.TextColor3 = C.sub
+    TS:Create(TabIndicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new(0, 0, 1, -2)}):Play()
+end)
+
+TabClaimBtn.MouseButton1Click:Connect(function()
+    FarmTab.Visible = false
+    ClaimTab.Visible = true
+    TabClaimBtn.TextColor3 = C.text
+    TabFarmBtn.TextColor3 = C.sub
+    TS:Create(TabIndicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new(0.5, 0, 1, -2)}):Play()
+end)
+
+MinBtn.MouseButton1Click:Connect(function()
+    isMinimized = not isMinimized
+    TS:Create(Main, TweenInfo.new(0.25, Enum.EasingStyle.Cubic), {Size = isMinimized and miniSize or normalSize}):Play()
+    MinBtn.Text = isMinimized and "▢" or "—"
+    TabBar.Visible = not isMinimized
+    ContentArea.Visible = not isMinimized
+end)
+
+CloseBtn.MouseButton1Click:Connect(function()
+    running = false
+    runId += 1
+    unglueTarget()
+    unequipAll()
+    sg:Destroy()
+end)
+
+-- Dragging Engine
+local dragging, dragStart, startPos
+TitleBar.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true; dragStart = input.Position; startPos = Main.Position
+    end
+end)
+UIS.InputChanged:Connect(function(input)
+    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - dragStart
+        Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+UIS.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         dragging = false
     end
 end)
-UIS.InputChanged:Connect(function(i)
-    if dragging and (i.UserInputType == Enum.UserInputType.Touch
-    or i.UserInputType == Enum.UserInputType.MouseMovement) then
-        local d = i.Position - dragStart
-        frame.Position = UDim2.new(
-            dragOrigin.X.Scale, dragOrigin.X.Offset + d.X,
-            dragOrigin.Y.Scale, dragOrigin.Y.Offset + d.Y)
+
+-- ==========================================
+-- 8. RUNTIME BACKGROUND EXECUTORS
+-- ==========================================
+task.spawn(function()
+    task.wait(1.5)
+    local types = scanMonsterTypes()
+    populateList(types)
+    ScanBtn.Text = "🔍 Rescan (" .. #types .. " Found)"
+end)
+
+task.spawn(function()
+    while task.wait(1) do
+        local secs = getSecondsUntilReset()
+        ClaimTimer.Text = "Next Reset: " .. formatTime(secs)
     end
 end)
 
--- auto scan on load - wait longer for SelfGUI to populate
 task.spawn(function()
-    task.wait(2)
-    local types = scanMonsterTypes()
-    populateList(types)
-    scanBtn.Text = "🔍 Scan Monsters ("..#types.." types)"
+    task.wait(3)
+    if autoClaimEnabled then
+        local ok = claimAll()
+        if ok then
+            ClaimStatus.Text = "Status: Handled Launch Claim!"
+            LastClaimLbl.Text = "Last Claim: " .. os.date("%H:%M:%S")
+        end
+    end
+    while true do
+        local secs = getSecondsUntilReset()
+        task.wait(secs + 15) 
+        if autoClaimEnabled then
+            ClaimStatus.Text = "Status: Checking reset payouts..."
+            local ok = claimAll()
+            if ok then
+                ClaimStatus.Text = "Status: Cycle Completed!"
+                LastClaimLbl.Text = "Last Claim: " .. os.date("%H:%M:%S")
+            end
+        end
+    end
 end)
 
-print("[AutoFarm] Ready!")
+print("[Noxar Panel] Static-Lock Framework Deployed.")
