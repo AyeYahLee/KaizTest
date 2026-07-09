@@ -4,6 +4,8 @@
 
 local Players        = game:GetService("Players")
 local RunService     = game:GetService("RunService")
+local RS             = game:GetService("ReplicatedStorage")
+local HttpService    = game:GetService("HttpService")
 
 local lp   = Players.LocalPlayer
 local char = lp.Character or lp.CharacterAdded:Wait()
@@ -150,7 +152,7 @@ local function stroke(w, col, p) local s=Instance.new("UIStroke",p); s.Thickness
 local function tween(obj, t, props) TweenService:Create(obj, TweenInfo.new(t, Enum.EasingStyle.Quad), props):Play() end
 
 -- ── Root frame ────────────────────────────────────────────────────
-local W, H = 270, 344
+local W, H = 270, 342
 local frame = Instance.new("Frame")
 frame.Size            = UDim2.new(0, W, 0, H)
 frame.Position        = UDim2.new(0.5, -W/2, 0.5, -H/2)
@@ -206,6 +208,44 @@ hline.BackgroundColor3 = C.accent
 hline.BorderSizePixel = 0
 hline.BackgroundTransparency = 0.4
 
+-- ── Tab bar ───────────────────────────────────────────────────────
+local TAB_H = 28
+local tabBar = Instance.new("Frame", frame)
+tabBar.Size = UDim2.new(1, 0, 0, TAB_H)
+tabBar.Position = UDim2.new(0, 0, 0, HEADER_H)
+tabBar.BackgroundColor3 = C.bgMid
+tabBar.BorderSizePixel = 0
+
+local farmTabBtn = Instance.new("TextButton", tabBar)
+farmTabBtn.Size = UDim2.new(1/3, 0, 1, 0)
+farmTabBtn.Position = UDim2.new(0, 0, 0, 0)
+farmTabBtn.BackgroundColor3 = C.btnOn
+farmTabBtn.BorderSizePixel = 0
+farmTabBtn.Font = Enum.Font.GothamBold
+farmTabBtn.TextSize = 12
+farmTabBtn.TextColor3 = C.glow
+farmTabBtn.Text = "⚔"
+
+local serverTabBtn = Instance.new("TextButton", tabBar)
+serverTabBtn.Size = UDim2.new(1/3, 0, 1, 0)
+serverTabBtn.Position = UDim2.new(1/3, 0, 0, 0)
+serverTabBtn.BackgroundColor3 = C.bgMid
+serverTabBtn.BorderSizePixel = 0
+serverTabBtn.Font = Enum.Font.GothamBold
+serverTabBtn.TextSize = 12
+serverTabBtn.TextColor3 = C.textDim
+serverTabBtn.Text = "🌐"
+
+local spinTabBtn = Instance.new("TextButton", tabBar)
+spinTabBtn.Size = UDim2.new(1/3, 0, 1, 0)
+spinTabBtn.Position = UDim2.new(2/3, 0, 0, 0)
+spinTabBtn.BackgroundColor3 = C.bgMid
+spinTabBtn.BorderSizePixel = 0
+spinTabBtn.Font = Enum.Font.GothamBold
+spinTabBtn.TextSize = 12
+spinTabBtn.TextColor3 = C.textDim
+spinTabBtn.Text = "🎰"
+
 -- Icon + title
 local icon = Instance.new("TextLabel", header)
 icon.Size = UDim2.new(0, 36, 0, 36)
@@ -260,7 +300,7 @@ minBtn.MouseButton1Click:Connect(function() setMinimized(not minimized) end)
 -- ── Status pill ───────────────────────────────────────────────────
 local statusPill = Instance.new("Frame", frame)
 statusPill.Size = UDim2.new(1,-24,0,30)
-statusPill.Position = UDim2.new(0,12,0,HEADER_H+8)
+statusPill.Position = UDim2.new(0,12,0,HEADER_H+TAB_H+8)
 statusPill.BackgroundColor3 = C.bgMid
 statusPill.BorderSizePixel = 0
 corner(8, statusPill)
@@ -298,7 +338,7 @@ end
 -- Uptime tracker
 local uptimeLbl = Instance.new("TextLabel", frame)
 uptimeLbl.Size = UDim2.new(1,-24,0,18)
-uptimeLbl.Position = UDim2.new(0,12,0,HEADER_H+42)
+uptimeLbl.Position = UDim2.new(0,12,0,HEADER_H+TAB_H+42)
 uptimeLbl.BackgroundTransparency = 1
 uptimeLbl.Text = "⏱  Uptime: 00:00"
 uptimeLbl.TextColor3 = C.textDim
@@ -328,7 +368,7 @@ end)
 -- ── Section label ─────────────────────────────────────────────────
 local sectionLbl = Instance.new("TextLabel", frame)
 sectionLbl.Size = UDim2.new(1,-24,0,16)
-sectionLbl.Position = UDim2.new(0,12,0,HEADER_H+64)
+sectionLbl.Position = UDim2.new(0,12,0,HEADER_H+TAB_H+64)
 sectionLbl.BackgroundTransparency = 1
 sectionLbl.Text = "▸  SELECT MONSTERS"
 sectionLbl.TextColor3 = C.textLabel
@@ -338,8 +378,8 @@ sectionLbl.TextXAlignment = Enum.TextXAlignment.Left
 
 -- ── Monster scroll list ───────────────────────────────────────────
 local scroll = Instance.new("ScrollingFrame", frame)
-scroll.Size = UDim2.new(1,-24,0,118)
-scroll.Position = UDim2.new(0,12,0,HEADER_H+84)
+scroll.Size = UDim2.new(1,-24,0,92)
+scroll.Position = UDim2.new(0,12,0,HEADER_H+TAB_H+84)
 scroll.BackgroundTransparency = 1
 scroll.BorderSizePixel = 0
 scroll.ScrollBarThickness = 2
@@ -401,8 +441,8 @@ local function makeCheckbox(monName, index)
 end
 
 -- ── Bottom buttons ────────────────────────────────────────────────
-local SCAN_Y  = HEADER_H + 210
-local START_Y = HEADER_H + 248
+local SCAN_Y  = HEADER_H + TAB_H + 182
+local START_Y = HEADER_H + TAB_H + 218
 
 local scanBtn = Instance.new("TextButton", frame)
 scanBtn.Size = UDim2.new(1,-24,0,30)
@@ -532,5 +572,612 @@ end)
 
 scanBtn.MouseButton1Click:Connect(scanMonsters)
 task.delay(1, scanMonsters)
+
+-- ══════════════════════════════════════════════════════════════════
+--  SERVER TAB — auto-rejoin timer
+-- ══════════════════════════════════════════════════════════════════
+local TeleportService = game:GetService("TeleportService")
+
+local CONTENT_Y = HEADER_H + TAB_H  -- 80, top of content area on both tabs
+
+-- ── Auto-Rejoin Timer section ───────────────────────────────────────
+local rejoinLbl = Instance.new("TextLabel", frame)
+rejoinLbl.Size = UDim2.new(1,-24,0,16)
+rejoinLbl.Position = UDim2.new(0,12,0,CONTENT_Y+8)
+rejoinLbl.BackgroundTransparency = 1
+rejoinLbl.Text = "▸  AUTO-REJOIN TIMER"
+rejoinLbl.TextColor3 = C.textLabel
+rejoinLbl.Font = Enum.Font.GothamBold
+rejoinLbl.TextSize = 11
+rejoinLbl.TextXAlignment = Enum.TextXAlignment.Left
+rejoinLbl.Visible = false
+
+local timerRow = Instance.new("Frame", frame)
+timerRow.Size = UDim2.new(1,-24,0,34)
+timerRow.Position = UDim2.new(0,12,0,CONTENT_Y+28)
+timerRow.BackgroundColor3 = C.bgMid
+timerRow.BorderSizePixel = 0
+timerRow.Visible = false
+corner(8, timerRow)
+stroke(1, C.divider, timerRow)
+
+local minutesBox = Instance.new("TextBox", timerRow)
+minutesBox.Size = UDim2.new(0, 50, 0, 24)
+minutesBox.Position = UDim2.new(0, 8, 0.5, -12)
+minutesBox.BackgroundColor3 = C.btnOff
+minutesBox.BorderSizePixel = 0
+minutesBox.Text = "60"
+minutesBox.TextColor3 = C.textMain
+minutesBox.Font = Enum.Font.Gotham
+minutesBox.TextSize = 13
+minutesBox.ClearTextOnFocus = false
+corner(6, minutesBox)
+
+local minutesLbl = Instance.new("TextLabel", timerRow)
+minutesLbl.Size = UDim2.new(0, 60, 1, 0)
+minutesLbl.Position = UDim2.new(0, 64, 0, 0)
+minutesLbl.BackgroundTransparency = 1
+minutesLbl.Text = "minutes"
+minutesLbl.TextColor3 = C.textDim
+minutesLbl.Font = Enum.Font.Gotham
+minutesLbl.TextSize = 11
+minutesLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+local timerToggleBtn = Instance.new("TextButton", timerRow)
+timerToggleBtn.Size = UDim2.new(0, 56, 0, 24)
+timerToggleBtn.Position = UDim2.new(1, -64, 0.5, -12)
+timerToggleBtn.BackgroundColor3 = C.red
+timerToggleBtn.BorderSizePixel = 0
+timerToggleBtn.Text = "OFF"
+timerToggleBtn.TextColor3 = C.textMain
+timerToggleBtn.Font = Enum.Font.GothamBold
+timerToggleBtn.TextSize = 11
+corner(6, timerToggleBtn)
+
+local timerStatusLbl = Instance.new("TextLabel", frame)
+timerStatusLbl.Size = UDim2.new(1,-24,0,16)
+timerStatusLbl.Position = UDim2.new(0,12,0,CONTENT_Y+66)
+timerStatusLbl.BackgroundTransparency = 1
+timerStatusLbl.Text = "Disabled"
+timerStatusLbl.TextColor3 = C.textDim
+timerStatusLbl.Font = Enum.Font.Gotham
+timerStatusLbl.TextSize = 11
+timerStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
+timerStatusLbl.Visible = false
+
+-- Uses the private server's actual access code (from GetJoinData) when present —
+-- this is what TeleportToPlaceInstance was missing, causing Error 773 on
+-- private servers. Falls back to a normal teleport for public servers.
+local function rejoinSameServer()
+    local placeId = game.PlaceId
+    local ok, joinData = pcall(function() return lp:GetJoinData() end)
+    local code = ok and joinData and joinData.PrivateServerAccessCode
+
+    if code and code ~= "" then
+        task.wait(3) -- lets the current server shut down cleanly first
+        pcall(function()
+            TeleportService:TeleportToPrivateServer(placeId, code, {lp})
+        end)
+    else
+        task.wait(2)
+        pcall(function() TeleportService:Teleport(placeId, lp) end)
+    end
+end
+
+-- Live disconnect monitor — catches connection-lost/kick prompts while
+-- Roblox itself is still open (not a full app crash, but the common case).
+local CoreGui = game:GetService("CoreGui")
+local promptOverlay = CoreGui:FindFirstChild("RobloxPromptGui")
+    and CoreGui.RobloxPromptGui:FindFirstChild("promptOverlay")
+if promptOverlay then
+    promptOverlay.ChildAdded:Connect(function(child)
+        if child.Name == "ErrorPrompt" then
+            timerStatusLbl.Text = "Disconnect detected — rejoining..."
+            rejoinSameServer()
+        end
+    end)
+end
+
+-- Anti-AFK
+lp.Idled:Connect(function()
+    local VirtualUser = game:GetService("VirtualUser")
+    VirtualUser:Button2Down(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
+    task.wait(1)
+    VirtualUser:Button2Up(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
+end)
+
+-- ── Auto-rejoin timer logic ─────────────────────────────────────────
+local SETTINGS_FILE = "AnimeSouls_ServerSettings.json"
+local rejoinTimerEnabled = false
+local rejoinDeadline = nil
+
+local function saveServerSettings()
+    if not writefile then return end
+    local data = {
+        rejoinEnabled = rejoinTimerEnabled,
+        rejoinMinutes = tonumber(minutesBox.Text) or 60,
+    }
+    pcall(function()
+        writefile(SETTINGS_FILE, HttpService:JSONEncode(data))
+    end)
+end
+
+local function loadServerSettings()
+    if not (isfile and readfile and isfile(SETTINGS_FILE)) then return nil end
+    local ok, data = pcall(function()
+        return HttpService:JSONDecode(readfile(SETTINGS_FILE))
+    end)
+    if ok then return data end
+    return nil
+end
+
+local function setRejoinTimer(enabled, mins)
+    rejoinTimerEnabled = enabled
+    if enabled then
+        mins = mins or tonumber(minutesBox.Text) or 60
+        minutesBox.Text = tostring(mins)
+        rejoinDeadline = tick() + mins * 60
+        timerToggleBtn.Text = "ON"
+        timerToggleBtn.BackgroundColor3 = C.green
+    else
+        rejoinDeadline = nil
+        timerToggleBtn.Text = "OFF"
+        timerToggleBtn.BackgroundColor3 = C.red
+        timerStatusLbl.Text = "Disabled"
+    end
+    saveServerSettings()
+end
+
+timerToggleBtn.MouseButton1Click:Connect(function()
+    setRejoinTimer(not rejoinTimerEnabled)
+end)
+
+minutesBox.FocusLost:Connect(function()
+    local mins = tonumber(minutesBox.Text) or 60
+    minutesBox.Text = tostring(mins)
+    if rejoinTimerEnabled then
+        rejoinDeadline = tick() + mins * 60
+    end
+    saveServerSettings()
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(1)
+        if rejoinTimerEnabled and rejoinDeadline then
+            local remaining = rejoinDeadline - tick()
+            if remaining <= 0 then
+                timerStatusLbl.Text = "Rejoining now..."
+                rejoinSameServer()
+            else
+                timerStatusLbl.Text = "Rejoin in: " .. formatUptime(remaining)
+            end
+        end
+    end
+end)
+
+-- Auto-restore saved settings from before the last rejoin/reload
+local savedSettings = loadServerSettings()
+if savedSettings and savedSettings.rejoinEnabled then
+    setRejoinTimer(true, savedSettings.rejoinMinutes)
+end
+
+-- ══════════════════════════════════════════════════════════════════
+--  SPIN TAB — auto spin for Aura / Shikai / Avatar / Breathing / Fighters
+-- ══════════════════════════════════════════════════════════════════
+local SPIN_TYPES = {
+    {label = "Aura",      channel = "RollAureole",   qty = 4}, -- exact captured value
+    {label = "Shikai",    channel = "RollNewSkill",  qty = 1}, -- re-captured, was 2, server now wants 1
+    {label = "Avatar",    channel = "RollCharacter", qty = 2}, -- exact captured value
+    {label = "Breathing", channel = "RollProperty",  qty = 5}, -- exact captured value
+    {label = "Fighters",  channel = "RollAttendant", qty = 1}, -- re-captured, was 2, server now wants 1
+}
+local selectedSpins  = {}
+local autoSpinEnabled = false
+local spinDelay = 0.5
+
+-- ── Spin tab: everything lives inside one scrolling frame ──────────
+local SPIN_SCROLL_H = H - CONTENT_Y - 12  -- fills remaining window height
+local spinScroll = Instance.new("ScrollingFrame", frame)
+spinScroll.Size = UDim2.new(1,-24,0,SPIN_SCROLL_H)
+spinScroll.Position = UDim2.new(0,12,0,CONTENT_Y+8)
+spinScroll.BackgroundTransparency = 1
+spinScroll.BorderSizePixel = 0
+spinScroll.ScrollBarThickness = 2
+spinScroll.ScrollBarImageColor3 = C.accent
+spinScroll.CanvasSize = UDim2.new(0,0,0,0)
+spinScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+spinScroll.ElasticBehavior = Enum.ElasticBehavior.Never
+spinScroll.Visible = false
+
+local spinList = Instance.new("UIListLayout", spinScroll)
+spinList.Padding = UDim.new(0,6)
+spinList.SortOrder = Enum.SortOrder.LayoutOrder
+
+local spinSectionLbl = Instance.new("TextLabel", spinScroll)
+spinSectionLbl.Size = UDim2.new(1,0,0,16)
+spinSectionLbl.BackgroundTransparency = 1
+spinSectionLbl.Text = "▸  AUTO SPIN"
+spinSectionLbl.TextColor3 = C.textLabel
+spinSectionLbl.Font = Enum.Font.GothamBold
+spinSectionLbl.TextSize = 11
+spinSectionLbl.TextXAlignment = Enum.TextXAlignment.Left
+spinSectionLbl.LayoutOrder = 1
+
+local function updateRowDisplay(t)
+    local selected = selectedSpins[t.channel] == true
+    local dot = selected and "●" or "○"
+    local text = "   " .. dot .. "  " .. t.label
+    if t.pityText then
+        text = text .. "  —  " .. t.pityText
+    end
+    t.row.Text = text
+    tween(t.row, 0.15, {BackgroundColor3 = selected and C.btnOn or C.btnOff})
+    t.row.TextColor3 = selected and C.glow or C.textDim
+end
+
+local spinToggleRows = {}
+for i, t in ipairs(SPIN_TYPES) do
+    local row = Instance.new("TextButton", spinScroll)
+    row.Size = UDim2.new(1,0,0,26)
+    row.BackgroundColor3 = C.btnOff
+    row.BorderSizePixel = 0
+    row.Font = Enum.Font.Gotham
+    row.TextSize = 13
+    row.TextColor3 = C.textDim
+    row.TextXAlignment = Enum.TextXAlignment.Left
+    row.Text = "   ○  " .. t.label
+    row.LayoutOrder = 1 + i
+    corner(8, row)
+    stroke(1, C.divider, row)
+
+    t.row = row
+    t.pityText = nil
+
+    row.MouseButton1Click:Connect(function()
+        selectedSpins[t.channel] = not selectedSpins[t.channel] or nil
+        updateRowDisplay(t)
+    end)
+    table.insert(spinToggleRows, row)
+end
+
+local spinDelayRow = Instance.new("Frame", spinScroll)
+spinDelayRow.Size = UDim2.new(1,0,0,34)
+spinDelayRow.BackgroundColor3 = C.bgMid
+spinDelayRow.BorderSizePixel = 0
+spinDelayRow.LayoutOrder = 10
+corner(8, spinDelayRow)
+stroke(1, C.divider, spinDelayRow)
+
+local spinDelayBox = Instance.new("TextBox", spinDelayRow)
+spinDelayBox.Size = UDim2.new(0, 50, 0, 24)
+spinDelayBox.Position = UDim2.new(0, 8, 0.5, -12)
+spinDelayBox.BackgroundColor3 = C.btnOff
+spinDelayBox.BorderSizePixel = 0
+spinDelayBox.Text = "0.5"
+spinDelayBox.TextColor3 = C.textMain
+spinDelayBox.Font = Enum.Font.Gotham
+spinDelayBox.TextSize = 13
+spinDelayBox.ClearTextOnFocus = false
+corner(6, spinDelayBox)
+
+local spinDelayLbl = Instance.new("TextLabel", spinDelayRow)
+spinDelayLbl.Size = UDim2.new(0, 60, 1, 0)
+spinDelayLbl.Position = UDim2.new(0, 64, 0, 0)
+spinDelayLbl.BackgroundTransparency = 1
+spinDelayLbl.Text = "sec delay"
+spinDelayLbl.TextColor3 = C.textDim
+spinDelayLbl.Font = Enum.Font.Gotham
+spinDelayLbl.TextSize = 11
+spinDelayLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+local spinToggleBtn = Instance.new("TextButton", spinDelayRow)
+spinToggleBtn.Size = UDim2.new(0, 56, 0, 24)
+spinToggleBtn.Position = UDim2.new(1, -64, 0.5, -12)
+spinToggleBtn.BackgroundColor3 = C.red
+spinToggleBtn.BorderSizePixel = 0
+spinToggleBtn.Text = "OFF"
+spinToggleBtn.TextColor3 = C.textMain
+spinToggleBtn.Font = Enum.Font.GothamBold
+spinToggleBtn.TextSize = 11
+corner(6, spinToggleBtn)
+
+local spinStatusLbl = Instance.new("TextLabel", spinScroll)
+spinStatusLbl.Size = UDim2.new(1,0,0,16)
+spinStatusLbl.BackgroundTransparency = 1
+spinStatusLbl.Text = "Disabled"
+spinStatusLbl.TextColor3 = C.textDim
+spinStatusLbl.Font = Enum.Font.Gotham
+spinStatusLbl.TextSize = 11
+spinStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
+spinStatusLbl.LayoutOrder = 11
+
+spinDelayBox.FocusLost:Connect(function()
+    local v = tonumber(spinDelayBox.Text) or 0.5
+    if v < 0.01 then v = 0.01 end
+    spinDelay = v
+    spinDelayBox.Text = tostring(v)
+end)
+
+spinToggleBtn.MouseButton1Click:Connect(function()
+    autoSpinEnabled = not autoSpinEnabled
+    if autoSpinEnabled then
+        spinToggleBtn.Text = "ON"
+        tween(spinToggleBtn, 0.15, {BackgroundColor3 = C.green})
+    else
+        spinToggleBtn.Text = "OFF"
+        tween(spinToggleBtn, 0.15, {BackgroundColor3 = C.red})
+        spinStatusLbl.Text = "Disabled"
+    end
+end)
+
+-- Turns any value into a short readable string. Tables get unwrapped one
+-- level instead of printing a raw memory address, e.g. {current=1260,max=5000}
+-- becomes "1260/5000".
+local function describeValue(v)
+    if type(v) ~= "table" then return tostring(v) end
+    -- Try common nested field names first
+    for _, key in ipairs({"current", "count", "value", "amount"}) do
+        if v[key] ~= nil then
+            if v.max then
+                return tostring(v[key]) .. "/" .. tostring(v.max)
+            end
+            return tostring(v[key])
+        end
+    end
+    -- Fallback: grab the first number-looking value in the table
+    for _, val in pairs(v) do
+        if type(val) == "number" then
+            return tostring(val)
+        end
+    end
+    return "{table}" -- last resort, at least don't show a memory address
+end
+
+local function describeResult(v)
+    if type(v) ~= "table" then return tostring(v) end
+    local parts = {}
+    for k, val in pairs(v) do
+        table.insert(parts, tostring(k) .. "=" .. describeValue(val))
+    end
+    return "{" .. table.concat(parts, ", ") .. "}"
+end
+
+-- Pulls a "...Pity..." field straight out of the server's own response,
+-- e.g. {PityCount=1260, ...} -> "PityCount: 1260"
+-- Some spin types nest it one level deeper, e.g. {PityCount={current=1260,max=5000}},
+-- so we unwrap that case instead of printing the raw table address.
+local function extractPityInfo(result)
+    if type(result) ~= "table" then return nil end
+    for k, v in pairs(result) do
+        if tostring(k):lower():find("pity") then
+            return tostring(k) .. ": " .. describeValue(v)
+        end
+    end
+    return nil
+end
+
+local function doSpin(t)
+    local ok, result = pcall(function()
+        return RS.CommonLibrary.Tool.RemoteManager.Funcs.DataPullFunc:InvokeServer(t.channel, t.qty)
+    end)
+    if not ok then
+        spinStatusLbl.Text = "Error: " .. describeResult(result):sub(1, 40)
+    else
+        local pity = extractPityInfo(result)
+        if pity then
+            t.pityText = pity
+            updateRowDisplay(t)
+        end
+    end
+    return ok, result
+end
+
+task.spawn(function()
+    while true do
+        if autoSpinEnabled then
+            local didAny = false
+            for _, t in ipairs(SPIN_TYPES) do
+                if selectedSpins[t.channel] then
+                    didAny = true
+                    spinStatusLbl.Text = "Spinning: " .. t.label .. "..."
+                    doSpin(t)
+                    task.wait(spinDelay)
+                end
+            end
+            if not didAny then
+                spinStatusLbl.Text = "No spin types selected"
+                task.wait(0.5)
+            end
+        else
+            task.wait(0.2)
+        end
+    end
+end)
+
+-- ══════════════════════════════════════════════════════════════════
+--  GAMBLE SECTION — separate mechanic (GambleJustDoItChannel)
+--  Lives in the same spinScroll, stacked below Auto Spin via LayoutOrder
+-- ══════════════════════════════════════════════════════════════════
+local gambleDivider = Instance.new("Frame", spinScroll)
+gambleDivider.Size = UDim2.new(1,0,0,1)
+gambleDivider.BackgroundColor3 = C.divider
+gambleDivider.BorderSizePixel = 0
+gambleDivider.LayoutOrder = 20
+
+local gambleSectionLbl = Instance.new("TextLabel", spinScroll)
+gambleSectionLbl.Size = UDim2.new(1,0,0,16)
+gambleSectionLbl.BackgroundTransparency = 1
+gambleSectionLbl.Text = "▸  GAMBLE"
+gambleSectionLbl.TextColor3 = C.textLabel
+gambleSectionLbl.Font = Enum.Font.GothamBold
+gambleSectionLbl.TextSize = 11
+gambleSectionLbl.TextXAlignment = Enum.TextXAlignment.Left
+gambleSectionLbl.LayoutOrder = 21
+
+local gambleDelayRow = Instance.new("Frame", spinScroll)
+gambleDelayRow.Size = UDim2.new(1,0,0,30)
+gambleDelayRow.BackgroundColor3 = C.bgMid
+gambleDelayRow.BorderSizePixel = 0
+gambleDelayRow.LayoutOrder = 22
+corner(8, gambleDelayRow)
+stroke(1, C.divider, gambleDelayRow)
+
+local gambleDelayBox = Instance.new("TextBox", gambleDelayRow)
+gambleDelayBox.Size = UDim2.new(0, 50, 0, 22)
+gambleDelayBox.Position = UDim2.new(0, 8, 0.5, -11)
+gambleDelayBox.BackgroundColor3 = C.btnOff
+gambleDelayBox.BorderSizePixel = 0
+gambleDelayBox.Text = "1.5"
+gambleDelayBox.TextColor3 = C.textMain
+gambleDelayBox.Font = Enum.Font.Gotham
+gambleDelayBox.TextSize = 12
+gambleDelayBox.ClearTextOnFocus = false
+corner(6, gambleDelayBox)
+
+local gambleDelayLbl = Instance.new("TextLabel", gambleDelayRow)
+gambleDelayLbl.Size = UDim2.new(0, 70, 1, 0)
+gambleDelayLbl.Position = UDim2.new(0, 64, 0, 0)
+gambleDelayLbl.BackgroundTransparency = 1
+gambleDelayLbl.Text = "sec delay"
+gambleDelayLbl.TextColor3 = C.textDim
+gambleDelayLbl.Font = Enum.Font.Gotham
+gambleDelayLbl.TextSize = 10
+gambleDelayLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+local gamblePullsRow = Instance.new("Frame", spinScroll)
+gamblePullsRow.Size = UDim2.new(1,0,0,30)
+gamblePullsRow.BackgroundColor3 = C.bgMid
+gamblePullsRow.BorderSizePixel = 0
+gamblePullsRow.LayoutOrder = 23
+corner(8, gamblePullsRow)
+stroke(1, C.divider, gamblePullsRow)
+
+local gamblePullsBox = Instance.new("TextBox", gamblePullsRow)
+gamblePullsBox.Size = UDim2.new(0, 50, 0, 22)
+gamblePullsBox.Position = UDim2.new(0, 8, 0.5, -11)
+gamblePullsBox.BackgroundColor3 = C.btnOff
+gamblePullsBox.BorderSizePixel = 0
+gamblePullsBox.Text = "1"
+gamblePullsBox.TextColor3 = C.textMain
+gamblePullsBox.Font = Enum.Font.Gotham
+gamblePullsBox.TextSize = 12
+gamblePullsBox.ClearTextOnFocus = false
+corner(6, gamblePullsBox)
+
+local gamblePullsLbl = Instance.new("TextLabel", gamblePullsRow)
+gamblePullsLbl.Size = UDim2.new(0, 70, 1, 0)
+gamblePullsLbl.Position = UDim2.new(0, 64, 0, 0)
+gamblePullsLbl.BackgroundTransparency = 1
+gamblePullsLbl.Text = "pulls/spin"
+gamblePullsLbl.TextColor3 = C.textDim
+gamblePullsLbl.Font = Enum.Font.Gotham
+gamblePullsLbl.TextSize = 10
+gamblePullsLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+local gambleToggleBtn = Instance.new("TextButton", gamblePullsRow)
+gambleToggleBtn.Size = UDim2.new(0, 56, 0, 22)
+gambleToggleBtn.Position = UDim2.new(1, -64, 0.5, -11)
+gambleToggleBtn.BackgroundColor3 = C.red
+gambleToggleBtn.BorderSizePixel = 0
+gambleToggleBtn.Text = "OFF"
+gambleToggleBtn.TextColor3 = C.textMain
+gambleToggleBtn.Font = Enum.Font.GothamBold
+gambleToggleBtn.TextSize = 11
+corner(6, gambleToggleBtn)
+
+local gambleStatusLbl = Instance.new("TextLabel", spinScroll)
+gambleStatusLbl.Size = UDim2.new(1,0,0,16)
+gambleStatusLbl.BackgroundTransparency = 1
+gambleStatusLbl.Text = "Spins: 0 | Hits: 0"
+gambleStatusLbl.TextColor3 = C.textDim
+gambleStatusLbl.Font = Enum.Font.Gotham
+gambleStatusLbl.TextSize = 11
+gambleStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
+gambleStatusLbl.LayoutOrder = 24
+
+-- small bottom spacer so the last row isn't flush against the scroll edge
+local gambleSpacer = Instance.new("Frame", spinScroll)
+gambleSpacer.Size = UDim2.new(1,0,0,4)
+gambleSpacer.BackgroundTransparency = 1
+gambleSpacer.LayoutOrder = 25
+
+local GAMBLE_ID = "Gamble5_2" -- captured from your manual spin
+local gambleEnabled = false
+local gambleDelay = 1.5
+local gamblePulls = 1
+local gambleSpinCount = 0
+local gambleHitCount = 0
+
+gambleDelayBox.FocusLost:Connect(function()
+    local v = tonumber(gambleDelayBox.Text) or 1.5
+    if v < 0.1 then v = 0.1 end
+    gambleDelay = v
+    gambleDelayBox.Text = tostring(v)
+end)
+
+gamblePullsBox.FocusLost:Connect(function()
+    local n = tonumber(gamblePullsBox.Text)
+    if n and n >= 1 then gamblePulls = math.floor(n) end
+    gamblePullsBox.Text = tostring(gamblePulls)
+end)
+
+gambleToggleBtn.MouseButton1Click:Connect(function()
+    gambleEnabled = not gambleEnabled
+    if gambleEnabled then
+        gambleToggleBtn.Text = "ON"
+        tween(gambleToggleBtn, 0.15, {BackgroundColor3 = C.green})
+    else
+        gambleToggleBtn.Text = "OFF"
+        tween(gambleToggleBtn, 0.15, {BackgroundColor3 = C.red})
+    end
+end)
+
+local function doGamble()
+    local ok, result = pcall(function()
+        return RS.CommonLibrary.Tool.RemoteManager.Funcs.DataPullFunc:InvokeServer(
+            "GambleJustDoItChannel", GAMBLE_ID, gamblePulls)
+    end)
+    gambleSpinCount += 1
+    if ok and result ~= false then
+        gambleHitCount += 1
+    end
+    gambleStatusLbl.Text = "Spins: " .. gambleSpinCount .. " | Hits: " .. gambleHitCount
+    return ok, result
+end
+
+task.spawn(function()
+    while true do
+        if gambleEnabled then
+            doGamble()
+            task.wait(gambleDelay)
+        else
+            task.wait(0.2)
+        end
+    end
+end)
+
+-- ── Tab switching ────────────────────────────────────────────────────
+local farmPageElements   = {statusPill, uptimeLbl, sectionLbl, scroll, scanBtn, startBtn}
+local serverPageElements = {rejoinLbl, timerRow, timerStatusLbl}
+local spinPageElements   = {spinScroll}
+
+local function showTab(tab)
+    for _, el in ipairs(farmPageElements)   do el.Visible = (tab == "farm") end
+    for _, el in ipairs(serverPageElements) do el.Visible = (tab == "server") end
+    for _, el in ipairs(spinPageElements)   do el.Visible = (tab == "spin") end
+
+    farmTabBtn.BackgroundColor3   = (tab == "farm")   and C.btnOn or C.bgMid
+    farmTabBtn.TextColor3         = (tab == "farm")   and C.glow  or C.textDim
+    serverTabBtn.BackgroundColor3 = (tab == "server") and C.btnOn or C.bgMid
+    serverTabBtn.TextColor3       = (tab == "server") and C.glow  or C.textDim
+    spinTabBtn.BackgroundColor3   = (tab == "spin")   and C.btnOn or C.bgMid
+    spinTabBtn.TextColor3         = (tab == "spin")   and C.glow  or C.textDim
+end
+
+farmTabBtn.MouseButton1Click:Connect(function() showTab("farm") end)
+serverTabBtn.MouseButton1Click:Connect(function() showTab("server") end)
+spinTabBtn.MouseButton1Click:Connect(function() showTab("spin") end)
+showTab("farm")
 
 print("[AutoFarm] Loaded — Anime UI ready.")
