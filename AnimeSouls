@@ -774,7 +774,7 @@ local SPIN_TYPES = {
 }
 local selectedSpins  = {}
 local autoSpinEnabled = false
-local spinDelay = 0.5
+local spinDelay = 0.1
 
 -- ── Spin tab: everything lives inside one scrolling frame ──────────
 local SPIN_SCROLL_H = H - CONTENT_Y - 12  -- fills remaining window height
@@ -1105,7 +1105,7 @@ gambleSpacer.LayoutOrder = 25
 local GAMBLE_ID = "Gamble5_2" -- captured from your manual spin
 local gambleEnabled = false
 local gambleDelay = 1.5
-local gamblePulls = 1
+local gamblePulls = 3
 local gambleSpinCount = 0
 local gambleHitCount = 0
 
