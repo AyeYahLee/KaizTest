@@ -1,5 +1,5 @@
 -- ══════════════════════════════════════════════════════════════════
---  AutoFarm  –  Anime Vanguards
+--  AutoFarm  –  Anime Souls
 -- ══════════════════════════════════════════════════════════════════
 
 local Players        = game:GetService("Players")
