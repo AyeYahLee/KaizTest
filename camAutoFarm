@@ -37,7 +37,7 @@ local monstersEquipped = false
 local currentTarget = nil
 local nameCache = {}
 local glueConnection = nil
-local autoClaimEnabled = false
+local autoClaimEnabled = true
 
 local DataPullFunc = RS:WaitForChild("CommonLibrary"):WaitForChild("Tool"):WaitForChild("RemoteManager"):WaitForChild("Funcs"):WaitForChild("DataPullFunc")
 local clientMonsters = workspace:WaitForChild("ClientMonsters")
