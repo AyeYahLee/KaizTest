@@ -1,3 +1,13 @@
+-- ==========================================
+-- 0. GAME ID SECURITY CHECK
+-- ==========================================
+local TARGET_PLACE_ID = 98664161516921 -- ⚠️ REPLACE THIS WITH YOUR GAME'S PLACE ID
+
+if game.PlaceId ~= TARGET_PLACE_ID then
+    warn("[Noxar Panel] Execution blocked: Incorrect Game/Place ID. Current ID: " .. tostring(game.PlaceId))
+    return -- This completely stops the script from running any further
+end
+
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
 local UIS = game:GetService("UserInputService")
