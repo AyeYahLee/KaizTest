@@ -52,7 +52,11 @@ local autoClaimEnabled = true
 
 local DataPullFunc = RS:WaitForChild("CommonLibrary"):WaitForChild("Tool"):WaitForChild("RemoteManager"):WaitForChild("Funcs"):WaitForChild("DataPullFunc")
 local clientMonsters = workspace:WaitForChild("ClientMonsters")
-local selfGui = workspace:FindFirstChild("SelfGUI")
+-- NOTE: SelfGUI is intentionally NOT cached here. Right after a rejoin the
+-- game's own UI scripts may not have created it yet, and FindFirstChild
+-- doesn't wait. Caching it once meant it could lock in as nil forever,
+-- breaking name lookups and the farm filter permanently. It's now looked
+-- up fresh inside buildNameCache() every time instead.
 
 local groundRayParams = RaycastParams.new()
 groundRayParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -152,25 +156,30 @@ local function glueToTarget(targetRoot)
     end)
 end
 
+-- FIXED: SelfGUI is now fetched fresh on every call instead of relying on
+-- a stale top-level local. This means once the game finishes creating it
+-- (even seconds after rejoin), the very next rescan/farm-tick will pick
+-- it up correctly instead of being stuck with raw Monster_XXXX names.
 local function buildNameCache()
     table.clear(nameCache) 
     if not clientMonsters then return end
 
-    if selfGui then
-        for _, gui in ipairs(selfGui:GetChildren()) do
-            if not gui:IsA("BillboardGui") then continue end
-            local adornee = gui.Adornee
-            if not adornee then continue end
-            local candidates = { adornee.Parent and adornee.Parent.Parent, adornee.Parent }
-            for _, monster in ipairs(candidates) do
-                if monster and monster.Parent == clientMonsters then
-                    local labName = gui:FindFirstChild("LabName", true)
-                    local labLv = gui:FindFirstChild("LabLv", true)
-                    if labName and labName:IsA("TextLabel") and labName.Text ~= "" then
-                        nameCache[monster.Name] = { name = labName.Text, level = labLv and labLv.Text or "" }
-                    end
-                    break
+    local selfGui = workspace:FindFirstChild("SelfGUI")
+    if not selfGui then return end
+
+    for _, gui in ipairs(selfGui:GetChildren()) do
+        if not gui:IsA("BillboardGui") then continue end
+        local adornee = gui.Adornee
+        if not adornee then continue end
+        local candidates = { adornee.Parent and adornee.Parent.Parent, adornee.Parent }
+        for _, monster in ipairs(candidates) do
+            if monster and monster.Parent == clientMonsters then
+                local labName = gui:FindFirstChild("LabName", true)
+                local labLv = gui:FindFirstChild("LabLv", true)
+                if labName and labName:IsA("TextLabel") and labName.Text ~= "" then
+                    nameCache[monster.Name] = { name = labName.Text, level = labLv and labLv.Text or "" }
                 end
+                break
             end
         end
     end
@@ -491,11 +500,26 @@ local function populateList(types)
     ScrollFarm.CanvasSize = UDim2.new(0, 0, 0, ScrollList.AbsoluteContentSize.Y + 8)
 end
 
+-- FIXED: rescan now retries a few times with a short wait if it finds
+-- monsters but the name cache came back empty (SelfGUI not ready yet),
+-- instead of just showing raw Monster_XXXX names on that one attempt.
 ScanBtn.MouseButton1Click:Connect(function()
     ScanBtn.Text = "⏳ Reading Workspace..."
     task.spawn(function()
-        task.wait(0.3)
-        local types = scanMonsterTypes()
+        local types
+        for attempt = 1, 6 do
+            task.wait(0.3)
+            types = scanMonsterTypes()
+            local hasRealNames = false
+            for _, t in ipairs(types) do
+                if not t.displayName:match("^Monster_%d+$") then
+                    hasRealNames = true
+                    break
+                end
+            end
+            if hasRealNames or #types == 0 then break end
+            ScanBtn.Text = "⏳ Waiting for names... (" .. attempt .. "/6)"
+        end
         populateList(types)
         ScanBtn.Text = "🔍 Rescan (" .. #types .. " Found)"
     end)
@@ -615,14 +639,22 @@ StartFarmBtn.MouseButton1Click:Connect(function()
     toggleFarming()
 end)
 
--- Auto-start farming if it was saved as running
+-- FIXED: auto-resume on rejoin now waits for SelfGUI to actually exist
+-- (up to 10s) before kicking off the farm loop, instead of firing
+-- startFarming() instantly against a workspace that isn't ready yet.
 if running then
-    -- Visually flip the button and start the loop
     runId += 1
     StartFarmBtn.BackgroundColor3 = C.red
     StartFarmBtn.TextColor3 = C.text
     StartFarmBtn.Text = "⏹ Halt Farming"
-    task.spawn(function() startFarming(FarmStatus) end)
+    task.spawn(function()
+        local waited = 0
+        while not workspace:FindFirstChild("SelfGUI") and waited < 10 do
+            task.wait(0.25)
+            waited += 0.25
+        end
+        startFarming(FarmStatus)
+    end)
 end
 
 -- ==========================================
@@ -770,9 +802,22 @@ end)
 -- ==========================================
 -- 8. RUNTIME BACKGROUND EXECUTORS
 -- ==========================================
+-- FIXED: initial scan on load now also retries until SelfGUI exists,
+-- same reasoning as the rescan button fix above.
 task.spawn(function()
-    task.wait(1.5)
-    local types = scanMonsterTypes()
+    local types
+    for attempt = 1, 8 do
+        task.wait(0.3)
+        types = scanMonsterTypes()
+        local hasRealNames = false
+        for _, t in ipairs(types) do
+            if not t.displayName:match("^Monster_%d+$") then
+                hasRealNames = true
+                break
+            end
+        end
+        if hasRealNames or #types == 0 then break end
+    end
     populateList(types)
     ScanBtn.Text = "🔍 Rescan (" .. #types .. " Found)"
 end)
@@ -807,4 +852,4 @@ task.spawn(function()
     end
 end)
 
-print("[Noxar Panel] Static-Lock Framework Deployed.")
+print("[Noxar Panel] Static-Lock Framework Deployed. (SelfGUI race condition fixed)")
