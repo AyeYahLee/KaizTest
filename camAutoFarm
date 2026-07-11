@@ -349,41 +349,6 @@ local function claimAll()
     return ok1 and ok2 and ok3
 end
 
-local function getIncubatorState(index)
-    local eggHatchFolder = workspace:FindFirstChild("EggHatch", true)
-    if not eggHatchFolder then 
-        return "unknown" 
-    end
-
-    local incubator = eggHatchFolder:FindFirstChild("Hatch_" .. tostring(index))
-    if not incubator then 
-        return "unknown" 
-    end
-
-    local foundSomeText = false
-
-    for _, obj in ipairs(incubator:GetDescendants()) do
-        if obj:IsA("TextLabel") and obj.Text ~= "" then
-            foundSomeText = true
-            local text = obj.Text
-            
-            if string.find(text, "Select") then
-                return "empty"
-            elseif string.find(text, "Ready") then
-                return "ready"
-            elseif string.match(text, "%d+:%d+:%d+") then
-                return "hatching"
-            end
-        end
-    end
-    
-    if not foundSomeText then
-        return "empty"
-    end
-    
-    return "unknown"
-end
-
 local function getSecondsUntilReset()
     local t = os.date("!*t")
     local now = t.hour * 3600 + t.min * 60 + t.sec
@@ -566,10 +531,15 @@ ServerTab.Size = UDim2.new(1, 0, 1, 0)
 ServerTab.BackgroundTransparency = 1
 ServerTab.Visible = false
 
-local HatchTab = Instance.new("Frame", ContentArea)
+local HatchTab = Instance.new("ScrollingFrame", ContentArea)
 HatchTab.Size = UDim2.new(1, 0, 1, 0)
 HatchTab.BackgroundTransparency = 1
 HatchTab.Visible = false
+HatchTab.BorderSizePixel = 0
+HatchTab.ScrollBarThickness = 3
+HatchTab.ScrollBarImageColor3 = C.accent
+HatchTab.CanvasSize = UDim2.new(0, 0, 0, 0) -- recalculated below once content is laid out
+HatchTab.AutomaticCanvasSize = Enum.AutomaticSize.Y
 
 -- ==========================================
 -- 5. FARM TAB GENERATION
@@ -1179,6 +1149,20 @@ HatchTargetLbl.TextSize = 11
 HatchTargetLbl.TextXAlignment = Enum.TextXAlignment.Left
 HatchTargetLbl.LayoutOrder = 2
 
+local EggSearchBox = Instance.new("TextBox", HatchTab)
+EggSearchBox.Size = UDim2.new(1, -20, 0, 24)
+EggSearchBox.BackgroundColor3 = C.card
+EggSearchBox.TextColor3 = C.text
+EggSearchBox.PlaceholderText = "🔍 Search eggs..."
+EggSearchBox.PlaceholderColor3 = C.sub
+EggSearchBox.Font = Enum.Font.Gotham
+EggSearchBox.TextSize = 11
+EggSearchBox.ClearTextOnFocus = false
+EggSearchBox.Text = ""
+Instance.new("UICorner", EggSearchBox).CornerRadius = UDim.new(0, 5)
+Instance.new("UIPadding", EggSearchBox).PaddingLeft = UDim.new(0, 6)
+EggSearchBox.LayoutOrder = 3 -- between HatchTargetLbl (2) and ScrollHatch (4 below)
+
 local ScrollHatch = Instance.new("ScrollingFrame", HatchTab)
 ScrollHatch.Size = UDim2.new(1, -20, 0, 120)
 ScrollHatch.BackgroundColor3 = C.surface
@@ -1186,10 +1170,33 @@ ScrollHatch.ScrollBarThickness = 3
 ScrollHatch.ScrollBarImageColor3 = C.accent
 ScrollHatch.BorderSizePixel = 0
 Instance.new("UICorner", ScrollHatch).CornerRadius = UDim.new(0, 5)
-ScrollHatch.LayoutOrder = 3
+ScrollHatch.LayoutOrder = 4
 local ScrollHatchList = Instance.new("UIListLayout", ScrollHatch)
 ScrollHatchList.Padding = UDim.new(0, 3)
 Instance.new("UIPadding", ScrollHatch).PaddingTop = UDim.new(0, 3)
+
+local eggButtons = {} -- {btn = TextButton, searchName = "lowercase egg name"}
+
+local function refreshEggListCanvas()
+    -- Recompute canvas size after buttons are shown/hidden by the filter,
+    -- since UIListLayout only accounts for visible children automatically
+    -- on its own AbsoluteContentSize, but we nudge it a frame late to be safe.
+    task.defer(function()
+        ScrollHatch.CanvasSize = UDim2.new(0, 0, 0, ScrollHatchList.AbsoluteContentSize.Y + 8)
+    end)
+end
+
+local function applyEggFilter(query)
+    query = query:lower():match("^%s*(.-)%s*$") -- trim whitespace
+    for _, entry in ipairs(eggButtons) do
+        entry.btn.Visible = (query == "") or entry.searchName:find(query, 1, true) ~= nil
+    end
+    refreshEggListCanvas()
+end
+
+EggSearchBox:GetPropertyChangedSignal("Text"):Connect(function()
+    applyEggFilter(EggSearchBox.Text)
+end)
 
 for _, egg in ipairs(EggDatabase) do
     local btn = Instance.new("TextButton", ScrollHatch)
@@ -1208,6 +1215,8 @@ for _, egg in ipairs(EggDatabase) do
         HatchTargetLbl.Text = "Target: " .. selectedEggName .. " (" .. selectedEggId .. ")"
         saveConfig()
     end)
+
+    table.insert(eggButtons, {btn = btn, searchName = egg.name:lower()})
 end
 ScrollHatch.CanvasSize = UDim2.new(0, 0, 0, ScrollHatchList.AbsoluteContentSize.Y + 8)
 
@@ -1219,7 +1228,7 @@ ToggleHatchBtn.Text = autoHatchEnabled and "● AUTO HATCH: ON" or "● AUTO HAT
 ToggleHatchBtn.Font = Enum.Font.GothamBold
 ToggleHatchBtn.TextSize = 11
 Instance.new("UICorner", ToggleHatchBtn).CornerRadius = UDim.new(0, 5)
-ToggleHatchBtn.LayoutOrder = 4
+ToggleHatchBtn.LayoutOrder = 5
 
 ToggleHatchBtn.MouseButton1Click:Connect(function()
     autoHatchEnabled = not autoHatchEnabled
@@ -1351,27 +1360,61 @@ task.spawn(function()
 end)
 
 -- Background Auto Hatch Executor
+-- getIncubatorState reads on-screen GUI text, which doesn't reliably
+-- update/stream when far from the incubators. Since ClientHatchStart /
+-- ClientHatchTaken have no actual distance restriction (confirmed working
+-- from another island), we track state ourselves instead of reading the
+-- GUI.
+--
+-- Optimization: we don't know whether resending ClientHatchStart to a
+-- slot that's already hatching wastes an egg, and hatch durations are
+-- random so we can't just wait "long enough" to be safe. Instead we only
+-- ever send Start right after a Claim succeeds on that same slot — i.e.
+-- we only start a slot we just emptied ourselves, never blind-restart a
+-- slot we're merely guessing is empty. incubatorKnownEmpty tracks which
+-- slots we're confident are actually empty right now.
+local incubatorKnownEmpty = {} -- [index] = true once we've either claimed it or confirmed it empty
+
+-- One-time pass: try Start on every slot once at startup, in case some
+-- are sitting empty from before the script ran (e.g. after a rejoin).
+local hatchBootstrapped = false
+
 task.spawn(function()
-    while task.wait(5) do
+    while task.wait(3) do
         if not autoHatchEnabled or not selectedEggId then continue end
-        
+
         task.spawn(function()
+            -- First pass ever: seed every slot as a Start candidate so
+            -- slots left empty from before we started still get filled.
+            if not hatchBootstrapped then
+                hatchBootstrapped = true
+                for i = 1, 5 do incubatorKnownEmpty[i] = true end
+            end
+
             for incubatorIndex = 1, 5 do
-                if not autoHatchEnabled then break end 
-                
-                local state = getIncubatorState(incubatorIndex)
-                
-                if state == "ready" then
-                    pcall(function()
-                        if EggSystem then
-                            EggSystem.ClientHatchTaken(incubatorIndex)
-                        else
-                            DataPullFunc:InvokeServer("EggHatchTakenChannel", incubatorIndex)
-                        end
-                    end)
-                    task.wait(0.3) 
-                    
-                elseif state == "empty" then
+                if not autoHatchEnabled then break end
+
+                -- Always attempt to claim — if it's not ready, this
+                -- should just fail/no-op server-side rather than error.
+                -- If it succeeds, the slot is now empty, so mark it for
+                -- a Start attempt below.
+                local claimedOk = pcall(function()
+                    if EggSystem then
+                        EggSystem.ClientHatchTaken(incubatorIndex)
+                    else
+                        DataPullFunc:InvokeServer("EggHatchTakenChannel", incubatorIndex)
+                    end
+                end)
+                if claimedOk then
+                    incubatorKnownEmpty[incubatorIndex] = true
+                end
+                task.wait(0.2)
+
+                -- Only Start a slot we know is actually empty (either
+                -- just claimed above, or seeded on the first pass) —
+                -- never blind-restart a slot that might already be
+                -- hatching.
+                if incubatorKnownEmpty[incubatorIndex] then
                     pcall(function()
                         if EggSystem then
                             EggSystem.ClientHatchStart(incubatorIndex, selectedEggId)
@@ -1379,7 +1422,11 @@ task.spawn(function()
                             DataPullFunc:InvokeServer("EggHatchStartChannel", incubatorIndex, selectedEggId)
                         end
                     end)
-                    task.wait(0.3) 
+                    -- Once started, we no longer know it's empty — clear
+                    -- the flag so we don't Start it again until we've
+                    -- claimed it fresh.
+                    incubatorKnownEmpty[incubatorIndex] = nil
+                    task.wait(0.2)
                 end
             end
         end)
