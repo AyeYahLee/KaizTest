@@ -61,6 +61,14 @@ local rejoinMinutes = 60
 local rejoinDeadline = nil
 local savedPositions = {} 
 
+-- AreaFarm States (completely separate from savedPositions above)
+-- farmingSpot / bossSpot shape: {areaId = number, areaName = string, x = number, y = number, z = number} or nil if unset
+local farmingSpot = nil
+local bossSpot = nil
+local bossLoopEnabled = false
+local bossLoopStatus = "Idle"
+local lastBossTrigger = nil -- "!YYYY-MM-DD HH:MM" string of the last UTC 15-min mark we already fired on, prevents double-firing within the same minute
+
 local DataPullFunc = RS:WaitForChild("CommonLibrary"):WaitForChild("Tool"):WaitForChild("RemoteManager"):WaitForChild("Funcs"):WaitForChild("DataPullFunc")
 local clientMonsters = workspace:WaitForChild("ClientMonsters")
 
@@ -124,7 +132,11 @@ local function saveConfig()
             antiAfk = antiAfkEnabled,
             autoHatch = autoHatchEnabled,
             eggId = selectedEggId,
-            eggName = selectedEggName
+            eggName = selectedEggName,
+            -- AreaFarm data, kept as separate keys from `positions` above
+            areaFarmingSpot = farmingSpot,
+            areaBossSpot = bossSpot,
+            areaBossLoopEnabled = bossLoopEnabled
         }
         pcall(function()
             writefile(configFileName, HttpService:JSONEncode(data))
@@ -147,6 +159,10 @@ local function loadConfig()
             if data.autoHatch ~= nil then autoHatchEnabled = data.autoHatch end
             if data.eggId ~= nil then selectedEggId = data.eggId end
             if data.eggName ~= nil then selectedEggName = data.eggName end
+            -- AreaFarm data, kept separate from `positions` above
+            if data.areaFarmingSpot ~= nil then farmingSpot = data.areaFarmingSpot end
+            if data.areaBossSpot ~= nil then bossSpot = data.areaBossSpot end
+            if data.areaBossLoopEnabled ~= nil then bossLoopEnabled = data.areaBossLoopEnabled end
         end)
     end
 end
@@ -471,7 +487,7 @@ TabBar.BackgroundColor3 = C.surface
 TabBar.BorderSizePixel = 0
 
 local TabFarmBtn = Instance.new("TextButton", TabBar)
-TabFarmBtn.Size = UDim2.new(0.25, 0, 1, 0)
+TabFarmBtn.Size = UDim2.new(0.2, 0, 1, 0)
 TabFarmBtn.Position = UDim2.new(0, 0, 0, 0)
 TabFarmBtn.BackgroundTransparency = 1
 TabFarmBtn.Text = "⚔️ Farm"
@@ -480,8 +496,8 @@ TabFarmBtn.Font = Enum.Font.GothamBold
 TabFarmBtn.TextSize = 11
 
 local TabClaimBtn = Instance.new("TextButton", TabBar)
-TabClaimBtn.Size = UDim2.new(0.25, 0, 1, 0)
-TabClaimBtn.Position = UDim2.new(0.25, 0, 0, 0)
+TabClaimBtn.Size = UDim2.new(0.2, 0, 1, 0)
+TabClaimBtn.Position = UDim2.new(0.2, 0, 0, 0)
 TabClaimBtn.BackgroundTransparency = 1
 TabClaimBtn.Text = "🎁 Claim"
 TabClaimBtn.TextColor3 = C.sub
@@ -489,8 +505,8 @@ TabClaimBtn.Font = Enum.Font.GothamBold
 TabClaimBtn.TextSize = 11
 
 local TabServerBtn = Instance.new("TextButton", TabBar)
-TabServerBtn.Size = UDim2.new(0.25, 0, 1, 0)
-TabServerBtn.Position = UDim2.new(0.5, 0, 0, 0)
+TabServerBtn.Size = UDim2.new(0.2, 0, 1, 0)
+TabServerBtn.Position = UDim2.new(0.4, 0, 0, 0)
 TabServerBtn.BackgroundTransparency = 1
 TabServerBtn.Text = "🌐 Server"
 TabServerBtn.TextColor3 = C.sub
@@ -498,16 +514,25 @@ TabServerBtn.Font = Enum.Font.GothamBold
 TabServerBtn.TextSize = 11
 
 local TabHatchBtn = Instance.new("TextButton", TabBar)
-TabHatchBtn.Size = UDim2.new(0.25, 0, 1, 0)
-TabHatchBtn.Position = UDim2.new(0.75, 0, 0, 0)
+TabHatchBtn.Size = UDim2.new(0.2, 0, 1, 0)
+TabHatchBtn.Position = UDim2.new(0.6, 0, 0, 0)
 TabHatchBtn.BackgroundTransparency = 1
 TabHatchBtn.Text = "🥚 Hatch"
 TabHatchBtn.TextColor3 = C.sub
 TabHatchBtn.Font = Enum.Font.GothamBold
 TabHatchBtn.TextSize = 11
 
+local TabAreaFarmBtn = Instance.new("TextButton", TabBar)
+TabAreaFarmBtn.Size = UDim2.new(0.2, 0, 1, 0)
+TabAreaFarmBtn.Position = UDim2.new(0.8, 0, 0, 0)
+TabAreaFarmBtn.BackgroundTransparency = 1
+TabAreaFarmBtn.Text = "🗺️ Area"
+TabAreaFarmBtn.TextColor3 = C.sub
+TabAreaFarmBtn.Font = Enum.Font.GothamBold
+TabAreaFarmBtn.TextSize = 11
+
 local TabIndicator = Instance.new("Frame", TabBar)
-TabIndicator.Size = UDim2.new(0.25, 0, 0, 2)
+TabIndicator.Size = UDim2.new(0.2, 0, 0, 2)
 TabIndicator.Position = UDim2.new(0, 0, 1, -2)
 TabIndicator.BackgroundColor3 = C.accent
 TabIndicator.BorderSizePixel = 0
@@ -540,6 +565,16 @@ HatchTab.ScrollBarThickness = 3
 HatchTab.ScrollBarImageColor3 = C.accent
 HatchTab.CanvasSize = UDim2.new(0, 0, 0, 0) -- recalculated below once content is laid out
 HatchTab.AutomaticCanvasSize = Enum.AutomaticSize.Y
+
+local AreaFarmTab = Instance.new("ScrollingFrame", ContentArea)
+AreaFarmTab.Size = UDim2.new(1, 0, 1, 0)
+AreaFarmTab.BackgroundTransparency = 1
+AreaFarmTab.Visible = false
+AreaFarmTab.BorderSizePixel = 0
+AreaFarmTab.ScrollBarThickness = 3
+AreaFarmTab.ScrollBarImageColor3 = C.accent
+AreaFarmTab.CanvasSize = UDim2.new(0, 0, 0, 0)
+AreaFarmTab.AutomaticCanvasSize = Enum.AutomaticSize.Y
 
 -- ==========================================
 -- 5. FARM TAB GENERATION
@@ -1247,30 +1282,465 @@ ToggleHatchBtn.MouseButton1Click:Connect(function()
 end)
 
 -- ==========================================
+-- 7.6 AREAFARM TAB GENERATION
+-- ==========================================
+-- Area Database Map (only used to know which AreaID a saved spot belongs
+-- to — same channel/pattern as the existing DataPullFunc calls elsewhere
+-- in this file, e.g. TowerTakeDailyRewardAllChannel above).
+local AreaFarmIDs = {
+    ["Starter Island"] = 1,
+    ["Volcano"] = 2,
+    ["Frost Isle"] = 3,
+    ["Neverland"] = 4,
+    ["Duneveil Isle"] = 5,
+    ["Tideland"] = 6,
+    ["Spirit Grove"] = 7,
+    ["Dragon's Breath"] = 8,
+    ["Blossom Haven"] = 9,
+    ["Mobius Circus"] = 10,
+    ["Specter Shallows"] = 11,
+    ["Nova Coast"] = 12,
+    ["Skyheart Isle"] = 10000,
+    ["Activity place"] = 10001,
+}
+local SortedAreaFarmAreas = {}
+for name, id in pairs(AreaFarmIDs) do
+    table.insert(SortedAreaFarmAreas, {Name = name, ID = id})
+end
+table.sort(SortedAreaFarmAreas, function(a, b) return a.ID < b.ID end)
+
+-- Tracks the area you last clicked in the list below, so Save Farming
+-- Spot / Save Boss Spot know which AreaID to attach to the coordinates
+-- you're standing at. This mirrors the reference script's own approach:
+-- teleport via the button first, THEN save, since the game doesn't
+-- expose a direct "what area am I in" read.
+local AreaFarmCurrentAreaName = "Starter Island"
+local AreaFarmCurrentAreaID = 1
+
+local UIListAreaFarm = Instance.new("UIListLayout", AreaFarmTab)
+UIListAreaFarm.Padding = UDim.new(0, 8)
+UIListAreaFarm.HorizontalAlignment = Enum.HorizontalAlignment.Center
+UIListAreaFarm.SortOrder = Enum.SortOrder.LayoutOrder
+Instance.new("UIPadding", AreaFarmTab).PaddingTop = UDim.new(0, 8)
+Instance.new("UIPadding", AreaFarmTab).PaddingBottom = UDim.new(0, 8)
+
+local AreaFarmHintLbl = Instance.new("TextLabel", AreaFarmTab)
+AreaFarmHintLbl.Size = UDim2.new(1, -20, 0, 28)
+AreaFarmHintLbl.BackgroundTransparency = 1
+AreaFarmHintLbl.Text = "Tap an area below, walk to your spot, then Save."
+AreaFarmHintLbl.TextColor3 = C.sub
+AreaFarmHintLbl.Font = Enum.Font.Gotham
+AreaFarmHintLbl.TextSize = 10
+AreaFarmHintLbl.TextWrapped = true
+AreaFarmHintLbl.LayoutOrder = 1
+
+local ScrollAreaFarm = Instance.new("ScrollingFrame", AreaFarmTab)
+ScrollAreaFarm.Size = UDim2.new(1, -20, 0, 90)
+ScrollAreaFarm.BackgroundColor3 = C.surface
+ScrollAreaFarm.ScrollBarThickness = 3
+ScrollAreaFarm.ScrollBarImageColor3 = C.accent
+ScrollAreaFarm.BorderSizePixel = 0
+Instance.new("UICorner", ScrollAreaFarm).CornerRadius = UDim.new(0, 5)
+ScrollAreaFarm.LayoutOrder = 2
+local ScrollAreaFarmList = Instance.new("UIListLayout", ScrollAreaFarm)
+ScrollAreaFarmList.Padding = UDim.new(0, 3)
+Instance.new("UIPadding", ScrollAreaFarm).PaddingTop = UDim.new(0, 3)
+
+for _, area in ipairs(SortedAreaFarmAreas) do
+    local areaBtn = Instance.new("TextButton", ScrollAreaFarm)
+    areaBtn.Size = UDim2.new(1, -10, 0, 24)
+    areaBtn.BackgroundColor3 = C.card
+    areaBtn.TextColor3 = C.text
+    areaBtn.Font = Enum.Font.GothamSemibold
+    areaBtn.TextSize = 10
+    areaBtn.Text = "  " .. area.Name
+    areaBtn.TextXAlignment = Enum.TextXAlignment.Left
+    areaBtn.BorderSizePixel = 0
+    Instance.new("UICorner", areaBtn).CornerRadius = UDim.new(0, 4)
+
+    areaBtn.MouseButton1Click:Connect(function()
+        areaBtn.TextColor3 = C.accent
+        AreaFarmCurrentAreaName = area.Name
+        AreaFarmCurrentAreaID = area.ID
+        pcall(function()
+            DataPullFunc:InvokeServer("AreaTeleportToRegionChannel", area.ID)
+        end)
+        task.wait(0.2)
+        areaBtn.TextColor3 = C.text
+    end)
+end
+ScrollAreaFarm.CanvasSize = UDim2.new(0, 0, 0, ScrollAreaFarmList.AbsoluteContentSize.Y + 6)
+
+-- ── Farming Spot ─────────────────────────────────────────────
+local FarmSpotDivider = Instance.new("Frame", AreaFarmTab)
+FarmSpotDivider.Size = UDim2.new(1, -20, 0, 1)
+FarmSpotDivider.BackgroundColor3 = C.border
+FarmSpotDivider.BorderSizePixel = 0
+FarmSpotDivider.LayoutOrder = 3
+
+local FarmSpotLbl = Instance.new("TextLabel", AreaFarmTab)
+FarmSpotLbl.Size = UDim2.new(1, -20, 0, 16)
+FarmSpotLbl.BackgroundTransparency = 1
+FarmSpotLbl.Text = "🌾 Farming Spot"
+FarmSpotLbl.TextColor3 = C.gold
+FarmSpotLbl.Font = Enum.Font.GothamBold
+FarmSpotLbl.TextSize = 11
+FarmSpotLbl.TextXAlignment = Enum.TextXAlignment.Left
+FarmSpotLbl.LayoutOrder = 4
+
+local function farmSpotStatusText()
+    if farmingSpot then
+        return "Saved: " .. farmingSpot.areaName
+    end
+    return "Saved: None"
+end
+
+local FarmSpotStatusLbl = Instance.new("TextLabel", AreaFarmTab)
+FarmSpotStatusLbl.Size = UDim2.new(1, -20, 0, 16)
+FarmSpotStatusLbl.BackgroundTransparency = 1
+FarmSpotStatusLbl.Text = farmSpotStatusText()
+FarmSpotStatusLbl.TextColor3 = farmingSpot and C.green or C.sub
+FarmSpotStatusLbl.Font = Enum.Font.GothamSemibold
+FarmSpotStatusLbl.TextSize = 10
+FarmSpotStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
+FarmSpotStatusLbl.LayoutOrder = 5
+
+local FarmSpotRow = Instance.new("Frame", AreaFarmTab)
+FarmSpotRow.Size = UDim2.new(1, -20, 0, 28)
+FarmSpotRow.BackgroundTransparency = 1
+FarmSpotRow.LayoutOrder = 6
+
+local SaveFarmSpotBtn = Instance.new("TextButton", FarmSpotRow)
+SaveFarmSpotBtn.Size = UDim2.new(0.34, -4, 1, 0)
+SaveFarmSpotBtn.Position = UDim2.new(0, 0, 0, 0)
+SaveFarmSpotBtn.BackgroundColor3 = C.card
+SaveFarmSpotBtn.TextColor3 = C.text
+SaveFarmSpotBtn.Font = Enum.Font.GothamBold
+SaveFarmSpotBtn.TextSize = 10
+SaveFarmSpotBtn.Text = "Save"
+SaveFarmSpotBtn.BorderSizePixel = 0
+Instance.new("UICorner", SaveFarmSpotBtn).CornerRadius = UDim.new(0, 5)
+
+local TPFarmSpotBtn = Instance.new("TextButton", FarmSpotRow)
+TPFarmSpotBtn.Size = UDim2.new(0.33, -4, 1, 0)
+TPFarmSpotBtn.Position = UDim2.new(0.34, 4, 0, 0)
+TPFarmSpotBtn.BackgroundColor3 = C.accent
+TPFarmSpotBtn.TextColor3 = C.text
+TPFarmSpotBtn.Font = Enum.Font.GothamBold
+TPFarmSpotBtn.TextSize = 10
+TPFarmSpotBtn.Text = "TP"
+TPFarmSpotBtn.BorderSizePixel = 0
+Instance.new("UICorner", TPFarmSpotBtn).CornerRadius = UDim.new(0, 5)
+
+local ClearFarmSpotBtn = Instance.new("TextButton", FarmSpotRow)
+ClearFarmSpotBtn.Size = UDim2.new(0.33, -4, 1, 0)
+ClearFarmSpotBtn.Position = UDim2.new(0.67, 4, 0, 0)
+ClearFarmSpotBtn.BackgroundColor3 = C.red
+ClearFarmSpotBtn.TextColor3 = C.text
+ClearFarmSpotBtn.Font = Enum.Font.GothamBold
+ClearFarmSpotBtn.TextSize = 10
+ClearFarmSpotBtn.Text = "Clear"
+ClearFarmSpotBtn.BorderSizePixel = 0
+Instance.new("UICorner", ClearFarmSpotBtn).CornerRadius = UDim.new(0, 5)
+
+-- Teleports to a saved AreaFarm spot: fires the area-change remote for
+-- its AreaID, waits, then snaps the character to the exact saved CFrame.
+-- Shared by both Farming Spot TP and the boss loop's "go back" step.
+local function teleportToAreaFarmSpot(spot)
+    if not spot then return false end
+    pcall(function()
+        DataPullFunc:InvokeServer("AreaTeleportToRegionChannel", spot.areaId)
+    end)
+    task.wait(5)
+    local r = getRoot()
+    if r then
+        r.CFrame = CFrame.new(spot.x, spot.y, spot.z)
+
+        -- Wait 5s after arriving, then jump twice
+        task.wait(5)
+        local char = LP.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            for i = 1, 2 do
+                hum:ChangeState(Enum.HumanoidStateType.Jumping)
+                task.wait(3) -- short gap so the second jump registers as a new jump
+            end
+        end
+
+        return true
+    end
+    return false
+end
+
+SaveFarmSpotBtn.MouseButton1Click:Connect(function()
+    local r = getRoot()
+    if r then
+        local p = r.CFrame.Position
+        farmingSpot = {
+            areaId = AreaFarmCurrentAreaID,
+            areaName = AreaFarmCurrentAreaName,
+            x = p.X, y = p.Y, z = p.Z
+        }
+        FarmSpotStatusLbl.Text = farmSpotStatusText()
+        FarmSpotStatusLbl.TextColor3 = C.green
+        saveConfig()
+    end
+end)
+
+TPFarmSpotBtn.MouseButton1Click:Connect(function()
+    if farmingSpot then
+        FarmSpotStatusLbl.Text = "Teleporting..."
+        FarmSpotStatusLbl.TextColor3 = C.sub
+        teleportToAreaFarmSpot(farmingSpot)
+        FarmSpotStatusLbl.Text = farmSpotStatusText()
+        FarmSpotStatusLbl.TextColor3 = C.green
+    else
+        FarmSpotStatusLbl.Text = "No Farming Spot saved!"
+        FarmSpotStatusLbl.TextColor3 = C.red
+    end
+end)
+
+ClearFarmSpotBtn.MouseButton1Click:Connect(function()
+    farmingSpot = nil
+    FarmSpotStatusLbl.Text = farmSpotStatusText()
+    FarmSpotStatusLbl.TextColor3 = C.sub
+    saveConfig()
+end)
+
+-- ── Boss Spot ────────────────────────────────────────────────
+local BossSpotDivider = Instance.new("Frame", AreaFarmTab)
+BossSpotDivider.Size = UDim2.new(1, -20, 0, 1)
+BossSpotDivider.BackgroundColor3 = C.border
+BossSpotDivider.BorderSizePixel = 0
+BossSpotDivider.LayoutOrder = 7
+
+local BossSpotLbl = Instance.new("TextLabel", AreaFarmTab)
+BossSpotLbl.Size = UDim2.new(1, -20, 0, 16)
+BossSpotLbl.BackgroundTransparency = 1
+BossSpotLbl.Text = "💀 Boss Farm"
+BossSpotLbl.TextColor3 = C.gold
+BossSpotLbl.Font = Enum.Font.GothamBold
+BossSpotLbl.TextSize = 11
+BossSpotLbl.TextXAlignment = Enum.TextXAlignment.Left
+BossSpotLbl.LayoutOrder = 8
+
+local function bossSpotStatusText()
+    if bossSpot then
+        return "Saved: " .. bossSpot.areaName
+    end
+    return "Saved: None"
+end
+
+local BossSpotStatusLbl = Instance.new("TextLabel", AreaFarmTab)
+BossSpotStatusLbl.Size = UDim2.new(1, -20, 0, 16)
+BossSpotStatusLbl.BackgroundTransparency = 1
+BossSpotStatusLbl.Text = bossSpotStatusText()
+BossSpotStatusLbl.TextColor3 = bossSpot and C.green or C.sub
+BossSpotStatusLbl.Font = Enum.Font.GothamSemibold
+BossSpotStatusLbl.TextSize = 10
+BossSpotStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
+BossSpotStatusLbl.LayoutOrder = 9
+
+local BossSpotRow = Instance.new("Frame", AreaFarmTab)
+BossSpotRow.Size = UDim2.new(1, -20, 0, 28)
+BossSpotRow.BackgroundTransparency = 1
+BossSpotRow.LayoutOrder = 10
+
+local SaveBossSpotBtn = Instance.new("TextButton", BossSpotRow)
+SaveBossSpotBtn.Size = UDim2.new(0.34, -4, 1, 0)
+SaveBossSpotBtn.Position = UDim2.new(0, 0, 0, 0)
+SaveBossSpotBtn.BackgroundColor3 = C.card
+SaveBossSpotBtn.TextColor3 = C.text
+SaveBossSpotBtn.Font = Enum.Font.GothamBold
+SaveBossSpotBtn.TextSize = 10
+SaveBossSpotBtn.Text = "Save"
+SaveBossSpotBtn.BorderSizePixel = 0
+Instance.new("UICorner", SaveBossSpotBtn).CornerRadius = UDim.new(0, 5)
+
+local TPBossSpotBtn = Instance.new("TextButton", BossSpotRow)
+TPBossSpotBtn.Size = UDim2.new(0.33, -4, 1, 0)
+TPBossSpotBtn.Position = UDim2.new(0.34, 4, 0, 0)
+TPBossSpotBtn.BackgroundColor3 = C.accent
+TPBossSpotBtn.TextColor3 = C.text
+TPBossSpotBtn.Font = Enum.Font.GothamBold
+TPBossSpotBtn.TextSize = 10
+TPBossSpotBtn.Text = "TP"
+TPBossSpotBtn.BorderSizePixel = 0
+Instance.new("UICorner", TPBossSpotBtn).CornerRadius = UDim.new(0, 5)
+
+local ClearBossSpotBtn = Instance.new("TextButton", BossSpotRow)
+ClearBossSpotBtn.Size = UDim2.new(0.33, -4, 1, 0)
+ClearBossSpotBtn.Position = UDim2.new(0.67, 4, 0, 0)
+ClearBossSpotBtn.BackgroundColor3 = C.red
+ClearBossSpotBtn.TextColor3 = C.text
+ClearBossSpotBtn.Font = Enum.Font.GothamBold
+ClearBossSpotBtn.TextSize = 10
+ClearBossSpotBtn.Text = "Clear"
+ClearBossSpotBtn.BorderSizePixel = 0
+Instance.new("UICorner", ClearBossSpotBtn).CornerRadius = UDim.new(0, 5)
+
+SaveBossSpotBtn.MouseButton1Click:Connect(function()
+    local r = getRoot()
+    if r then
+        local p = r.CFrame.Position
+        bossSpot = {
+            areaId = AreaFarmCurrentAreaID,
+            areaName = AreaFarmCurrentAreaName,
+            x = p.X, y = p.Y, z = p.Z
+        }
+        BossSpotStatusLbl.Text = bossSpotStatusText()
+        BossSpotStatusLbl.TextColor3 = C.green
+        saveConfig()
+    end
+end)
+
+TPBossSpotBtn.MouseButton1Click:Connect(function()
+    if bossSpot then
+        BossSpotStatusLbl.Text = "Teleporting..."
+        BossSpotStatusLbl.TextColor3 = C.sub
+        teleportToAreaFarmSpot(bossSpot)
+        BossSpotStatusLbl.Text = bossSpotStatusText()
+        BossSpotStatusLbl.TextColor3 = C.green
+    else
+        BossSpotStatusLbl.Text = "No Boss Spot saved!"
+        BossSpotStatusLbl.TextColor3 = C.red
+    end
+end)
+
+ClearBossSpotBtn.MouseButton1Click:Connect(function()
+    bossSpot = nil
+    BossSpotStatusLbl.Text = bossSpotStatusText()
+    BossSpotStatusLbl.TextColor3 = C.sub
+    saveConfig()
+end)
+
+-- ── Boss Loop Toggle ─────────────────────────────────────────
+local BossLoopDivider = Instance.new("Frame", AreaFarmTab)
+BossLoopDivider.Size = UDim2.new(1, -20, 0, 1)
+BossLoopDivider.BackgroundColor3 = C.border
+BossLoopDivider.BorderSizePixel = 0
+BossLoopDivider.LayoutOrder = 11
+
+local BossLoopStatusLbl = Instance.new("TextLabel", AreaFarmTab)
+BossLoopStatusLbl.Size = UDim2.new(1, -20, 0, 16)
+BossLoopStatusLbl.BackgroundTransparency = 1
+BossLoopStatusLbl.Text = "Runs every 15 min at :00/:15/:30/:45 UTC"
+BossLoopStatusLbl.TextColor3 = C.sub
+BossLoopStatusLbl.Font = Enum.Font.Gotham
+BossLoopStatusLbl.TextSize = 9
+BossLoopStatusLbl.TextWrapped = true
+BossLoopStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
+BossLoopStatusLbl.LayoutOrder = 12
+
+local ToggleBossLoopBtn = Instance.new("TextButton", AreaFarmTab)
+ToggleBossLoopBtn.Size = UDim2.new(1, -20, 0, 30)
+ToggleBossLoopBtn.BackgroundColor3 = bossLoopEnabled and C.green or C.red
+ToggleBossLoopBtn.TextColor3 = C.text
+ToggleBossLoopBtn.Font = Enum.Font.GothamBold
+ToggleBossLoopBtn.TextSize = 11
+ToggleBossLoopBtn.Text = bossLoopEnabled and "● BOSS AUTO-LOOP: ON" or "● BOSS AUTO-LOOP: OFF"
+ToggleBossLoopBtn.BorderSizePixel = 0
+Instance.new("UICorner", ToggleBossLoopBtn).CornerRadius = UDim.new(0, 5)
+ToggleBossLoopBtn.LayoutOrder = 13
+
+local BossLoopLiveStatusLbl = Instance.new("TextLabel", AreaFarmTab)
+BossLoopLiveStatusLbl.Size = UDim2.new(1, -20, 0, 16)
+BossLoopLiveStatusLbl.BackgroundTransparency = 1
+BossLoopLiveStatusLbl.Text = "Status: " .. bossLoopStatus
+BossLoopLiveStatusLbl.TextColor3 = C.sub
+BossLoopLiveStatusLbl.Font = Enum.Font.Gotham
+BossLoopLiveStatusLbl.TextSize = 10
+BossLoopLiveStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
+BossLoopLiveStatusLbl.LayoutOrder = 14
+
+ToggleBossLoopBtn.MouseButton1Click:Connect(function()
+    bossLoopEnabled = not bossLoopEnabled
+    if bossLoopEnabled and (not farmingSpot or not bossSpot) then
+        bossLoopEnabled = false
+        BossLoopLiveStatusLbl.Text = "Status: Need both spots saved first!"
+        BossLoopLiveStatusLbl.TextColor3 = C.red
+        return
+    end
+    if bossLoopEnabled then
+        ToggleBossLoopBtn.BackgroundColor3 = C.green
+        ToggleBossLoopBtn.Text = "● BOSS AUTO-LOOP: ON"
+        BossLoopLiveStatusLbl.Text = "Status: Waiting for next :00/:15/:30/:45..."
+        BossLoopLiveStatusLbl.TextColor3 = C.sub
+    else
+        ToggleBossLoopBtn.BackgroundColor3 = C.red
+        ToggleBossLoopBtn.Text = "● BOSS AUTO-LOOP: OFF"
+        BossLoopLiveStatusLbl.Text = "Status: Disabled"
+        BossLoopLiveStatusLbl.TextColor3 = C.sub
+    end
+    saveConfig()
+end)
+
+-- Background watcher: fires once per UTC 15-minute mark while the loop
+-- is enabled. Uses os.date("!*t") the same way getSecondsUntilReset()
+-- above already does for UTC time in this file.
+task.spawn(function()
+    while task.wait(1) do
+        if not bossLoopEnabled then continue end
+        if not farmingSpot or not bossSpot then continue end
+
+        local t = os.date("!*t")
+        local isQuarterMark = (t.min % 15 == 0) and (t.sec <= 2)
+        local markKey = string.format("%d-%d-%d %d:%d", t.year, t.month, t.day, t.hour, t.min)
+
+        if isQuarterMark and lastBossTrigger ~= markKey then
+            lastBossTrigger = markKey
+
+            task.spawn(function()
+                BossLoopLiveStatusLbl.Text = "Status: Teleporting to Boss..."
+                BossLoopLiveStatusLbl.TextColor3 = C.gold
+                teleportToAreaFarmSpot(bossSpot)
+
+                BossLoopLiveStatusLbl.Text = "Status: At Boss, waiting 20s..."
+                task.wait(15)
+
+                if not bossLoopEnabled then return end -- got turned off mid-wait
+
+                BossLoopLiveStatusLbl.Text = "Status: Returning to Farming Spot..."
+                teleportToAreaFarmSpot(farmingSpot)
+
+                BossLoopLiveStatusLbl.Text = "Status: Waiting for next :00/:15/:30/:45..."
+                BossLoopLiveStatusLbl.TextColor3 = C.sub
+            end)
+        end
+    end
+end)
+
+-- ==========================================
 -- 8. TABBING & INTERACTIVE TWEEN MECHANICS
 -- ==========================================
 TabFarmBtn.MouseButton1Click:Connect(function()
-    FarmTab.Visible = true; ClaimTab.Visible = false; ServerTab.Visible = false; HatchTab.Visible = false
-    TabFarmBtn.TextColor3 = C.text; TabClaimBtn.TextColor3 = C.sub; TabServerBtn.TextColor3 = C.sub; TabHatchBtn.TextColor3 = C.sub
+    FarmTab.Visible = true; ClaimTab.Visible = false; ServerTab.Visible = false; HatchTab.Visible = false; AreaFarmTab.Visible = false
+    TabFarmBtn.TextColor3 = C.text; TabClaimBtn.TextColor3 = C.sub; TabServerBtn.TextColor3 = C.sub; TabHatchBtn.TextColor3 = C.sub; TabAreaFarmBtn.TextColor3 = C.sub
     TS:Create(TabIndicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new(0, 0, 1, -2)}):Play()
 end)
 
 TabClaimBtn.MouseButton1Click:Connect(function()
-    FarmTab.Visible = false; ClaimTab.Visible = true; ServerTab.Visible = false; HatchTab.Visible = false
-    TabClaimBtn.TextColor3 = C.text; TabFarmBtn.TextColor3 = C.sub; TabServerBtn.TextColor3 = C.sub; TabHatchBtn.TextColor3 = C.sub
-    TS:Create(TabIndicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new(0.25, 0, 1, -2)}):Play()
+    FarmTab.Visible = false; ClaimTab.Visible = true; ServerTab.Visible = false; HatchTab.Visible = false; AreaFarmTab.Visible = false
+    TabClaimBtn.TextColor3 = C.text; TabFarmBtn.TextColor3 = C.sub; TabServerBtn.TextColor3 = C.sub; TabHatchBtn.TextColor3 = C.sub; TabAreaFarmBtn.TextColor3 = C.sub
+    TS:Create(TabIndicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new(0.2, 0, 1, -2)}):Play()
 end)
 
 TabServerBtn.MouseButton1Click:Connect(function()
-    FarmTab.Visible = false; ClaimTab.Visible = false; ServerTab.Visible = true; HatchTab.Visible = false
-    TabServerBtn.TextColor3 = C.text; TabFarmBtn.TextColor3 = C.sub; TabClaimBtn.TextColor3 = C.sub; TabHatchBtn.TextColor3 = C.sub
-    TS:Create(TabIndicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new(0.5, 0, 1, -2)}):Play()
+    FarmTab.Visible = false; ClaimTab.Visible = false; ServerTab.Visible = true; HatchTab.Visible = false; AreaFarmTab.Visible = false
+    TabServerBtn.TextColor3 = C.text; TabFarmBtn.TextColor3 = C.sub; TabClaimBtn.TextColor3 = C.sub; TabHatchBtn.TextColor3 = C.sub; TabAreaFarmBtn.TextColor3 = C.sub
+    TS:Create(TabIndicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new(0.4, 0, 1, -2)}):Play()
 end)
 
 TabHatchBtn.MouseButton1Click:Connect(function()
-    FarmTab.Visible = false; ClaimTab.Visible = false; ServerTab.Visible = false; HatchTab.Visible = true
-    TabHatchBtn.TextColor3 = C.text; TabFarmBtn.TextColor3 = C.sub; TabClaimBtn.TextColor3 = C.sub; TabServerBtn.TextColor3 = C.sub
-    TS:Create(TabIndicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new(0.75, 0, 1, -2)}):Play()
+    FarmTab.Visible = false; ClaimTab.Visible = false; ServerTab.Visible = false; HatchTab.Visible = true; AreaFarmTab.Visible = false
+    TabHatchBtn.TextColor3 = C.text; TabFarmBtn.TextColor3 = C.sub; TabClaimBtn.TextColor3 = C.sub; TabServerBtn.TextColor3 = C.sub; TabAreaFarmBtn.TextColor3 = C.sub
+    TS:Create(TabIndicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new(0.6, 0, 1, -2)}):Play()
+end)
+
+TabAreaFarmBtn.MouseButton1Click:Connect(function()
+    FarmTab.Visible = false; ClaimTab.Visible = false; ServerTab.Visible = false; HatchTab.Visible = false; AreaFarmTab.Visible = true
+    TabAreaFarmBtn.TextColor3 = C.text; TabFarmBtn.TextColor3 = C.sub; TabClaimBtn.TextColor3 = C.sub; TabServerBtn.TextColor3 = C.sub; TabHatchBtn.TextColor3 = C.sub
+    TS:Create(TabIndicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new(0.8, 0, 1, -2)}):Play()
 end)
 
 MinBtn.MouseButton1Click:Connect(function()
