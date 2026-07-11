@@ -50,7 +50,10 @@ local currentTarget = nil
 local nameCache = {}
 local glueConnection = nil
 local autoClaimEnabled = true
-local antiAfkEnabled = true -- NEW: Anti-AFK state
+local antiAfkEnabled = true 
+local autoHatchEnabled = false
+local selectedEggId = 10
+local selectedEggName = "Sprout Egg"
 
 -- Server States
 local rejoinTimerEnabled = false
@@ -61,9 +64,47 @@ local savedPositions = {}
 local DataPullFunc = RS:WaitForChild("CommonLibrary"):WaitForChild("Tool"):WaitForChild("RemoteManager"):WaitForChild("Funcs"):WaitForChild("DataPullFunc")
 local clientMonsters = workspace:WaitForChild("ClientMonsters")
 
+-- Direct access to the game's own hatch logic (more reliable than raw
+-- remote calls — this is the actual client function the Hatch button uses).
+local EggSystem
+do
+    local ok, mod = pcall(function()
+        return require(RS.CommonLogic.Egg.EggSystem)
+    end)
+    if ok then EggSystem = mod end
+end
+
 local groundRayParams = RaycastParams.new()
 groundRayParams.FilterType = Enum.RaycastFilterType.Exclude
 local rayDirection = Vector3.new(0, -200, 0)
+
+-- ==========================================
+-- 1.2 EGG DATA DICTIONARY
+-- ==========================================
+local EggDatabase = {
+    {id = 1, name = "Pyroclasm Egg"}, {id = 2, name = "WaterEgg"}, {id = 3, name = "GrassEgg"}, {id = 4, name = "SwampEgg"},
+    {id = 5, name = "FireEgg"}, {id = 6, name = "Pyroclasm Egg"}, {id = 7, name = "Strange Egg"}, {id = 8, name = "Ice Egg"},
+    {id = 9, name = "Glacier Egg"}, {id = 10, name = "Sprout Egg"}, {id = 11, name = "Turkey Egg"}, {id = 12, name = "Abuse Egg"},
+    {id = 13, name = "Blossom Egg"}, {id = 14, name = "Rosette Egg"}, {id = 15, name = "ShadeKnight's Egg"}, {id = 16, name = "Xmas Egg"},
+    {id = 17, name = "NewYear Egg"}, {id = 18, name = "Sand Egg"}, {id = 19, name = "Gildron's Egg"}, {id = 20, name = "Boss Egg"},
+    {id = 21, name = "Rift Egg"}, {id = 22, name = "Coral Egg"}, {id = 23, name = "Elite Egg"}, {id = 24, name = "TideVex's Egg"},
+    {id = 25, name = "Unihorn Egg"}, {id = 26, name = "Crimson Core Egg"}, {id = 27, name = "Valentine Egg"}, {id = 28, name = "Giant Tree Egg"},
+    {id = 29, name = "Twilight Giant Tree Egg"}, {id = 30, name = "Frostwyrm's Egg"}, {id = 31, name = "Sunforge Egg"}, {id = 32, name = "Ancient Egg"},
+    {id = 33, name = "Dracospike's Egg"}, {id = 34, name = "Dino Egg"}, {id = 35, name = "Shiny DustWing Egg"}, {id = 36, name = "Dina Egg"},
+    {id = 37, name = "Gold-Mane Greatbeak Egg"}, {id = 38, name = "Amethyst Clawmaw"}, {id = 39, name = "Crimson Scythe Egg"},
+    {id = 40, name = "AbyssalDrake's Egg"}, {id = 41, name = "Primothorn's Egg"}, {id = 42, name = "Frostiel 's Egg"},
+    {id = 43, name = "Easter Golden Ear Sweetie Egg"}, {id = 44, name = "Void Purple Egg"}, {id = 45, name = "Berrybun's Egg"},
+    {id = 46, name = "Goldhorn Scarab Egg"}, {id = 47, name = "Thunderclaw's Egg"}, {id = 48, name = "Crystalfae's Egg"},
+    {id = 49, name = "Dreamwing Egg"}, {id = 50, name = "Magma Tortoise's Egg"}, {id = 51, name = "Steamforge's Egg"},
+    {id = 52, name = "Thunder Rune Egg"}, {id = 53, name = "Bubbly Red Blaze Egg"}, {id = 54, name = "Rexie's Egg"},
+    {id = 55, name = "Lampyr's Egg"}, {id = 56, name = "Blood Crystal Prison Egg"}, {id = 57, name = "Titanium Blue Shield Egg"},
+    {id = 58, name = "Shadow Cube Egg"}, {id = 59, name = "Soulguard's Egg"}, {id = 60, name = "Jokaire's Egg"}, {id = 61, name = "Bone Dust Egg"},
+    {id = 62, name = "Neon Ofrenda Egg"}, {id = 63, name = "Void Egg"}, {id = 64, name = "Scareaper's Egg"}, {id = 65, name = "Shadow Rotthorn Egg"},
+    {id = 66, name = "Shadow Sealed Core Egg"}, {id = 67, name = "Runegolem's Egg"}, {id = 68, name = "Rune Warden Egg"}, {id = 69, name = "Jade Crab Egg"},
+    {id = 70, name = "Beatopus's Egg"}, {id = 71, name = "Flash Chest Egg"}, {id = 72, name = "Golden Winged Sacred Egg"},
+    {id = 271, name = "Valentine's King Egg"}, {id = 140000, name = "Rosette Egg"}, {id = 211, name = "Rift EggII"},
+    {id = 50000, name = "FireEgg"}, {id = 80000, name = "Ice Egg"}
+}
 
 -- ==========================================
 -- 1.5 FULL SAVE & LOAD SYSTEM
@@ -80,7 +121,10 @@ local function saveConfig()
             rejoinEnabled = rejoinTimerEnabled,
             rejoinMins = rejoinMinutes,
             positions = savedPositions,
-            antiAfk = antiAfkEnabled -- Saved Anti-AFK state
+            antiAfk = antiAfkEnabled,
+            autoHatch = autoHatchEnabled,
+            eggId = selectedEggId,
+            eggName = selectedEggName
         }
         pcall(function()
             writefile(configFileName, HttpService:JSONEncode(data))
@@ -99,7 +143,10 @@ local function loadConfig()
             if data.rejoinEnabled ~= nil then rejoinTimerEnabled = data.rejoinEnabled end
             if data.rejoinMins ~= nil then rejoinMinutes = data.rejoinMins end
             if data.positions ~= nil then savedPositions = data.positions end
-            if data.antiAfk ~= nil then antiAfkEnabled = data.antiAfk end -- Load Anti-AFK state
+            if data.antiAfk ~= nil then antiAfkEnabled = data.antiAfk end 
+            if data.autoHatch ~= nil then autoHatchEnabled = data.autoHatch end
+            if data.eggId ~= nil then selectedEggId = data.eggId end
+            if data.eggName ~= nil then selectedEggName = data.eggName end
         end)
     end
 end
@@ -108,7 +155,7 @@ end
 loadConfig()
 
 -- ==========================================
--- 2. CORE LOGIC (FARMING & CLAIM)
+-- 2. CORE LOGIC (FARMING, CLAIM, & HATCH)
 -- ==========================================
 local function equipBest()
     if not monstersEquipped then
@@ -302,6 +349,41 @@ local function claimAll()
     return ok1 and ok2 and ok3
 end
 
+local function getIncubatorState(index)
+    local eggHatchFolder = workspace:FindFirstChild("EggHatch", true)
+    if not eggHatchFolder then 
+        return "unknown" 
+    end
+
+    local incubator = eggHatchFolder:FindFirstChild("Hatch_" .. tostring(index))
+    if not incubator then 
+        return "unknown" 
+    end
+
+    local foundSomeText = false
+
+    for _, obj in ipairs(incubator:GetDescendants()) do
+        if obj:IsA("TextLabel") and obj.Text ~= "" then
+            foundSomeText = true
+            local text = obj.Text
+            
+            if string.find(text, "Select") then
+                return "empty"
+            elseif string.find(text, "Ready") then
+                return "ready"
+            elseif string.match(text, "%d+:%d+:%d+") then
+                return "hatching"
+            end
+        end
+    end
+    
+    if not foundSomeText then
+        return "empty"
+    end
+    
+    return "unknown"
+end
+
 local function getSecondsUntilReset()
     local t = os.date("!*t")
     local now = t.hour * 3600 + t.min * 60 + t.sec
@@ -320,8 +402,6 @@ end
 -- ==========================================
 -- 3. SERVER & ANTI-AFK MECHANICS 
 -- ==========================================
-
--- NEW: Anti-AFK now respects the toggle variable
 local VirtualUser = game:GetService("VirtualUser")
 LP.Idled:Connect(function()
     if antiAfkEnabled then
@@ -426,7 +506,8 @@ TabBar.BackgroundColor3 = C.surface
 TabBar.BorderSizePixel = 0
 
 local TabFarmBtn = Instance.new("TextButton", TabBar)
-TabFarmBtn.Size = UDim2.new(0.333, 0, 1, 0)
+TabFarmBtn.Size = UDim2.new(0.25, 0, 1, 0)
+TabFarmBtn.Position = UDim2.new(0, 0, 0, 0)
 TabFarmBtn.BackgroundTransparency = 1
 TabFarmBtn.Text = "⚔️ Farm"
 TabFarmBtn.TextColor3 = C.text
@@ -434,8 +515,8 @@ TabFarmBtn.Font = Enum.Font.GothamBold
 TabFarmBtn.TextSize = 11
 
 local TabClaimBtn = Instance.new("TextButton", TabBar)
-TabClaimBtn.Size = UDim2.new(0.333, 0, 1, 0)
-TabClaimBtn.Position = UDim2.new(0.333, 0, 0, 0)
+TabClaimBtn.Size = UDim2.new(0.25, 0, 1, 0)
+TabClaimBtn.Position = UDim2.new(0.25, 0, 0, 0)
 TabClaimBtn.BackgroundTransparency = 1
 TabClaimBtn.Text = "🎁 Claim"
 TabClaimBtn.TextColor3 = C.sub
@@ -443,16 +524,25 @@ TabClaimBtn.Font = Enum.Font.GothamBold
 TabClaimBtn.TextSize = 11
 
 local TabServerBtn = Instance.new("TextButton", TabBar)
-TabServerBtn.Size = UDim2.new(0.334, 0, 1, 0)
-TabServerBtn.Position = UDim2.new(0.666, 0, 0, 0)
+TabServerBtn.Size = UDim2.new(0.25, 0, 1, 0)
+TabServerBtn.Position = UDim2.new(0.5, 0, 0, 0)
 TabServerBtn.BackgroundTransparency = 1
 TabServerBtn.Text = "🌐 Server"
 TabServerBtn.TextColor3 = C.sub
 TabServerBtn.Font = Enum.Font.GothamBold
 TabServerBtn.TextSize = 11
 
+local TabHatchBtn = Instance.new("TextButton", TabBar)
+TabHatchBtn.Size = UDim2.new(0.25, 0, 1, 0)
+TabHatchBtn.Position = UDim2.new(0.75, 0, 0, 0)
+TabHatchBtn.BackgroundTransparency = 1
+TabHatchBtn.Text = "🥚 Hatch"
+TabHatchBtn.TextColor3 = C.sub
+TabHatchBtn.Font = Enum.Font.GothamBold
+TabHatchBtn.TextSize = 11
+
 local TabIndicator = Instance.new("Frame", TabBar)
-TabIndicator.Size = UDim2.new(0.333, 0, 0, 2)
+TabIndicator.Size = UDim2.new(0.25, 0, 0, 2)
 TabIndicator.Position = UDim2.new(0, 0, 1, -2)
 TabIndicator.BackgroundColor3 = C.accent
 TabIndicator.BorderSizePixel = 0
@@ -475,6 +565,11 @@ local ServerTab = Instance.new("Frame", ContentArea)
 ServerTab.Size = UDim2.new(1, 0, 1, 0)
 ServerTab.BackgroundTransparency = 1
 ServerTab.Visible = false
+
+local HatchTab = Instance.new("Frame", ContentArea)
+HatchTab.Size = UDim2.new(1, 0, 1, 0)
+HatchTab.BackgroundTransparency = 1
+HatchTab.Visible = false
 
 -- ==========================================
 -- 5. FARM TAB GENERATION
@@ -750,9 +845,9 @@ LastClaimLbl.LayoutOrder = 3
 
 local ToggleClaimBtn = Instance.new("TextButton", ClaimTab)
 ToggleClaimBtn.Size = UDim2.new(1, -20, 0, 32)
-ToggleClaimBtn.BackgroundColor3 = C.green
-ToggleClaimBtn.TextColor3 = C.bg
-ToggleClaimBtn.Text = "● AUTO CLAIM: ON"
+ToggleClaimBtn.BackgroundColor3 = autoClaimEnabled and C.green or C.red
+ToggleClaimBtn.TextColor3 = autoClaimEnabled and C.bg or C.text
+ToggleClaimBtn.Text = autoClaimEnabled and "● AUTO CLAIM: ON" or "● AUTO CLAIM: OFF"
 ToggleClaimBtn.Font = Enum.Font.GothamBold
 ToggleClaimBtn.TextSize = 11
 Instance.new("UICorner", ToggleClaimBtn).CornerRadius = UDim.new(0, 5)
@@ -782,6 +877,7 @@ ToggleClaimBtn.MouseButton1Click:Connect(function()
         ToggleClaimBtn.Text = "● AUTO CLAIM: OFF"
         ClaimStatus.Text = "Status: Suspended"
     end
+    saveConfig()
 end)
 
 ClaimNowBtn.MouseButton1Click:Connect(function()
@@ -1055,36 +1151,117 @@ end
 refreshPositionsList()
 
 -- ==========================================
+-- 7.5 HATCH TAB GENERATION
+-- ==========================================
+local UIListHatch = Instance.new("UIListLayout", HatchTab)
+UIListHatch.Padding = UDim.new(0, 8)
+UIListHatch.HorizontalAlignment = Enum.HorizontalAlignment.Center
+UIListHatch.SortOrder = Enum.SortOrder.LayoutOrder
+Instance.new("UIPadding", HatchTab).PaddingTop = UDim.new(0, 8)
+
+local HatchStatusLbl = Instance.new("TextLabel", HatchTab)
+HatchStatusLbl.Size = UDim2.new(1, -20, 0, 22)
+HatchStatusLbl.BackgroundColor3 = C.surface
+HatchStatusLbl.Text = autoHatchEnabled and "Status: Active" or "Status: Idle"
+HatchStatusLbl.TextColor3 = C.text
+HatchStatusLbl.Font = Enum.Font.Gotham
+HatchStatusLbl.TextSize = 11
+Instance.new("UICorner", HatchStatusLbl).CornerRadius = UDim.new(0, 5)
+HatchStatusLbl.LayoutOrder = 1
+
+local HatchTargetLbl = Instance.new("TextLabel", HatchTab)
+HatchTargetLbl.Size = UDim2.new(1, -20, 0, 16)
+HatchTargetLbl.BackgroundTransparency = 1
+HatchTargetLbl.Text = "Target: " .. selectedEggName .. " (" .. selectedEggId .. ")"
+HatchTargetLbl.TextColor3 = C.gold
+HatchTargetLbl.Font = Enum.Font.GothamBold
+HatchTargetLbl.TextSize = 11
+HatchTargetLbl.TextXAlignment = Enum.TextXAlignment.Left
+HatchTargetLbl.LayoutOrder = 2
+
+local ScrollHatch = Instance.new("ScrollingFrame", HatchTab)
+ScrollHatch.Size = UDim2.new(1, -20, 0, 120)
+ScrollHatch.BackgroundColor3 = C.surface
+ScrollHatch.ScrollBarThickness = 3
+ScrollHatch.ScrollBarImageColor3 = C.accent
+ScrollHatch.BorderSizePixel = 0
+Instance.new("UICorner", ScrollHatch).CornerRadius = UDim.new(0, 5)
+ScrollHatch.LayoutOrder = 3
+local ScrollHatchList = Instance.new("UIListLayout", ScrollHatch)
+ScrollHatchList.Padding = UDim.new(0, 3)
+Instance.new("UIPadding", ScrollHatch).PaddingTop = UDim.new(0, 3)
+
+for _, egg in ipairs(EggDatabase) do
+    local btn = Instance.new("TextButton", ScrollHatch)
+    btn.Size = UDim2.new(1, -10, 0, 24)
+    btn.BackgroundColor3 = C.card
+    btn.TextColor3 = C.text
+    btn.Font = Enum.Font.Gotham
+    btn.TextSize = 10
+    btn.Text = "  " .. egg.name .. " (ID: " .. egg.id .. ")"
+    btn.TextXAlignment = Enum.TextXAlignment.Left
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
+
+    btn.MouseButton1Click:Connect(function()
+        selectedEggId = egg.id
+        selectedEggName = egg.name
+        HatchTargetLbl.Text = "Target: " .. selectedEggName .. " (" .. selectedEggId .. ")"
+        saveConfig()
+    end)
+end
+ScrollHatch.CanvasSize = UDim2.new(0, 0, 0, ScrollHatchList.AbsoluteContentSize.Y + 8)
+
+local ToggleHatchBtn = Instance.new("TextButton", HatchTab)
+ToggleHatchBtn.Size = UDim2.new(1, -20, 0, 32)
+ToggleHatchBtn.BackgroundColor3 = autoHatchEnabled and C.green or C.red
+ToggleHatchBtn.TextColor3 = autoHatchEnabled and C.bg or C.text
+ToggleHatchBtn.Text = autoHatchEnabled and "● AUTO HATCH: ON" or "● AUTO HATCH: OFF"
+ToggleHatchBtn.Font = Enum.Font.GothamBold
+ToggleHatchBtn.TextSize = 11
+Instance.new("UICorner", ToggleHatchBtn).CornerRadius = UDim.new(0, 5)
+ToggleHatchBtn.LayoutOrder = 4
+
+ToggleHatchBtn.MouseButton1Click:Connect(function()
+    autoHatchEnabled = not autoHatchEnabled
+    if autoHatchEnabled then
+        ToggleHatchBtn.BackgroundColor3 = C.green
+        ToggleHatchBtn.TextColor3 = C.bg
+        ToggleHatchBtn.Text = "● AUTO HATCH: ON"
+        HatchStatusLbl.Text = "Status: Scanning Incubators..."
+    else
+        ToggleHatchBtn.BackgroundColor3 = C.red
+        ToggleHatchBtn.TextColor3 = C.text
+        ToggleHatchBtn.Text = "● AUTO HATCH: OFF"
+        HatchStatusLbl.Text = "Status: Suspended"
+    end
+    saveConfig()
+end)
+
+-- ==========================================
 -- 8. TABBING & INTERACTIVE TWEEN MECHANICS
 -- ==========================================
 TabFarmBtn.MouseButton1Click:Connect(function()
-    FarmTab.Visible = true
-    ClaimTab.Visible = false
-    ServerTab.Visible = false
-    TabFarmBtn.TextColor3 = C.text
-    TabClaimBtn.TextColor3 = C.sub
-    TabServerBtn.TextColor3 = C.sub
+    FarmTab.Visible = true; ClaimTab.Visible = false; ServerTab.Visible = false; HatchTab.Visible = false
+    TabFarmBtn.TextColor3 = C.text; TabClaimBtn.TextColor3 = C.sub; TabServerBtn.TextColor3 = C.sub; TabHatchBtn.TextColor3 = C.sub
     TS:Create(TabIndicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new(0, 0, 1, -2)}):Play()
 end)
 
 TabClaimBtn.MouseButton1Click:Connect(function()
-    FarmTab.Visible = false
-    ClaimTab.Visible = true
-    ServerTab.Visible = false
-    TabClaimBtn.TextColor3 = C.text
-    TabFarmBtn.TextColor3 = C.sub
-    TabServerBtn.TextColor3 = C.sub
-    TS:Create(TabIndicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new(0.333, 0, 1, -2)}):Play()
+    FarmTab.Visible = false; ClaimTab.Visible = true; ServerTab.Visible = false; HatchTab.Visible = false
+    TabClaimBtn.TextColor3 = C.text; TabFarmBtn.TextColor3 = C.sub; TabServerBtn.TextColor3 = C.sub; TabHatchBtn.TextColor3 = C.sub
+    TS:Create(TabIndicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new(0.25, 0, 1, -2)}):Play()
 end)
 
 TabServerBtn.MouseButton1Click:Connect(function()
-    FarmTab.Visible = false
-    ClaimTab.Visible = false
-    ServerTab.Visible = true
-    TabServerBtn.TextColor3 = C.text
-    TabFarmBtn.TextColor3 = C.sub
-    TabClaimBtn.TextColor3 = C.sub
-    TS:Create(TabIndicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new(0.666, 0, 1, -2)}):Play()
+    FarmTab.Visible = false; ClaimTab.Visible = false; ServerTab.Visible = true; HatchTab.Visible = false
+    TabServerBtn.TextColor3 = C.text; TabFarmBtn.TextColor3 = C.sub; TabClaimBtn.TextColor3 = C.sub; TabHatchBtn.TextColor3 = C.sub
+    TS:Create(TabIndicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new(0.5, 0, 1, -2)}):Play()
+end)
+
+TabHatchBtn.MouseButton1Click:Connect(function()
+    FarmTab.Visible = false; ClaimTab.Visible = false; ServerTab.Visible = false; HatchTab.Visible = true
+    TabHatchBtn.TextColor3 = C.text; TabFarmBtn.TextColor3 = C.sub; TabClaimBtn.TextColor3 = C.sub; TabServerBtn.TextColor3 = C.sub
+    TS:Create(TabIndicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new(0.75, 0, 1, -2)}):Play()
 end)
 
 MinBtn.MouseButton1Click:Connect(function()
@@ -1170,5 +1347,41 @@ task.spawn(function()
                 LastClaimLbl.Text = "Last Claim: " .. os.date("%H:%M:%S")
             end
         end
+    end
+end)
+
+-- Background Auto Hatch Executor
+task.spawn(function()
+    while task.wait(5) do
+        if not autoHatchEnabled or not selectedEggId then continue end
+        
+        task.spawn(function()
+            for incubatorIndex = 1, 5 do
+                if not autoHatchEnabled then break end 
+                
+                local state = getIncubatorState(incubatorIndex)
+                
+                if state == "ready" then
+                    pcall(function()
+                        if EggSystem then
+                            EggSystem.ClientHatchTaken(incubatorIndex)
+                        else
+                            DataPullFunc:InvokeServer("EggHatchTakenChannel", incubatorIndex)
+                        end
+                    end)
+                    task.wait(0.3) 
+                    
+                elseif state == "empty" then
+                    pcall(function()
+                        if EggSystem then
+                            EggSystem.ClientHatchStart(incubatorIndex, selectedEggId)
+                        else
+                            DataPullFunc:InvokeServer("EggHatchStartChannel", incubatorIndex, selectedEggId)
+                        end
+                    end)
+                    task.wait(0.3) 
+                end
+            end
+        end)
     end
 end)
