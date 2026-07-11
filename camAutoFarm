@@ -1451,7 +1451,7 @@ local function teleportToAreaFarmSpot(spot)
     pcall(function()
         DataPullFunc:InvokeServer("AreaTeleportToRegionChannel", spot.areaId)
     end)
-    task.wait(5)
+    task.wait(4.5)
     local r = getRoot()
     if r then
         r.CFrame = CFrame.new(spot.x, spot.y, spot.z)
@@ -1696,7 +1696,7 @@ task.spawn(function()
                 teleportToAreaFarmSpot(bossSpot)
 
                 BossLoopLiveStatusLbl.Text = "Status: At Boss, waiting 20s..."
-                task.wait(15)
+                task.wait(10)
 
                 if not bossLoopEnabled then return end -- got turned off mid-wait
 
