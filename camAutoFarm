@@ -14,6 +14,7 @@ local UIS = game:GetService("UserInputService")
 local TS = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 local HttpService = game:GetService("HttpService")
+local TeleportService = game:GetService("TeleportService")
 local LP = Players.LocalPlayer
 
 -- ==========================================
@@ -32,7 +33,7 @@ local C = {
     gold    = Color3.fromRGB(241, 196, 15)
 }
 
-local normalSize = UDim2.new(0, 285, 0, 345) 
+local normalSize = UDim2.new(0, 285, 0, 310) 
 local miniSize = UDim2.new(0, 285, 0, 36)
 local isMinimized = false
 
@@ -49,14 +50,16 @@ local currentTarget = nil
 local nameCache = {}
 local glueConnection = nil
 local autoClaimEnabled = true
+local antiAfkEnabled = true -- NEW: Anti-AFK state
+
+-- Server States
+local rejoinTimerEnabled = false
+local rejoinMinutes = 60
+local rejoinDeadline = nil
+local savedPositions = {} 
 
 local DataPullFunc = RS:WaitForChild("CommonLibrary"):WaitForChild("Tool"):WaitForChild("RemoteManager"):WaitForChild("Funcs"):WaitForChild("DataPullFunc")
 local clientMonsters = workspace:WaitForChild("ClientMonsters")
--- NOTE: SelfGUI is intentionally NOT cached here. Right after a rejoin the
--- game's own UI scripts may not have created it yet, and FindFirstChild
--- doesn't wait. Caching it once meant it could lock in as nil forever,
--- breaking name lookups and the farm filter permanently. It's now looked
--- up fresh inside buildNameCache() every time instead.
 
 local groundRayParams = RaycastParams.new()
 groundRayParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -73,7 +76,11 @@ local function saveConfig()
             target = selectedMonster,
             attackDelay = ATTACK_DELAY,
             equipDelay = EQUIP_DELAY,
-            isFarming = running
+            isFarming = running,
+            rejoinEnabled = rejoinTimerEnabled,
+            rejoinMins = rejoinMinutes,
+            positions = savedPositions,
+            antiAfk = antiAfkEnabled -- Saved Anti-AFK state
         }
         pcall(function()
             writefile(configFileName, HttpService:JSONEncode(data))
@@ -89,6 +96,10 @@ local function loadConfig()
             if data.attackDelay ~= nil then ATTACK_DELAY = data.attackDelay end
             if data.equipDelay ~= nil then EQUIP_DELAY = data.equipDelay end
             if data.isFarming ~= nil then running = data.isFarming end
+            if data.rejoinEnabled ~= nil then rejoinTimerEnabled = data.rejoinEnabled end
+            if data.rejoinMins ~= nil then rejoinMinutes = data.rejoinMins end
+            if data.positions ~= nil then savedPositions = data.positions end
+            if data.antiAfk ~= nil then antiAfkEnabled = data.antiAfk end -- Load Anti-AFK state
         end)
     end
 end
@@ -97,7 +108,7 @@ end
 loadConfig()
 
 -- ==========================================
--- 2. CORE LOGIC (OPTIMIZED STATIC LOCK)
+-- 2. CORE LOGIC (FARMING & CLAIM)
 -- ==========================================
 local function equipBest()
     if not monstersEquipped then
@@ -156,10 +167,6 @@ local function glueToTarget(targetRoot)
     end)
 end
 
--- FIXED: SelfGUI is now fetched fresh on every call instead of relying on
--- a stale top-level local. This means once the game finishes creating it
--- (even seconds after rejoin), the very next rescan/farm-tick will pick
--- it up correctly instead of being stuck with raw Monster_XXXX names.
 local function buildNameCache()
     table.clear(nameCache) 
     if not clientMonsters then return end
@@ -283,9 +290,6 @@ local function startFarming(statusLbl)
     statusLbl.Text = "Status: Stopped. Killed: " .. killed
 end
 
--- ==========================================
--- 3. CORE LOGIC (OPTIMIZED CLAIM)
--- ==========================================
 local function claimAll()
     local ok1 = pcall(function() DataPullFunc:InvokeServer("TowerTakeDailyRewardAllChannel") end)
     local ok2 = pcall(function() DataPullFunc:InvokeServer("ChestRewardTakeDailyChestChannel", 1) end)
@@ -314,6 +318,47 @@ local function formatTime(s)
 end
 
 -- ==========================================
+-- 3. SERVER & ANTI-AFK MECHANICS 
+-- ==========================================
+
+-- NEW: Anti-AFK now respects the toggle variable
+local VirtualUser = game:GetService("VirtualUser")
+LP.Idled:Connect(function()
+    if antiAfkEnabled then
+        VirtualUser:Button2Down(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
+        task.wait(1)
+        VirtualUser:Button2Up(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
+    end
+end)
+
+local function rejoinSameServer()
+    local placeId = game.PlaceId
+    local ok, joinData = pcall(function() return LP:GetJoinData() end)
+    local code = ok and joinData and joinData.PrivateServerAccessCode
+
+    if code and code ~= "" then
+        task.wait(3) 
+        pcall(function()
+            TeleportService:TeleportToPrivateServer(placeId, code, {LP})
+        end)
+    else
+        task.wait(2)
+        pcall(function() TeleportService:Teleport(placeId, LP) end)
+    end
+end
+
+local CoreGui = game:GetService("CoreGui")
+local promptOverlay = CoreGui:FindFirstChild("RobloxPromptGui")
+    and CoreGui.RobloxPromptGui:FindFirstChild("promptOverlay")
+if promptOverlay then
+    promptOverlay.ChildAdded:Connect(function(child)
+        if child.Name == "ErrorPrompt" then
+            rejoinSameServer()
+        end
+    end)
+end
+
+-- ==========================================
 -- 4. COMPACT MOBILE UI SYSTEM
 -- ==========================================
 local old = LP.PlayerGui:FindFirstChild("NoxarMobilePanel")
@@ -326,7 +371,7 @@ sg.Parent = LP.PlayerGui
 
 local Main = Instance.new("Frame", sg)
 Main.Size = normalSize
-Main.Position = UDim2.new(0.5, -142, 0.4, -172)
+Main.Position = UDim2.new(0.5, -142, 0.4, -155)
 Main.BackgroundColor3 = C.bg
 Main.ClipsDescendants = true
 Main.BorderSizePixel = 0
@@ -373,6 +418,7 @@ CloseBtn.Font = Enum.Font.GothamBold
 CloseBtn.TextSize = 11
 Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 5)
 
+-- Tabs Area
 local TabBar = Instance.new("Frame", Main)
 TabBar.Size = UDim2.new(1, 0, 0, 30)
 TabBar.Position = UDim2.new(0, 0, 0, 36)
@@ -380,24 +426,33 @@ TabBar.BackgroundColor3 = C.surface
 TabBar.BorderSizePixel = 0
 
 local TabFarmBtn = Instance.new("TextButton", TabBar)
-TabFarmBtn.Size = UDim2.new(0.5, 0, 1, 0)
+TabFarmBtn.Size = UDim2.new(0.333, 0, 1, 0)
 TabFarmBtn.BackgroundTransparency = 1
-TabFarmBtn.Text = "⚔️ Auto Farm"
+TabFarmBtn.Text = "⚔️ Farm"
 TabFarmBtn.TextColor3 = C.text
 TabFarmBtn.Font = Enum.Font.GothamBold
 TabFarmBtn.TextSize = 11
 
 local TabClaimBtn = Instance.new("TextButton", TabBar)
-TabClaimBtn.Size = UDim2.new(0.5, 0, 1, 0)
-TabClaimBtn.Position = UDim2.new(0.5, 0, 0, 0)
+TabClaimBtn.Size = UDim2.new(0.333, 0, 1, 0)
+TabClaimBtn.Position = UDim2.new(0.333, 0, 0, 0)
 TabClaimBtn.BackgroundTransparency = 1
-TabClaimBtn.Text = "🎁 Auto Claim"
+TabClaimBtn.Text = "🎁 Claim"
 TabClaimBtn.TextColor3 = C.sub
 TabClaimBtn.Font = Enum.Font.GothamBold
 TabClaimBtn.TextSize = 11
 
+local TabServerBtn = Instance.new("TextButton", TabBar)
+TabServerBtn.Size = UDim2.new(0.334, 0, 1, 0)
+TabServerBtn.Position = UDim2.new(0.666, 0, 0, 0)
+TabServerBtn.BackgroundTransparency = 1
+TabServerBtn.Text = "🌐 Server"
+TabServerBtn.TextColor3 = C.sub
+TabServerBtn.Font = Enum.Font.GothamBold
+TabServerBtn.TextSize = 11
+
 local TabIndicator = Instance.new("Frame", TabBar)
-TabIndicator.Size = UDim2.new(0.5, 0, 0, 2)
+TabIndicator.Size = UDim2.new(0.333, 0, 0, 2)
 TabIndicator.Position = UDim2.new(0, 0, 1, -2)
 TabIndicator.BackgroundColor3 = C.accent
 TabIndicator.BorderSizePixel = 0
@@ -416,17 +471,22 @@ ClaimTab.Size = UDim2.new(1, 0, 1, 0)
 ClaimTab.BackgroundTransparency = 1
 ClaimTab.Visible = false
 
+local ServerTab = Instance.new("Frame", ContentArea)
+ServerTab.Size = UDim2.new(1, 0, 1, 0)
+ServerTab.BackgroundTransparency = 1
+ServerTab.Visible = false
+
 -- ==========================================
 -- 5. FARM TAB GENERATION
 -- ==========================================
 local UIListFarm = Instance.new("UIListLayout", FarmTab)
-UIListFarm.Padding = UDim.new(0, 6)
+UIListFarm.Padding = UDim.new(0, 5)
 UIListFarm.HorizontalAlignment = Enum.HorizontalAlignment.Center
 UIListFarm.SortOrder = Enum.SortOrder.LayoutOrder
-Instance.new("UIPadding", FarmTab).PaddingTop = UDim.new(0, 6)
+Instance.new("UIPadding", FarmTab).PaddingTop = UDim.new(0, 5)
 
 local TargetLbl = Instance.new("TextLabel", FarmTab)
-TargetLbl.Size = UDim2.new(1, -20, 0, 18)
+TargetLbl.Size = UDim2.new(1, -20, 0, 16)
 TargetLbl.BackgroundTransparency = 1
 TargetLbl.Text = selectedMonster and ("Target: " .. selectedMonster) or "Target: All Monsters"
 TargetLbl.TextColor3 = selectedMonster and C.gold or C.green
@@ -436,7 +496,7 @@ TargetLbl.TextXAlignment = Enum.TextXAlignment.Left
 TargetLbl.LayoutOrder = 1
 
 local ScanBtn = Instance.new("TextButton", FarmTab)
-ScanBtn.Size = UDim2.new(1, -20, 0, 28)
+ScanBtn.Size = UDim2.new(1, -20, 0, 26)
 ScanBtn.BackgroundColor3 = C.accent
 ScanBtn.TextColor3 = C.text
 ScanBtn.Text = "🔍 Scan Game Monsters"
@@ -446,7 +506,7 @@ Instance.new("UICorner", ScanBtn).CornerRadius = UDim.new(0, 5)
 ScanBtn.LayoutOrder = 2
 
 local ScrollFarm = Instance.new("ScrollingFrame", FarmTab)
-ScrollFarm.Size = UDim2.new(1, -20, 0, 85)
+ScrollFarm.Size = UDim2.new(1, -20, 0, 65) 
 ScrollFarm.BackgroundColor3 = C.surface
 ScrollFarm.ScrollBarThickness = 3
 ScrollFarm.ScrollBarImageColor3 = C.accent
@@ -500,9 +560,6 @@ local function populateList(types)
     ScrollFarm.CanvasSize = UDim2.new(0, 0, 0, ScrollList.AbsoluteContentSize.Y + 8)
 end
 
--- FIXED: rescan now retries a few times with a short wait if it finds
--- monsters but the name cache came back empty (SelfGUI not ready yet),
--- instead of just showing raw Monster_XXXX names on that one attempt.
 ScanBtn.MouseButton1Click:Connect(function()
     ScanBtn.Text = "⏳ Reading Workspace..."
     task.spawn(function()
@@ -526,7 +583,7 @@ ScanBtn.MouseButton1Click:Connect(function()
 end)
 
 local DelaysFrame = Instance.new("Frame", FarmTab)
-DelaysFrame.Size = UDim2.new(1, -20, 0, 26)
+DelaysFrame.Size = UDim2.new(1, -20, 0, 24)
 DelaysFrame.BackgroundTransparency = 1
 DelaysFrame.LayoutOrder = 4
 
@@ -546,8 +603,8 @@ SpamLbl.TextSize = 10
 SpamLbl.TextXAlignment = Enum.TextXAlignment.Left
 
 local SpamBox = Instance.new("TextBox", SpamBg)
-SpamBox.Size = UDim2.new(0.35, 0, 0, 18)
-SpamBox.Position = UDim2.new(0.55, 0, 0.5, -9)
+SpamBox.Size = UDim2.new(0.35, 0, 0, 16)
+SpamBox.Position = UDim2.new(0.55, 0, 0.5, -8)
 SpamBox.BackgroundColor3 = C.surface
 SpamBox.TextColor3 = C.text
 SpamBox.Font = Enum.Font.GothamBold
@@ -578,8 +635,8 @@ EquipLbl.TextSize = 10
 EquipLbl.TextXAlignment = Enum.TextXAlignment.Left
 
 local EquipBox = Instance.new("TextBox", EquipBg)
-EquipBox.Size = UDim2.new(0.35, 0, 0, 18)
-EquipBox.Position = UDim2.new(0.55, 0, 0.5, -9)
+EquipBox.Size = UDim2.new(0.35, 0, 0, 16)
+EquipBox.Position = UDim2.new(0.55, 0, 0.5, -8)
 EquipBox.BackgroundColor3 = C.surface
 EquipBox.TextColor3 = C.text
 EquipBox.Font = Enum.Font.GothamBold
@@ -594,7 +651,7 @@ EquipBox.FocusLost:Connect(function()
 end)
 
 local FarmStatus = Instance.new("TextLabel", FarmTab)
-FarmStatus.Size = UDim2.new(1, -20, 0, 18)
+FarmStatus.Size = UDim2.new(1, -20, 0, 16)
 FarmStatus.BackgroundTransparency = 1
 FarmStatus.Text = "Status: Idle"
 FarmStatus.TextColor3 = C.sub
@@ -603,7 +660,7 @@ FarmStatus.TextSize = 10
 FarmStatus.LayoutOrder = 5
 
 local StartFarmBtn = Instance.new("TextButton", FarmTab)
-StartFarmBtn.Size = UDim2.new(1, -20, 0, 32)
+StartFarmBtn.Size = UDim2.new(1, -20, 0, 28)
 StartFarmBtn.BackgroundColor3 = C.green
 StartFarmBtn.TextColor3 = C.bg
 StartFarmBtn.Text = "▶ Start Auto Farm"
@@ -639,9 +696,6 @@ StartFarmBtn.MouseButton1Click:Connect(function()
     toggleFarming()
 end)
 
--- FIXED: auto-resume on rejoin now waits for SelfGUI to actually exist
--- (up to 10s) before kicking off the farm loop, instead of firing
--- startFarming() instantly against a workspace that isn't ready yet.
 if running then
     runId += 1
     StartFarmBtn.BackgroundColor3 = C.red
@@ -661,7 +715,7 @@ end
 -- 6. CLAIM TAB GENERATION
 -- ==========================================
 local UIListClaim = Instance.new("UIListLayout", ClaimTab)
-UIListClaim.Padding = UDim.new(0, 10)
+UIListClaim.Padding = UDim.new(0, 8)
 UIListClaim.HorizontalAlignment = Enum.HorizontalAlignment.Center
 UIListClaim.SortOrder = Enum.SortOrder.LayoutOrder
 Instance.new("UIPadding", ClaimTab).PaddingTop = UDim.new(0, 8)
@@ -746,22 +800,291 @@ ClaimNowBtn.MouseButton1Click:Connect(function()
 end)
 
 -- ==========================================
--- 7. TABBING & INTERACTIVE TWEEN MECHANICS
+-- 7. SERVER TAB GENERATION
+-- ==========================================
+local UIListServer = Instance.new("UIListLayout", ServerTab)
+UIListServer.Padding = UDim.new(0, 6)
+UIListServer.HorizontalAlignment = Enum.HorizontalAlignment.Center
+UIListServer.SortOrder = Enum.SortOrder.LayoutOrder
+Instance.new("UIPadding", ServerTab).PaddingTop = UDim.new(0, 6)
+
+-- Section 1: Anti-AFK Toggle
+local AntiAfkBtn = Instance.new("TextButton", ServerTab)
+AntiAfkBtn.Size = UDim2.new(1, -20, 0, 26)
+AntiAfkBtn.BackgroundColor3 = antiAfkEnabled and C.green or C.red
+AntiAfkBtn.TextColor3 = antiAfkEnabled and C.bg or C.text
+AntiAfkBtn.Text = antiAfkEnabled and "🛡️ Anti-AFK: ON" or "🛡️ Anti-AFK: OFF"
+AntiAfkBtn.Font = Enum.Font.GothamBold
+AntiAfkBtn.TextSize = 11
+Instance.new("UICorner", AntiAfkBtn).CornerRadius = UDim.new(0, 5)
+AntiAfkBtn.LayoutOrder = 1
+
+AntiAfkBtn.MouseButton1Click:Connect(function()
+    antiAfkEnabled = not antiAfkEnabled
+    if antiAfkEnabled then
+        AntiAfkBtn.BackgroundColor3 = C.green
+        AntiAfkBtn.TextColor3 = C.bg
+        AntiAfkBtn.Text = "🛡️ Anti-AFK: ON"
+    else
+        AntiAfkBtn.BackgroundColor3 = C.red
+        AntiAfkBtn.TextColor3 = C.text
+        AntiAfkBtn.Text = "🛡️ Anti-AFK: OFF"
+    end
+    saveConfig()
+end)
+
+-- Section 2: Auto Rejoin
+local RejoinLbl = Instance.new("TextLabel", ServerTab)
+RejoinLbl.Size = UDim2.new(1, -20, 0, 14)
+RejoinLbl.BackgroundTransparency = 1
+RejoinLbl.Text = "Auto Rejoin Timer"
+RejoinLbl.TextColor3 = C.accent
+RejoinLbl.Font = Enum.Font.GothamBold
+RejoinLbl.TextSize = 11
+RejoinLbl.TextXAlignment = Enum.TextXAlignment.Left
+RejoinLbl.LayoutOrder = 2
+
+local RejoinRow = Instance.new("Frame", ServerTab)
+RejoinRow.Size = UDim2.new(1, -20, 0, 26)
+RejoinRow.BackgroundColor3 = C.surface
+RejoinRow.BorderSizePixel = 0
+RejoinRow.LayoutOrder = 3
+Instance.new("UICorner", RejoinRow).CornerRadius = UDim.new(0, 5)
+
+local RejoinBox = Instance.new("TextBox", RejoinRow)
+RejoinBox.Size = UDim2.new(0, 40, 0, 18)
+RejoinBox.Position = UDim2.new(0, 8, 0.5, -9)
+RejoinBox.BackgroundColor3 = C.card
+RejoinBox.TextColor3 = C.text
+RejoinBox.Font = Enum.Font.GothamBold
+RejoinBox.TextSize = 10
+RejoinBox.Text = tostring(rejoinMinutes)
+Instance.new("UICorner", RejoinBox).CornerRadius = UDim.new(0, 4)
+
+local RejoinMinLbl = Instance.new("TextLabel", RejoinRow)
+RejoinMinLbl.Size = UDim2.new(0, 60, 1, 0)
+RejoinMinLbl.Position = UDim2.new(0, 55, 0, 0)
+RejoinMinLbl.BackgroundTransparency = 1
+RejoinMinLbl.Text = "minutes"
+RejoinMinLbl.TextColor3 = C.sub
+RejoinMinLbl.Font = Enum.Font.Gotham
+RejoinMinLbl.TextSize = 10
+RejoinMinLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+local RejoinToggleBtn = Instance.new("TextButton", RejoinRow)
+RejoinToggleBtn.Size = UDim2.new(0, 50, 0, 18)
+RejoinToggleBtn.Position = UDim2.new(1, -58, 0.5, -9)
+RejoinToggleBtn.BackgroundColor3 = rejoinTimerEnabled and C.green or C.red
+RejoinToggleBtn.TextColor3 = rejoinTimerEnabled and C.bg or C.text
+RejoinToggleBtn.Text = rejoinTimerEnabled and "ON" or "OFF"
+RejoinToggleBtn.Font = Enum.Font.GothamBold
+RejoinToggleBtn.TextSize = 10
+Instance.new("UICorner", RejoinToggleBtn).CornerRadius = UDim.new(0, 4)
+
+local RejoinStatusLbl = Instance.new("TextLabel", ServerTab)
+RejoinStatusLbl.Size = UDim2.new(1, -20, 0, 14)
+RejoinStatusLbl.BackgroundTransparency = 1
+RejoinStatusLbl.Text = rejoinTimerEnabled and "Timer running..." or "Disabled"
+RejoinStatusLbl.TextColor3 = C.sub
+RejoinStatusLbl.Font = Enum.Font.Gotham
+RejoinStatusLbl.TextSize = 10
+RejoinStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
+RejoinStatusLbl.LayoutOrder = 4
+
+local function setRejoin(state)
+    rejoinTimerEnabled = state
+    if rejoinTimerEnabled then
+        rejoinDeadline = tick() + rejoinMinutes * 60
+        RejoinToggleBtn.BackgroundColor3 = C.green
+        RejoinToggleBtn.TextColor3 = C.bg
+        RejoinToggleBtn.Text = "ON"
+    else
+        rejoinDeadline = nil
+        RejoinToggleBtn.BackgroundColor3 = C.red
+        RejoinToggleBtn.TextColor3 = C.text
+        RejoinToggleBtn.Text = "OFF"
+        RejoinStatusLbl.Text = "Disabled"
+    end
+    saveConfig()
+end
+
+RejoinToggleBtn.MouseButton1Click:Connect(function()
+    setRejoin(not rejoinTimerEnabled)
+end)
+
+RejoinBox.FocusLost:Connect(function()
+    rejoinMinutes = tonumber(RejoinBox.Text) or 60
+    RejoinBox.Text = tostring(rejoinMinutes)
+    if rejoinTimerEnabled then
+        rejoinDeadline = tick() + rejoinMinutes * 60
+    end
+    saveConfig()
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(1)
+        if rejoinTimerEnabled and rejoinDeadline then
+            local remaining = rejoinDeadline - tick()
+            if remaining <= 0 then
+                RejoinStatusLbl.Text = "Rejoining now..."
+                rejoinSameServer()
+            else
+                local m = math.floor(remaining / 60)
+                local s = math.floor(remaining % 60)
+                RejoinStatusLbl.Text = string.format("Rejoin in: %02d:%02d", m, s)
+            end
+        end
+    end
+end)
+
+-- Section 3: Positions Saver
+local PosLbl = Instance.new("TextLabel", ServerTab)
+PosLbl.Size = UDim2.new(1, -20, 0, 14)
+PosLbl.BackgroundTransparency = 1
+PosLbl.Text = "Saved Positions"
+PosLbl.TextColor3 = C.accent
+PosLbl.Font = Enum.Font.GothamBold
+PosLbl.TextSize = 11
+PosLbl.TextXAlignment = Enum.TextXAlignment.Left
+PosLbl.LayoutOrder = 5
+
+local SavePosBtn = Instance.new("TextButton", ServerTab)
+SavePosBtn.Size = UDim2.new(1, -20, 0, 26)
+SavePosBtn.BackgroundColor3 = C.card
+SavePosBtn.TextColor3 = C.text
+SavePosBtn.Text = "+ Save Current Location"
+SavePosBtn.Font = Enum.Font.GothamBold
+SavePosBtn.TextSize = 11
+Instance.new("UICorner", SavePosBtn).CornerRadius = UDim.new(0, 5)
+Instance.new("UIStroke", SavePosBtn).Color = C.border
+SavePosBtn.LayoutOrder = 6
+
+local ScrollPos = Instance.new("ScrollingFrame", ServerTab)
+ScrollPos.Size = UDim2.new(1, -20, 0, 75) 
+ScrollPos.BackgroundColor3 = C.surface
+ScrollPos.ScrollBarThickness = 3
+ScrollPos.ScrollBarImageColor3 = C.accent
+ScrollPos.BorderSizePixel = 0
+Instance.new("UICorner", ScrollPos).CornerRadius = UDim.new(0, 5)
+ScrollPos.LayoutOrder = 7
+local ScrollPosList = Instance.new("UIListLayout", ScrollPos)
+ScrollPosList.Padding = UDim.new(0, 4)
+Instance.new("UIPadding", ScrollPos).PaddingTop = UDim.new(0, 4)
+
+local function refreshPositionsList()
+    for _, c in ipairs(ScrollPos:GetChildren()) do
+        if c:IsA("Frame") then c:Destroy() end
+    end
+    
+    for i, posData in ipairs(savedPositions) do
+        local row = Instance.new("Frame", ScrollPos)
+        row.Size = UDim2.new(1, -10, 0, 26)
+        row.BackgroundColor3 = C.card
+        Instance.new("UICorner", row).CornerRadius = UDim.new(0, 4)
+        
+        local nameBox = Instance.new("TextBox", row)
+        nameBox.Size = UDim2.new(1, -65, 1, 0)
+        nameBox.Position = UDim2.new(0, 6, 0, 0)
+        nameBox.BackgroundTransparency = 1
+        nameBox.TextColor3 = C.text
+        nameBox.Font = Enum.Font.Gotham
+        nameBox.TextSize = 10
+        nameBox.Text = posData.name
+        nameBox.TextXAlignment = Enum.TextXAlignment.Left
+        nameBox.ClearTextOnFocus = false
+        
+        nameBox.FocusLost:Connect(function()
+            if nameBox.Text == "" then nameBox.Text = posData.name end
+            posData.name = nameBox.Text
+            saveConfig()
+        end)
+        
+        local tpBtn = Instance.new("TextButton", row)
+        tpBtn.Size = UDim2.new(0, 30, 0, 20)
+        tpBtn.Position = UDim2.new(1, -58, 0.5, -10)
+        tpBtn.BackgroundColor3 = C.accent
+        tpBtn.TextColor3 = C.text
+        tpBtn.Font = Enum.Font.GothamBold
+        tpBtn.TextSize = 10
+        tpBtn.Text = "TP"
+        Instance.new("UICorner", tpBtn).CornerRadius = UDim.new(0, 4)
+        
+        tpBtn.MouseButton1Click:Connect(function()
+            local r = getRoot()
+            if r then
+                r.CFrame = CFrame.new(posData.x, posData.y, posData.z)
+            end
+        end)
+        
+        local delBtn = Instance.new("TextButton", row)
+        delBtn.Size = UDim2.new(0, 20, 0, 20)
+        delBtn.Position = UDim2.new(1, -24, 0.5, -10)
+        delBtn.BackgroundColor3 = Color3.fromRGB(150, 40, 40)
+        delBtn.TextColor3 = C.text
+        delBtn.Font = Enum.Font.GothamBold
+        delBtn.TextSize = 10
+        delBtn.Text = "X"
+        Instance.new("UICorner", delBtn).CornerRadius = UDim.new(0, 4)
+        
+        delBtn.MouseButton1Click:Connect(function()
+            table.remove(savedPositions, i)
+            saveConfig()
+            refreshPositionsList() 
+        end)
+    end
+    ScrollPos.CanvasSize = UDim2.new(0, 0, 0, ScrollPosList.AbsoluteContentSize.Y + 8)
+end
+
+SavePosBtn.MouseButton1Click:Connect(function()
+    local r = getRoot()
+    if r then
+        local p = r.CFrame.Position
+        table.insert(savedPositions, {
+            name = "Pos #" .. (#savedPositions + 1),
+            x = p.X, y = p.Y, z = p.Z
+        })
+        saveConfig()
+        refreshPositionsList()
+    end
+end)
+
+if rejoinTimerEnabled then
+    rejoinDeadline = tick() + rejoinMinutes * 60
+end
+refreshPositionsList()
+
+-- ==========================================
+-- 8. TABBING & INTERACTIVE TWEEN MECHANICS
 -- ==========================================
 TabFarmBtn.MouseButton1Click:Connect(function()
     FarmTab.Visible = true
     ClaimTab.Visible = false
+    ServerTab.Visible = false
     TabFarmBtn.TextColor3 = C.text
     TabClaimBtn.TextColor3 = C.sub
+    TabServerBtn.TextColor3 = C.sub
     TS:Create(TabIndicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new(0, 0, 1, -2)}):Play()
 end)
 
 TabClaimBtn.MouseButton1Click:Connect(function()
     FarmTab.Visible = false
     ClaimTab.Visible = true
+    ServerTab.Visible = false
     TabClaimBtn.TextColor3 = C.text
     TabFarmBtn.TextColor3 = C.sub
-    TS:Create(TabIndicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new(0.5, 0, 1, -2)}):Play()
+    TabServerBtn.TextColor3 = C.sub
+    TS:Create(TabIndicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new(0.333, 0, 1, -2)}):Play()
+end)
+
+TabServerBtn.MouseButton1Click:Connect(function()
+    FarmTab.Visible = false
+    ClaimTab.Visible = false
+    ServerTab.Visible = true
+    TabServerBtn.TextColor3 = C.text
+    TabFarmBtn.TextColor3 = C.sub
+    TabClaimBtn.TextColor3 = C.sub
+    TS:Create(TabIndicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new(0.666, 0, 1, -2)}):Play()
 end)
 
 MinBtn.MouseButton1Click:Connect(function()
@@ -800,10 +1123,8 @@ UIS.InputEnded:Connect(function(input)
 end)
 
 -- ==========================================
--- 8. RUNTIME BACKGROUND EXECUTORS
+-- 9. RUNTIME BACKGROUND EXECUTORS
 -- ==========================================
--- FIXED: initial scan on load now also retries until SelfGUI exists,
--- same reasoning as the rescan button fix above.
 task.spawn(function()
     local types
     for attempt = 1, 8 do
@@ -851,5 +1172,3 @@ task.spawn(function()
         end
     end
 end)
-
-print("[Noxar Panel] Static-Lock Framework Deployed. (SelfGUI race condition fixed)")
