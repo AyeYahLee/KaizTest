@@ -1940,7 +1940,7 @@ local function teleportToAreaFarmSpot(spot, skipSettle, preSnapWait)
             if hum then
                 for i = 1, 2 do
                     hum:ChangeState(Enum.HumanoidStateType.Jumping)
-                    task.wait(0.5) -- short gap so the second jump registers as a new jump
+                    task.wait(5) -- short gap so the second jump registers as a new jump
                 end
             end
         end
