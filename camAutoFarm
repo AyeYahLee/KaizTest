@@ -109,6 +109,7 @@ local bossLoopEnabled = false
 local bossLoopStatus = "Idle"
 local lastBossTrigger = nil -- "!YYYY-MM-DD HH:MM" string of the last UTC 15-min mark we already fired on, prevents double-firing within the same minute
 local bossCycleRunning = false -- true while a full teleport→wait→defeat→return cycle is in flight; stops a stuck cycle from overlapping with the next quarter-mark
+local BOSS_SPAWN_TIMEOUT = 60 -- seconds to wait at the boss spot for it to actually spawn before giving up and heading back to the farm spot instead of waiting forever
 local BOSS_TRACK_DISTANCE = 20 -- studs; how far from your character to look for the boss. Tweakable via textbox, persisted across rejoins.
 
 local DataPullFunc = RS:WaitForChild("CommonLibrary"):WaitForChild("Tool"):WaitForChild("RemoteManager"):WaitForChild("Funcs"):WaitForChild("DataPullFunc")
@@ -2272,13 +2273,24 @@ end
 -- Waits indefinitely (no timeout) until a boss spawns nearby, then waits
 -- until that exact instance is defeated/removed. Bails out early if the
 -- boss loop gets toggled off while waiting at any point.
+-- Returns "defeated" if a boss was found and killed, "timeout" if
+-- BOSS_SPAWN_TIMEOUT elapsed with no boss ever showing up, or nil if the
+-- loop got toggled off mid-wait (the caller already re-checks
+-- bossLoopEnabled separately right after calling this either way).
 local function waitForBossThenDefeat()
-    -- Phase 1: stay put and keep checking until the boss actually spawns
+    -- Phase 1: stay put and keep checking until the boss actually spawns,
+    -- but give up after BOSS_SPAWN_TIMEOUT seconds so a boss that never
+    -- shows up can't strand the whole cycle here indefinitely.
     local target
+    local waited = 0
     while bossLoopEnabled do
         target = findNearestBoss()
         if target then break end
+        if waited >= BOSS_SPAWN_TIMEOUT then
+            return "timeout"
+        end
         task.wait(1)
+        waited += 1
     end
     if not bossLoopEnabled or not target then return end
 
@@ -2287,7 +2299,9 @@ local function waitForBossThenDefeat()
     BossLoopLiveStatusLbl.Text = "Status: Boss found (" .. displayName .. "), fighting..."
     BossLoopLiveStatusLbl.TextColor3 = C.gold
 
-    -- Phase 2: wait until this specific boss instance is gone
+    -- Phase 2: wait until this specific boss instance is gone. No timeout
+    -- here on purpose — once a real fight is underway we wait however
+    -- long it actually takes rather than risk cutting it short.
     local defeated = false
     local ancestryConn, destroyingConn
 
@@ -2316,6 +2330,7 @@ local function waitForBossThenDefeat()
     -- no-op if already called, so this just guarantees the two
     -- connections are always cleaned up before this function returns.
     markDefeated()
+    return "defeated"
 end
 
 -- Background watcher: fires once per UTC 15-minute mark while the loop
@@ -2341,14 +2356,19 @@ spawnTracked("bossLoop", function()
                     teleportToAreaFarmSpot(bossSpot, true, 7) -- skipSettle=true, preSnapWait=7 so the 7s gap sits between the area teleport and the exact-spot CFrame snap, giving the area time to load first
 
                     BossLoopLiveStatusLbl.Text = "Status: At Boss, waiting for it to spawn..."
-                    waitForBossThenDefeat()
+                    local result = waitForBossThenDefeat()
 
                     if not bossLoopEnabled then return end -- got turned off mid-wait
 
-                    BossLoopLiveStatusLbl.Text = "Status: Boss defeated! Waiting 3s..."
-                    task.wait(3)
+                    if result == "timeout" then
+                        BossLoopLiveStatusLbl.Text = "Status: Boss never spawned (1min), returning..."
+                        BossLoopLiveStatusLbl.TextColor3 = C.red
+                    else
+                        BossLoopLiveStatusLbl.Text = "Status: Boss defeated! Waiting 3s..."
+                        task.wait(3)
 
-                    if not bossLoopEnabled then return end -- got turned off mid-wait
+                        if not bossLoopEnabled then return end -- got turned off mid-wait
+                    end
 
                     BossLoopLiveStatusLbl.Text = "Status: Returning to Farming Spot..."
                     teleportToAreaFarmSpot(farmingSpot, false, 7)
