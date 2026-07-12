@@ -108,6 +108,8 @@ local bossSpot = nil
 local bossLoopEnabled = false
 local bossLoopStatus = "Idle"
 local lastBossTrigger = nil -- "!YYYY-MM-DD HH:MM" string of the last UTC 15-min mark we already fired on, prevents double-firing within the same minute
+local bossCycleRunning = false -- true while a full teleport→wait→defeat→return cycle is in flight; stops a stuck cycle from overlapping with the next quarter-mark
+local BOSS_TRACK_DISTANCE = 20 -- studs; how far from your character to look for the boss. Tweakable via textbox, persisted across rejoins.
 
 local DataPullFunc = RS:WaitForChild("CommonLibrary"):WaitForChild("Tool"):WaitForChild("RemoteManager"):WaitForChild("Funcs"):WaitForChild("DataPullFunc")
 local clientMonsters = workspace:WaitForChild("ClientMonsters")
@@ -293,7 +295,8 @@ local function saveConfig()
             breedMotherId = breedMotherId,
             breedMotherLabel = breedMotherLabel,
             autoBreedHatchEnabled = autoBreedHatchEnabled,
-            autoBreedEnabled = autoBreedEnabled
+            autoBreedEnabled = autoBreedEnabled,
+            bossTrackDistance = BOSS_TRACK_DISTANCE
         }
         pcall(function()
             writefile(configFileName, HttpService:JSONEncode(data))
@@ -327,6 +330,7 @@ local function loadConfig()
             if data.breedMotherLabel ~= nil then breedMotherLabel = data.breedMotherLabel end
             if data.autoBreedHatchEnabled ~= nil then autoBreedHatchEnabled = data.autoBreedHatchEnabled end
             if data.autoBreedEnabled ~= nil then autoBreedEnabled = data.autoBreedEnabled end
+            if data.bossTrackDistance ~= nil then BOSS_TRACK_DISTANCE = data.bossTrackDistance end
         end)
     end
 end
@@ -1935,7 +1939,7 @@ local function teleportToAreaFarmSpot(spot, skipSettle, preSnapWait)
             if hum then
                 for i = 1, 2 do
                     hum:ChangeState(Enum.HumanoidStateType.Jumping)
-                    task.wait(8) -- short gap so the second jump registers as a new jump
+                    task.wait(0.5) -- short gap so the second jump registers as a new jump
                 end
             end
         end
@@ -2123,17 +2127,6 @@ BossLoopStatusLbl.TextWrapped = true
 BossLoopStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
 BossLoopStatusLbl.LayoutOrder = 12
 
-local ToggleBossLoopBtn = Instance.new("TextButton", AreaFarmTab)
-ToggleBossLoopBtn.Size = UDim2.new(1, -20, 0, 30)
-ToggleBossLoopBtn.BackgroundColor3 = bossLoopEnabled and C.green or C.red
-ToggleBossLoopBtn.TextColor3 = C.text
-ToggleBossLoopBtn.Font = Enum.Font.GothamBold
-ToggleBossLoopBtn.TextSize = 11
-ToggleBossLoopBtn.Text = bossLoopEnabled and "● BOSS AUTO-LOOP: ON" or "● BOSS AUTO-LOOP: OFF"
-ToggleBossLoopBtn.BorderSizePixel = 0
-Instance.new("UICorner", ToggleBossLoopBtn).CornerRadius = UDim.new(0, 5)
-ToggleBossLoopBtn.LayoutOrder = 14
-
 local BossLoopLiveStatusLbl = Instance.new("TextLabel", AreaFarmTab)
 BossLoopLiveStatusLbl.Size = UDim2.new(1, -20, 0, 16)
 BossLoopLiveStatusLbl.BackgroundTransparency = 1
@@ -2143,6 +2136,71 @@ BossLoopLiveStatusLbl.Font = Enum.Font.Gotham
 BossLoopLiveStatusLbl.TextSize = 10
 BossLoopLiveStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
 BossLoopLiveStatusLbl.LayoutOrder = 13
+
+-- ── Boss Track Distance (tweakable, persisted) ──────────────────
+local BossDistRow = Instance.new("Frame", AreaFarmTab)
+BossDistRow.Size = UDim2.new(1, -20, 0, 26)
+BossDistRow.BackgroundColor3 = C.surface
+BossDistRow.BorderSizePixel = 0
+BossDistRow.LayoutOrder = 14
+Instance.new("UICorner", BossDistRow).CornerRadius = UDim.new(0, 5)
+
+local BossDistLbl = Instance.new("TextLabel", BossDistRow)
+BossDistLbl.Size = UDim2.new(0, 90, 1, 0)
+BossDistLbl.Position = UDim2.new(0, 8, 0, 0)
+BossDistLbl.BackgroundTransparency = 1
+BossDistLbl.Text = "Boss Distance:"
+BossDistLbl.TextColor3 = C.sub
+BossDistLbl.Font = Enum.Font.Gotham
+BossDistLbl.TextSize = 10
+BossDistLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+local BossDistBox = Instance.new("TextBox", BossDistRow)
+BossDistBox.Size = UDim2.new(0, 44, 0, 18)
+BossDistBox.Position = UDim2.new(0, 100, 0.5, -9)
+BossDistBox.BackgroundColor3 = C.card
+BossDistBox.TextColor3 = C.text
+BossDistBox.Font = Enum.Font.GothamBold
+BossDistBox.TextSize = 10
+BossDistBox.ClearTextOnFocus = false
+BossDistBox.Text = tostring(BOSS_TRACK_DISTANCE)
+Instance.new("UICorner", BossDistBox).CornerRadius = UDim.new(0, 4)
+
+local BossDistUnitLbl = Instance.new("TextLabel", BossDistRow)
+BossDistUnitLbl.Size = UDim2.new(0, 50, 1, 0)
+BossDistUnitLbl.Position = UDim2.new(0, 150, 0, 0)
+BossDistUnitLbl.BackgroundTransparency = 1
+BossDistUnitLbl.Text = "studs"
+BossDistUnitLbl.TextColor3 = C.sub
+BossDistUnitLbl.Font = Enum.Font.Gotham
+BossDistUnitLbl.TextSize = 10
+BossDistUnitLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+-- Commits on FocusLost (covers both pressing Enter and tapping away,
+-- which is how mobile keyboards typically dismiss). Invalid/empty input
+-- just reverts the box back to whatever BOSS_TRACK_DISTANCE already is,
+-- rather than silently accepting garbage.
+BossDistBox.FocusLost:Connect(function(enterPressed)
+    local n = tonumber(BossDistBox.Text)
+    if n and n > 0 then
+        BOSS_TRACK_DISTANCE = math.floor(n)
+        BossDistBox.Text = tostring(BOSS_TRACK_DISTANCE)
+        saveConfig()
+    else
+        BossDistBox.Text = tostring(BOSS_TRACK_DISTANCE)
+    end
+end)
+
+local ToggleBossLoopBtn = Instance.new("TextButton", AreaFarmTab)
+ToggleBossLoopBtn.Size = UDim2.new(1, -20, 0, 30)
+ToggleBossLoopBtn.BackgroundColor3 = bossLoopEnabled and C.green or C.red
+ToggleBossLoopBtn.TextColor3 = C.text
+ToggleBossLoopBtn.Font = Enum.Font.GothamBold
+ToggleBossLoopBtn.TextSize = 11
+ToggleBossLoopBtn.Text = bossLoopEnabled and "● BOSS AUTO-LOOP: ON" or "● BOSS AUTO-LOOP: OFF"
+ToggleBossLoopBtn.BorderSizePixel = 0
+Instance.new("UICorner", ToggleBossLoopBtn).CornerRadius = UDim.new(0, 5)
+ToggleBossLoopBtn.LayoutOrder = 15
 
 ToggleBossLoopBtn.MouseButton1Click:Connect(function()
     bossLoopEnabled = not bossLoopEnabled
@@ -2172,7 +2230,9 @@ end)
 -- catches deaths via AncestryChanged/Destroying instantly, 2s poll as
 -- a fallback).
 -- ==========================================
-local BOSS_TRACK_DISTANCE = 20 -- studs; how far from your character to look for the boss
+-- BOSS_TRACK_DISTANCE is declared near the top of the script (with the
+-- other boss loop state) so it can be persisted via saveConfig/loadConfig
+-- and tweaked live from the textbox below.
 
 local function getBossMonsterPos(m)
     local root = m:FindFirstChild("Root")
@@ -2270,30 +2330,40 @@ spawnTracked("bossLoop", function()
         local isQuarterMark = (t.min % 15 == 0) and (t.sec <= 2)
         local markKey = string.format("%d-%d-%d %d:%d", t.year, t.month, t.day, t.hour, t.min)
 
-        if isQuarterMark and lastBossTrigger ~= markKey then
+        if isQuarterMark and lastBossTrigger ~= markKey and not bossCycleRunning then
             lastBossTrigger = markKey
+            bossCycleRunning = true
 
             task.spawn(function()
-                BossLoopLiveStatusLbl.Text = "Status: Teleporting to Boss..."
-                BossLoopLiveStatusLbl.TextColor3 = C.gold
-                task.wait(7) -- delay before firing the teleport itself
-                teleportToAreaFarmSpot(bossSpot, true) -- skipSettle=true, preSnapWait stays default (2) so detection starts fast right after the CFrame snap
+                local ok, err = pcall(function()
+                    BossLoopLiveStatusLbl.Text = "Status: Teleporting to Boss..."
+                    BossLoopLiveStatusLbl.TextColor3 = C.gold
+                    teleportToAreaFarmSpot(bossSpot, true, 7) -- skipSettle=true, preSnapWait=7 so the 7s gap sits between the area teleport and the exact-spot CFrame snap, giving the area time to load first
 
-                BossLoopLiveStatusLbl.Text = "Status: At Boss, waiting for it to spawn..."
-                waitForBossThenDefeat()
+                    BossLoopLiveStatusLbl.Text = "Status: At Boss, waiting for it to spawn..."
+                    waitForBossThenDefeat()
 
-                if not bossLoopEnabled then return end -- got turned off mid-wait
+                    if not bossLoopEnabled then return end -- got turned off mid-wait
 
-                BossLoopLiveStatusLbl.Text = "Status: Boss defeated! Waiting 3s..."
-                task.wait(3)
+                    BossLoopLiveStatusLbl.Text = "Status: Boss defeated! Waiting 3s..."
+                    task.wait(3)
 
-                if not bossLoopEnabled then return end -- got turned off mid-wait
+                    if not bossLoopEnabled then return end -- got turned off mid-wait
 
-                BossLoopLiveStatusLbl.Text = "Status: Returning to Farming Spot..."
-                teleportToAreaFarmSpot(farmingSpot, false, 7)
+                    BossLoopLiveStatusLbl.Text = "Status: Returning to Farming Spot..."
+                    teleportToAreaFarmSpot(farmingSpot, false, 7)
 
-                BossLoopLiveStatusLbl.Text = "Status: Waiting for next :00/:15/:30/:45..."
-                BossLoopLiveStatusLbl.TextColor3 = C.sub
+                    BossLoopLiveStatusLbl.Text = "Status: Waiting for next :00/:15/:30/:45..."
+                    BossLoopLiveStatusLbl.TextColor3 = C.sub
+                end)
+
+                if not ok then
+                    warn("[BossLoop] Cycle error: " .. tostring(err))
+                end
+                -- Always reset, no matter which path the cycle exited through
+                -- (normal finish, early return above, or an outright error) —
+                -- this is what stops the flag from ever getting stuck true.
+                bossCycleRunning = false
             end)
         end
     end
