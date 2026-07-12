@@ -1502,7 +1502,7 @@ local function teleportToAreaFarmSpot(spot)
     pcall(function()
         DataPullFunc:InvokeServer("AreaTeleportToRegionChannel", spot.areaId)
     end)
-    task.wait(4.5)
+    task.wait(6)
     local r = getRoot()
     if r then
         r.CFrame = CFrame.new(spot.x, spot.y, spot.z)
@@ -1514,7 +1514,7 @@ local function teleportToAreaFarmSpot(spot)
         if hum then
             for i = 1, 2 do
                 hum:ChangeState(Enum.HumanoidStateType.Jumping)
-                task.wait(3) -- short gap so the second jump registers as a new jump
+                task.wait(8) -- short gap so the second jump registers as a new jump
             end
         end
 
