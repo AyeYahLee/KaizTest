@@ -1309,13 +1309,66 @@ for name, id in pairs(AreaFarmIDs) do
 end
 table.sort(SortedAreaFarmAreas, function(a, b) return a.ID < b.ID end)
 
--- Tracks the area you last clicked in the list below, so Save Farming
--- Spot / Save Boss Spot know which AreaID to attach to the coordinates
--- you're standing at. This mirrors the reference script's own approach:
--- teleport via the button first, THEN save, since the game doesn't
--- expose a direct "what area am I in" read.
-local AreaFarmCurrentAreaName = "Starter Island"
-local AreaFarmCurrentAreaID = 1
+-- Reverse lookup: AreaID -> proper display name, built from the same
+-- table the area button list uses. Lets detection show "Mobius Circus"
+-- instead of the internal folder codename "youleyuan", etc.
+local AreaIdToName = {}
+for name, id in pairs(AreaFarmIDs) do
+    AreaIdToName[id] = name
+end
+
+-- Automatic area detection via region containment — tested and confirmed
+-- working. Checks the player's position against every area's zone
+-- BasePart(s) under workspace.Area.<AreaName>.Area.AreaZone, using
+-- local-space bounds checking (point-in-OBB test), no button click or
+-- live tracking needed.
+--
+-- IMPORTANT: the folder names here (Root, Ice, center, Caidan, ...) do
+-- NOT match the display names in AreaFarmIDs (Starter Island, Frost
+-- Isle, Skyheart Isle, ...) — "Volcano" only worked before by
+-- coincidence since both places happen to use that exact word. Instead,
+-- the zone part's own name embeds the real numeric AreaID directly
+-- (e.g. "Area3" for Ice, "Area10000" for center) — these line up with
+-- the existing AreaFarmIDs numbers, so we read the ID straight from the
+-- part instead of trying to match names. This also means detection now
+-- works for areas that aren't in AreaFarmIDs at all yet (e.g. Caidan,
+-- youleyuan, longdao, kulouisland, fish).
+local function detectCurrentArea()
+    local r = getRoot()
+    if not r then return nil, nil end
+    local myPos = r.Position
+
+    local areaFolder = workspace:FindFirstChild("Area")
+    if not areaFolder then return nil, nil end
+
+    for _, region in ipairs(areaFolder:GetChildren()) do
+        local areaZone = region:FindFirstChild("Area")
+        if areaZone then
+            local zoneFolder = areaZone:FindFirstChild("AreaZone")
+            if zoneFolder then
+                for _, part in ipairs(zoneFolder:GetChildren()) do
+                    if part:IsA("BasePart") then
+                        local ok, localPos = pcall(function()
+                            return part.CFrame:PointToObjectSpace(myPos)
+                        end)
+                        if ok then
+                            local half = part.Size / 2
+                            local inside = math.abs(localPos.X) <= half.X
+                                and math.abs(localPos.Y) <= half.Y
+                                and math.abs(localPos.Z) <= half.Z
+                            if inside then
+                                local areaId = tonumber(part.Name:match("Area(%d+)"))
+                                local niceName = areaId and AreaIdToName[areaId] or region.Name
+                                return niceName, areaId
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return nil, nil
+end
 
 local UIListAreaFarm = Instance.new("UIListLayout", AreaFarmTab)
 UIListAreaFarm.Padding = UDim.new(0, 8)
@@ -1325,9 +1378,9 @@ Instance.new("UIPadding", AreaFarmTab).PaddingTop = UDim.new(0, 8)
 Instance.new("UIPadding", AreaFarmTab).PaddingBottom = UDim.new(0, 8)
 
 local AreaFarmHintLbl = Instance.new("TextLabel", AreaFarmTab)
-AreaFarmHintLbl.Size = UDim2.new(1, -20, 0, 28)
+AreaFarmHintLbl.Size = UDim2.new(1, -20, 0, 40)
 AreaFarmHintLbl.BackgroundTransparency = 1
-AreaFarmHintLbl.Text = "Tap an area below, walk to your spot, then Save."
+AreaFarmHintLbl.Text = "Area buttons below are quick-teleport shortcuts. Just walk to your spot and hit Save — area is detected automatically."
 AreaFarmHintLbl.TextColor3 = C.sub
 AreaFarmHintLbl.Font = Enum.Font.Gotham
 AreaFarmHintLbl.TextSize = 10
@@ -1360,8 +1413,6 @@ for _, area in ipairs(SortedAreaFarmAreas) do
 
     areaBtn.MouseButton1Click:Connect(function()
         areaBtn.TextColor3 = C.accent
-        AreaFarmCurrentAreaName = area.Name
-        AreaFarmCurrentAreaID = area.ID
         pcall(function()
             DataPullFunc:InvokeServer("AreaTeleportToRegionChannel", area.ID)
         end)
@@ -1475,10 +1526,16 @@ end
 SaveFarmSpotBtn.MouseButton1Click:Connect(function()
     local r = getRoot()
     if r then
+        local detectedName, detectedId = detectCurrentArea()
+        if not detectedName or not detectedId then
+            FarmSpotStatusLbl.Text = "Couldn't detect area — not in a known zone!"
+            FarmSpotStatusLbl.TextColor3 = C.red
+            return
+        end
         local p = r.CFrame.Position
         farmingSpot = {
-            areaId = AreaFarmCurrentAreaID,
-            areaName = AreaFarmCurrentAreaName,
+            areaId = detectedId,
+            areaName = detectedName,
             x = p.X, y = p.Y, z = p.Z
         }
         FarmSpotStatusLbl.Text = farmSpotStatusText()
@@ -1582,10 +1639,16 @@ Instance.new("UICorner", ClearBossSpotBtn).CornerRadius = UDim.new(0, 5)
 SaveBossSpotBtn.MouseButton1Click:Connect(function()
     local r = getRoot()
     if r then
+        local detectedName, detectedId = detectCurrentArea()
+        if not detectedName or not detectedId then
+            BossSpotStatusLbl.Text = "Couldn't detect area — not in a known zone!"
+            BossSpotStatusLbl.TextColor3 = C.red
+            return
+        end
         local p = r.CFrame.Position
         bossSpot = {
-            areaId = AreaFarmCurrentAreaID,
-            areaName = AreaFarmCurrentAreaName,
+            areaId = detectedId,
+            areaName = detectedName,
             x = p.X, y = p.Y, z = p.Z
         }
         BossSpotStatusLbl.Text = bossSpotStatusText()
@@ -1696,7 +1759,7 @@ task.spawn(function()
                 teleportToAreaFarmSpot(bossSpot)
 
                 BossLoopLiveStatusLbl.Text = "Status: At Boss, waiting 20s..."
-                task.wait(10)
+                task.wait(13)
 
                 if not bossLoopEnabled then return end -- got turned off mid-wait
 
