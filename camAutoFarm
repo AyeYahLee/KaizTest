@@ -2176,7 +2176,7 @@ spawnTracked("bossLoop", function()
                 teleportToAreaFarmSpot(bossSpot)
 
                 BossLoopLiveStatusLbl.Text = "Status: At Boss, waiting 20s..."
-                task.wait(14)
+                task.wait(11)
 
                 if not bossLoopEnabled then return end -- got turned off mid-wait
 
