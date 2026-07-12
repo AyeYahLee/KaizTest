@@ -2172,7 +2172,7 @@ end)
 -- catches deaths via AncestryChanged/Destroying instantly, 2s poll as
 -- a fallback).
 -- ==========================================
-local BOSS_TRACK_DISTANCE = 60 -- studs; how far from your character to look for the boss
+local BOSS_TRACK_DISTANCE = 20 -- studs; how far from your character to look for the boss
 
 local function getBossMonsterPos(m)
     local root = m:FindFirstChild("Root")
