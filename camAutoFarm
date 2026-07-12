@@ -8,6 +8,46 @@ if game.PlaceId ~= TARGET_PLACE_ID then
     return
 end
 
+-- ==========================================
+-- 0.5 BACKGROUND THREAD REGISTRY
+-- ==========================================
+-- Every infinite task.spawn loop in this script is registered here so it
+-- can be cancelled in one place. This fixes two problems:
+--   1) Re-running the script (common while testing) used to stack a brand
+--      new copy of every loop on top of the old ones, since nothing ever
+--      cancelled the previous instance's threads.
+--   2) The panel's Close (X) button used to just destroy the GUI without
+--      stopping any of these loops, so they kept polling/firing forever
+--      in the background even with no UI left to see them.
+-- _G.NoxarPanelThreads persists across script re-executions (unlike a
+-- local table), so on load we cancel whatever the previous run left
+-- running, then start fresh.
+if _G.NoxarPanelThreads then
+    for _, thread in pairs(_G.NoxarPanelThreads) do
+        pcall(task.cancel, thread)
+    end
+end
+_G.NoxarPanelThreads = {}
+
+-- spawnTracked(name, fn): same as task.spawn(fn), but stores the thread
+-- under `name` in the registry so it can be looked up and cancelled later
+-- (by CloseBtn, or by the next script re-execution above).
+local function spawnTracked(name, fn)
+    if _G.NoxarPanelThreads[name] then
+        pcall(task.cancel, _G.NoxarPanelThreads[name])
+    end
+    local thread = task.spawn(fn)
+    _G.NoxarPanelThreads[name] = thread
+    return thread
+end
+
+local function cancelAllTrackedThreads()
+    for _, thread in pairs(_G.NoxarPanelThreads) do
+        pcall(task.cancel, thread)
+    end
+    _G.NoxarPanelThreads = {}
+end
+
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
 local UIS = game:GetService("UserInputService")
@@ -82,6 +122,49 @@ do
     if ok then EggSystem = mod end
 end
 
+-- Direct access to the game's own breeding logic — PetBreedSystem is a
+-- real ModuleScript at ReplicatedStorage.CommonLogic.Pet.PetBreedSystem.
+-- ClientCreateBreeding(fatherId, motherId) and ClientHatching() are the
+-- exact functions the in-game Breed/Hatch buttons call.
+local PetBreedSystem
+do
+    local ok, mod = pcall(function()
+        return require(RS.CommonLogic.Pet.PetBreedSystem)
+    end)
+    if ok then PetBreedSystem = mod end
+end
+
+-- CfgPetBreed holds BreedTime / ParentGradeMin — real ModuleScript,
+-- confirmed at ReplicatedStorage.CommonConfig.Pet.CfgPetBreed
+local CfgPetBreed
+do
+    local ok, mod = pcall(function()
+        return require(RS.CommonConfig.Pet.CfgPetBreed)
+    end)
+    if ok then CfgPetBreed = mod end
+end
+
+-- Male/Female gender constants — pet:GetGender() returns one of these.
+-- Falls back to the game's typical 1/2 enum-as-number convention if the
+-- constants module path below doesn't resolve.
+local PetGenderType = {Male = 1, Female = 2}
+do
+    local ok, mod = pcall(function()
+        return require(RS.CommonConfig.Constants)
+    end)
+    if ok and mod and mod.PetGenderType then
+        PetGenderType = mod.PetGenderType
+    end
+end
+
+-- Selected pet IDs for breeding (father = male, mother = female)
+local breedFatherId = nil
+local breedFatherLabel = nil
+local breedMotherId = nil
+local breedMotherLabel = nil
+local autoBreedHatchEnabled = false -- auto-fires ClientHatching() when the timer completes
+local autoBreedEnabled = false      -- auto-fires ClientCreateBreeding() again after each collect, looping forever
+
 local groundRayParams = RaycastParams.new()
 groundRayParams.FilterType = Enum.RaycastFilterType.Exclude
 local rayDirection = Vector3.new(0, -200, 0)
@@ -115,8 +198,74 @@ local EggDatabase = {
 }
 
 -- ==========================================
--- 1.5 FULL SAVE & LOAD SYSTEM
+-- 1.6 PET BREEDING — BAG SCANNING
 -- ==========================================
+-- Uses the game's own GamePlayer.pet:IterBagItem() iterator (found via
+-- decompiled PetBagView) rather than guessing at inventory structure.
+-- Filters exactly the same way the in-game breed-parent picker does:
+-- not a child pet, Grade >= ParentGradeMin, template not CantBreed,
+-- and split by gender (Male -> father list, Female -> mother list).
+local function getGamePlayer()
+    local ok, gp = pcall(function()
+        local CPM = require(RS.CommonLibrary.Player.ClientPlayerManager)
+        return CPM.GetGamePlayer()
+    end)
+    if ok then return gp end
+    return nil
+end
+
+-- Returns two arrays: { {id=.., name=.., grade=..}, ... } for males and females
+local function scanBreedablePets()
+    local males, females = {}, {}
+    local gp = getGamePlayer()
+    if not gp or not gp.pet or not gp.pet.IterBagItem then
+        return males, females
+    end
+
+    local ParentGradeMin = CfgPetBreed and CfgPetBreed.ParentGradeMin or nil
+
+    local MaleType, FemaleType = PetGenderType.Male, PetGenderType.Female
+
+    local ok = pcall(function()
+        gp.pet:IterBagItem(function(item)
+            if item:IsChildPet() then return end
+            local tmpl = item:GetTmpl()
+            if tmpl and tmpl.CantBreed then return end
+            local grade = item:GetGrade()
+            if ParentGradeMin and grade < ParentGradeMin then return end
+
+            local entry = {
+                id = item:GetId(),
+                name = (tmpl and tmpl.Name) or ("Pet #" .. tostring(item:GetId())),
+                grade = grade,
+            }
+
+            local gender = item:GetGender()
+            if MaleType ~= nil and gender == MaleType then
+                table.insert(males, entry)
+            elseif FemaleType ~= nil and gender == FemaleType then
+                table.insert(females, entry)
+            end
+        end)
+    end)
+
+    return males, females
+end
+
+-- Checks whether breeding slot 1 currently has an active/completed
+-- breed in progress, using the same GetBreeding() call the in-game
+-- AreaPetBreedShower uses to render the info GUI above the egg.
+local function getBreedingSlotInfo()
+    local gp = getGamePlayer()
+    if not gp or not gp.pet or not gp.pet.GetBreeding then return nil end
+    local ok, info = pcall(function() return gp.pet:GetBreeding(1) end)
+    if ok then return info end
+    return nil
+end
+
+local BreedTimeSeconds = (CfgPetBreed and CfgPetBreed.BreedTime) or 14400 -- fallback if module didn't resolve
+
+
 local configFileName = "NoxarSave.json"
 
 local function saveConfig()
@@ -136,7 +285,15 @@ local function saveConfig()
             -- AreaFarm data, kept as separate keys from `positions` above
             areaFarmingSpot = farmingSpot,
             areaBossSpot = bossSpot,
-            areaBossLoopEnabled = bossLoopEnabled
+            areaBossLoopEnabled = bossLoopEnabled,
+            -- Pet breeding: selected parents + auto toggles, so a rejoin
+            -- can resume the breed -> hatch -> breed loop automatically
+            breedFatherId = breedFatherId,
+            breedFatherLabel = breedFatherLabel,
+            breedMotherId = breedMotherId,
+            breedMotherLabel = breedMotherLabel,
+            autoBreedHatchEnabled = autoBreedHatchEnabled,
+            autoBreedEnabled = autoBreedEnabled
         }
         pcall(function()
             writefile(configFileName, HttpService:JSONEncode(data))
@@ -163,6 +320,13 @@ local function loadConfig()
             if data.areaFarmingSpot ~= nil then farmingSpot = data.areaFarmingSpot end
             if data.areaBossSpot ~= nil then bossSpot = data.areaBossSpot end
             if data.areaBossLoopEnabled ~= nil then bossLoopEnabled = data.areaBossLoopEnabled end
+            -- Pet breeding restore
+            if data.breedFatherId ~= nil then breedFatherId = data.breedFatherId end
+            if data.breedFatherLabel ~= nil then breedFatherLabel = data.breedFatherLabel end
+            if data.breedMotherId ~= nil then breedMotherId = data.breedMotherId end
+            if data.breedMotherLabel ~= nil then breedMotherLabel = data.breedMotherLabel end
+            if data.autoBreedHatchEnabled ~= nil then autoBreedHatchEnabled = data.autoBreedHatchEnabled end
+            if data.autoBreedEnabled ~= nil then autoBreedEnabled = data.autoBreedEnabled end
         end)
     end
 end
@@ -783,7 +947,7 @@ local function toggleFarming(forceState)
         StartFarmBtn.BackgroundColor3 = C.red
         StartFarmBtn.TextColor3 = C.text
         StartFarmBtn.Text = "⏹ Halt Farming"
-        task.spawn(function() startFarming(FarmStatus) end)
+        spawnTracked("farmLoop", function() startFarming(FarmStatus) end)
     else
         StartFarmBtn.BackgroundColor3 = C.green
         StartFarmBtn.TextColor3 = C.bg
@@ -801,7 +965,7 @@ if running then
     StartFarmBtn.BackgroundColor3 = C.red
     StartFarmBtn.TextColor3 = C.text
     StartFarmBtn.Text = "⏹ Halt Farming"
-    task.spawn(function()
+    spawnTracked("farmLoop", function()
         local waited = 0
         while not workspace:FindFirstChild("SelfGUI") and waited < 10 do
             task.wait(0.25)
@@ -1022,7 +1186,7 @@ RejoinBox.FocusLost:Connect(function()
     saveConfig()
 end)
 
-task.spawn(function()
+spawnTracked("rejoinTimer", function()
     while true do
         task.wait(1)
         if rejoinTimerEnabled and rejoinDeadline then
@@ -1277,6 +1441,259 @@ ToggleHatchBtn.MouseButton1Click:Connect(function()
         ToggleHatchBtn.TextColor3 = C.text
         ToggleHatchBtn.Text = "● AUTO HATCH: OFF"
         HatchStatusLbl.Text = "Status: Suspended"
+    end
+    saveConfig()
+end)
+
+-- ==========================================
+-- 7.55 BREEDING SECTION (inside Hatch tab)
+-- ==========================================
+local BreedDivider = Instance.new("Frame", HatchTab)
+BreedDivider.Size = UDim2.new(1, -20, 0, 1)
+BreedDivider.BackgroundColor3 = C.border
+BreedDivider.BorderSizePixel = 0
+BreedDivider.LayoutOrder = 6
+
+local BreedHeaderLbl = Instance.new("TextLabel", HatchTab)
+BreedHeaderLbl.Size = UDim2.new(1, -20, 0, 20)
+BreedHeaderLbl.BackgroundTransparency = 1
+BreedHeaderLbl.Text = "🧬 Pet Breeding"
+BreedHeaderLbl.TextColor3 = C.text
+BreedHeaderLbl.Font = Enum.Font.GothamBold
+BreedHeaderLbl.TextSize = 12
+BreedHeaderLbl.TextXAlignment = Enum.TextXAlignment.Left
+BreedHeaderLbl.LayoutOrder = 7
+
+local BreedStatusLbl = Instance.new("TextLabel", HatchTab)
+BreedStatusLbl.Size = UDim2.new(1, -20, 0, 16)
+BreedStatusLbl.BackgroundTransparency = 1
+BreedStatusLbl.Text = "Slot 1: Empty"
+BreedStatusLbl.TextColor3 = C.sub
+BreedStatusLbl.Font = Enum.Font.Gotham
+BreedStatusLbl.TextSize = 10
+BreedStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
+BreedStatusLbl.LayoutOrder = 8
+
+-- Father picker button
+local FatherBtn = Instance.new("TextButton", HatchTab)
+FatherBtn.Size = UDim2.new(1, -20, 0, 30)
+FatherBtn.BackgroundColor3 = C.card
+FatherBtn.TextColor3 = breedFatherId and C.text or C.sub
+FatherBtn.Font = Enum.Font.Gotham
+FatherBtn.TextSize = 11
+FatherBtn.Text = breedFatherId
+    and ("♂ " .. tostring(breedFatherLabel) .. " (ID " .. tostring(breedFatherId) .. ")")
+    or "♂ Select Father (Male)..."
+FatherBtn.TextXAlignment = Enum.TextXAlignment.Left
+Instance.new("UIPadding", FatherBtn).PaddingLeft = UDim.new(0, 8)
+Instance.new("UICorner", FatherBtn).CornerRadius = UDim.new(0, 5)
+FatherBtn.LayoutOrder = 9
+
+-- Mother picker button
+local MotherBtn = Instance.new("TextButton", HatchTab)
+MotherBtn.Size = UDim2.new(1, -20, 0, 30)
+MotherBtn.BackgroundColor3 = C.card
+MotherBtn.TextColor3 = breedMotherId and C.text or C.sub
+MotherBtn.Font = Enum.Font.Gotham
+MotherBtn.TextSize = 11
+MotherBtn.Text = breedMotherId
+    and ("♀ " .. tostring(breedMotherLabel) .. " (ID " .. tostring(breedMotherId) .. ")")
+    or "♀ Select Mother (Female)..."
+MotherBtn.TextXAlignment = Enum.TextXAlignment.Left
+Instance.new("UIPadding", MotherBtn).PaddingLeft = UDim.new(0, 8)
+Instance.new("UICorner", MotherBtn).CornerRadius = UDim.new(0, 5)
+MotherBtn.LayoutOrder = 10
+
+-- Dropdown list frame (shared, repurposed for father/mother based on
+-- which button was pressed last)
+local BreedListFrame = Instance.new("ScrollingFrame", HatchTab)
+BreedListFrame.Size = UDim2.new(1, -20, 0, 0) -- expands when opened
+BreedListFrame.BackgroundColor3 = C.surface
+BreedListFrame.BorderSizePixel = 0
+BreedListFrame.ScrollBarThickness = 3
+BreedListFrame.ScrollBarImageColor3 = C.accent
+BreedListFrame.Visible = false
+BreedListFrame.ClipsDescendants = true
+BreedListFrame.LayoutOrder = 11
+Instance.new("UICorner", BreedListFrame).CornerRadius = UDim.new(0, 5)
+local BreedListLayout = Instance.new("UIListLayout", BreedListFrame)
+BreedListLayout.Padding = UDim.new(0, 2)
+
+local breedListOpenFor = nil -- "father" or "mother" or nil
+
+local function closeBreedList()
+    breedListOpenFor = nil
+    BreedListFrame.Visible = false
+    BreedListFrame.Size = UDim2.new(1, -20, 0, 0)
+end
+
+local function populateBreedList(kind)
+    for _, c in ipairs(BreedListFrame:GetChildren()) do
+        if c:IsA("TextButton") then c:Destroy() end
+    end
+
+    local males, females = scanBreedablePets()
+    local list = (kind == "father") and males or females
+
+    if #list == 0 then
+        local emptyLbl = Instance.new("TextButton", BreedListFrame)
+        emptyLbl.Size = UDim2.new(1, 0, 0, 26)
+        emptyLbl.BackgroundTransparency = 1
+        emptyLbl.Text = "No eligible " .. (kind == "father" and "male" or "female") .. " pets found"
+        emptyLbl.TextColor3 = C.sub
+        emptyLbl.Font = Enum.Font.Gotham
+        emptyLbl.TextSize = 10
+        emptyLbl.AutoButtonColor = false
+    else
+        for _, entry in ipairs(list) do
+            local row = Instance.new("TextButton", BreedListFrame)
+            row.Size = UDim2.new(1, 0, 0, 26)
+            row.BackgroundColor3 = C.card
+            row.TextColor3 = C.text
+            row.Font = Enum.Font.Gotham
+            row.TextSize = 10
+            row.Text = "  " .. entry.name .. "  (Grade " .. tostring(entry.grade) .. ", ID " .. tostring(entry.id) .. ")"
+            row.TextXAlignment = Enum.TextXAlignment.Left
+            Instance.new("UICorner", row).CornerRadius = UDim.new(0, 4)
+
+            row.MouseButton1Click:Connect(function()
+                if kind == "father" then
+                    breedFatherId = entry.id
+                    breedFatherLabel = entry.name
+                    FatherBtn.Text = "♂ " .. entry.name .. " (ID " .. tostring(entry.id) .. ")"
+                    FatherBtn.TextColor3 = C.text
+                else
+                    breedMotherId = entry.id
+                    breedMotherLabel = entry.name
+                    MotherBtn.Text = "♀ " .. entry.name .. " (ID " .. tostring(entry.id) .. ")"
+                    MotherBtn.TextColor3 = C.text
+                end
+                closeBreedList()
+                saveConfig()
+            end)
+        end
+    end
+
+    -- resize scroll frame to fit up to ~5 rows, then scroll
+    local rowCount = math.max(#list, 1)
+    local shownRows = math.min(rowCount, 5)
+    BreedListFrame.Size = UDim2.new(1, -20, 0, shownRows * 28)
+    BreedListFrame.CanvasSize = UDim2.new(0, 0, 0, rowCount * 28)
+    BreedListFrame.Visible = true
+end
+
+FatherBtn.MouseButton1Click:Connect(function()
+    if breedListOpenFor == "father" then
+        closeBreedList()
+    else
+        breedListOpenFor = "father"
+        populateBreedList("father")
+    end
+end)
+
+MotherBtn.MouseButton1Click:Connect(function()
+    if breedListOpenFor == "mother" then
+        closeBreedList()
+    else
+        breedListOpenFor = "mother"
+        populateBreedList("mother")
+    end
+end)
+
+-- Breed button — fires the game's own ClientCreateBreeding(father, mother)
+local BreedBtn = Instance.new("TextButton", HatchTab)
+BreedBtn.Size = UDim2.new(1, -20, 0, 30)
+BreedBtn.BackgroundColor3 = C.accent
+BreedBtn.TextColor3 = C.text
+BreedBtn.Font = Enum.Font.GothamBold
+BreedBtn.TextSize = 11
+BreedBtn.Text = "🧬 Start Breeding"
+Instance.new("UICorner", BreedBtn).CornerRadius = UDim.new(0, 5)
+BreedBtn.LayoutOrder = 12
+
+BreedBtn.MouseButton1Click:Connect(function()
+    if not breedFatherId or not breedMotherId then
+        BreedStatusLbl.Text = "⚠ Select both a father and mother first"
+        BreedStatusLbl.TextColor3 = C.red
+        return
+    end
+    if not PetBreedSystem then
+        BreedStatusLbl.Text = "⚠ PetBreedSystem unavailable"
+        BreedStatusLbl.TextColor3 = C.red
+        return
+    end
+    local ok, err = pcall(function()
+        PetBreedSystem.ClientCreateBreeding(breedFatherId, breedMotherId)
+    end)
+    if ok then
+        BreedStatusLbl.Text = "Breeding started: " .. tostring(breedFatherLabel) .. " x " .. tostring(breedMotherLabel)
+        BreedStatusLbl.TextColor3 = C.green
+    else
+        BreedStatusLbl.Text = "⚠ Breed request failed: " .. tostring(err)
+        BreedStatusLbl.TextColor3 = C.red
+    end
+end)
+
+-- Auto Hatch Egg toggle — once breeding slot 1 finishes, automatically
+-- fires ClientHatching() to collect the resulting pet, same idea as
+-- the incubator auto-hatch loop below.
+local AutoBreedHatchBtn = Instance.new("TextButton", HatchTab)
+AutoBreedHatchBtn.Size = UDim2.new(1, -20, 0, 30)
+AutoBreedHatchBtn.BackgroundColor3 = autoBreedHatchEnabled and C.green or C.red
+AutoBreedHatchBtn.TextColor3 = C.text
+AutoBreedHatchBtn.Font = Enum.Font.GothamBold
+AutoBreedHatchBtn.TextSize = 11
+AutoBreedHatchBtn.Text = autoBreedHatchEnabled and "● AUTO-COLLECT BRED EGG: ON" or "● AUTO-COLLECT BRED EGG: OFF"
+Instance.new("UICorner", AutoBreedHatchBtn).CornerRadius = UDim.new(0, 5)
+AutoBreedHatchBtn.LayoutOrder = 13
+
+AutoBreedHatchBtn.MouseButton1Click:Connect(function()
+    autoBreedHatchEnabled = not autoBreedHatchEnabled
+    if autoBreedHatchEnabled then
+        AutoBreedHatchBtn.BackgroundColor3 = C.green
+        AutoBreedHatchBtn.Text = "● AUTO-COLLECT BRED EGG: ON"
+    else
+        AutoBreedHatchBtn.BackgroundColor3 = C.red
+        AutoBreedHatchBtn.Text = "● AUTO-COLLECT BRED EGG: OFF"
+    end
+    saveConfig()
+end)
+
+-- Auto Breed toggle — once slot 1 is empty (after collecting), automatically
+-- fires ClientCreateBreeding() again with the same two selected pets,
+-- looping breed -> hatch -> breed forever until turned off. Forces
+-- Auto-Collect on too, since a breed loop needs the egg cleared to restart.
+local AutoBreedBtn = Instance.new("TextButton", HatchTab)
+AutoBreedBtn.Size = UDim2.new(1, -20, 0, 30)
+AutoBreedBtn.BackgroundColor3 = autoBreedEnabled and C.green or C.red
+AutoBreedBtn.TextColor3 = C.text
+AutoBreedBtn.Font = Enum.Font.GothamBold
+AutoBreedBtn.TextSize = 11
+AutoBreedBtn.Text = autoBreedEnabled and "● AUTO BREED LOOP: ON" or "● AUTO BREED LOOP: OFF"
+Instance.new("UICorner", AutoBreedBtn).CornerRadius = UDim.new(0, 5)
+AutoBreedBtn.LayoutOrder = 14
+
+AutoBreedBtn.MouseButton1Click:Connect(function()
+    if not autoBreedEnabled and (not breedFatherId or not breedMotherId) then
+        BreedStatusLbl.Text = "⚠ Select both a father and mother before enabling Auto Breed"
+        BreedStatusLbl.TextColor3 = C.red
+        return
+    end
+    autoBreedEnabled = not autoBreedEnabled
+    if autoBreedEnabled then
+        AutoBreedBtn.BackgroundColor3 = C.green
+        AutoBreedBtn.Text = "● AUTO BREED LOOP: ON"
+        -- Auto Breed requires Auto-Collect to also be on, or the loop
+        -- would breed once and then just sit there forever with a
+        -- finished egg nobody collects.
+        if not autoBreedHatchEnabled then
+            autoBreedHatchEnabled = true
+            AutoBreedHatchBtn.BackgroundColor3 = C.green
+            AutoBreedHatchBtn.Text = "● AUTO-COLLECT BRED EGG: ON"
+        end
+    else
+        AutoBreedBtn.BackgroundColor3 = C.red
+        AutoBreedBtn.Text = "● AUTO BREED LOOP: OFF"
     end
     saveConfig()
 end)
@@ -1741,7 +2158,7 @@ end)
 -- Background watcher: fires once per UTC 15-minute mark while the loop
 -- is enabled. Uses os.date("!*t") the same way getSecondsUntilReset()
 -- above already does for UTC time in this file.
-task.spawn(function()
+spawnTracked("bossLoop", function()
     while task.wait(1) do
         if not bossLoopEnabled then continue end
         if not farmingSpot or not bossSpot then continue end
@@ -1759,7 +2176,7 @@ task.spawn(function()
                 teleportToAreaFarmSpot(bossSpot)
 
                 BossLoopLiveStatusLbl.Text = "Status: At Boss, waiting 20s..."
-                task.wait(13)
+                task.wait(14)
 
                 if not bossLoopEnabled then return end -- got turned off mid-wait
 
@@ -1780,18 +2197,21 @@ TabFarmBtn.MouseButton1Click:Connect(function()
     FarmTab.Visible = true; ClaimTab.Visible = false; ServerTab.Visible = false; HatchTab.Visible = false; AreaFarmTab.Visible = false
     TabFarmBtn.TextColor3 = C.text; TabClaimBtn.TextColor3 = C.sub; TabServerBtn.TextColor3 = C.sub; TabHatchBtn.TextColor3 = C.sub; TabAreaFarmBtn.TextColor3 = C.sub
     TS:Create(TabIndicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new(0, 0, 1, -2)}):Play()
+    closeBreedList()
 end)
 
 TabClaimBtn.MouseButton1Click:Connect(function()
     FarmTab.Visible = false; ClaimTab.Visible = true; ServerTab.Visible = false; HatchTab.Visible = false; AreaFarmTab.Visible = false
     TabClaimBtn.TextColor3 = C.text; TabFarmBtn.TextColor3 = C.sub; TabServerBtn.TextColor3 = C.sub; TabHatchBtn.TextColor3 = C.sub; TabAreaFarmBtn.TextColor3 = C.sub
     TS:Create(TabIndicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new(0.2, 0, 1, -2)}):Play()
+    closeBreedList()
 end)
 
 TabServerBtn.MouseButton1Click:Connect(function()
     FarmTab.Visible = false; ClaimTab.Visible = false; ServerTab.Visible = true; HatchTab.Visible = false; AreaFarmTab.Visible = false
     TabServerBtn.TextColor3 = C.text; TabFarmBtn.TextColor3 = C.sub; TabClaimBtn.TextColor3 = C.sub; TabHatchBtn.TextColor3 = C.sub; TabAreaFarmBtn.TextColor3 = C.sub
     TS:Create(TabIndicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new(0.4, 0, 1, -2)}):Play()
+    closeBreedList()
 end)
 
 TabHatchBtn.MouseButton1Click:Connect(function()
@@ -1804,6 +2224,7 @@ TabAreaFarmBtn.MouseButton1Click:Connect(function()
     FarmTab.Visible = false; ClaimTab.Visible = false; ServerTab.Visible = false; HatchTab.Visible = false; AreaFarmTab.Visible = true
     TabAreaFarmBtn.TextColor3 = C.text; TabFarmBtn.TextColor3 = C.sub; TabClaimBtn.TextColor3 = C.sub; TabServerBtn.TextColor3 = C.sub; TabHatchBtn.TextColor3 = C.sub
     TS:Create(TabIndicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new(0.8, 0, 1, -2)}):Play()
+    closeBreedList()
 end)
 
 MinBtn.MouseButton1Click:Connect(function()
@@ -1819,6 +2240,7 @@ CloseBtn.MouseButton1Click:Connect(function()
     runId += 1
     unglueTarget()
     unequipAll()
+    cancelAllTrackedThreads()
     sg:Destroy()
 end)
 
@@ -1862,14 +2284,14 @@ task.spawn(function()
     ScanBtn.Text = "🔍 Rescan (" .. #types .. " Found)"
 end)
 
-task.spawn(function()
+spawnTracked("claimTimerDisplay", function()
     while task.wait(1) do
         local secs = getSecondsUntilReset()
         ClaimTimer.Text = "Next Reset: " .. formatTime(secs)
     end
 end)
 
-task.spawn(function()
+spawnTracked("autoClaimLoop", function()
     task.wait(3)
     if autoClaimEnabled then
         local ok = claimAll()
@@ -1912,7 +2334,7 @@ local incubatorKnownEmpty = {} -- [index] = true once we've either claimed it or
 -- are sitting empty from before the script ran (e.g. after a rejoin).
 local hatchBootstrapped = false
 
-task.spawn(function()
+spawnTracked("autoHatchLoop", function()
     while task.wait(3) do
         if not autoHatchEnabled or not selectedEggId then continue end
 
@@ -1963,5 +2385,85 @@ task.spawn(function()
                 end
             end
         end)
+    end
+end)
+
+-- ==========================================
+-- 10. BREEDING STATUS WATCHER + AUTO-COLLECT
+-- ==========================================
+-- Polls GetBreeding(1) the same way AreaPetBreedShower does, updates the
+-- status label with a live countdown, and (if enabled) auto-fires
+-- ClientHatching() the moment the timer completes. If Auto Breed Loop
+-- is also on, immediately re-fires ClientCreateBreeding() with the same
+-- two selected pets right after collecting, so the whole
+-- breed -> wait -> hatch -> breed cycle repeats with no input needed.
+spawnTracked("breedingWatcher", function()
+    while task.wait(2) do
+        local info = getBreedingSlotInfo()
+
+        if info == nil then
+            -- Slot is empty. If Auto Breed is on and we have both pets
+            -- selected, start a new breed right away — this covers both
+            -- "just collected" and "rejoined with slot already empty".
+            if autoBreedEnabled and breedFatherId and breedMotherId and PetBreedSystem then
+                BreedStatusLbl.Text = "Slot 1: Empty — auto-breeding again..."
+                BreedStatusLbl.TextColor3 = C.sub
+                local ok = pcall(function()
+                    PetBreedSystem.ClientCreateBreeding(breedFatherId, breedMotherId)
+                end)
+                if ok then
+                    BreedStatusLbl.Text = "Auto-breeding: " .. tostring(breedFatherLabel) .. " x " .. tostring(breedMotherLabel)
+                    BreedStatusLbl.TextColor3 = C.green
+                end
+            else
+                BreedStatusLbl.Text = "Slot 1: Empty — pick two pets and breed"
+                BreedStatusLbl.TextColor3 = C.sub
+            end
+        else
+            local serverTime = nil
+            pcall(function()
+                local CPM = require(RS.CommonLibrary.Player.ClientPlayerManager)
+                serverTime = CPM.GetServerTime()
+            end)
+            serverTime = serverTime or os.time()
+
+            local remaining = (info.StartTick + BreedTimeSeconds) - serverTime
+
+            if remaining > 0 then
+                local h = math.floor(remaining / 3600)
+                local m = math.floor((remaining % 3600) / 60)
+                local s = math.floor(remaining % 60)
+                BreedStatusLbl.Text = string.format("Slot 1: Breeding... %02d:%02d:%02d left", h, m, s)
+                BreedStatusLbl.TextColor3 = C.sub
+            else
+                BreedStatusLbl.Text = "Slot 1: Egg ready to hatch!"
+                BreedStatusLbl.TextColor3 = C.green
+
+                if autoBreedHatchEnabled and PetBreedSystem then
+                    local ok = pcall(function()
+                        PetBreedSystem.ClientHatching()
+                    end)
+                    if ok then
+                        if autoBreedEnabled and breedFatherId and breedMotherId then
+                            -- Collected — immediately queue the next breed.
+                            -- The slot won't show empty until next poll,
+                            -- so fire it here rather than waiting a full
+                            -- extra 2s cycle for the "info == nil" branch.
+                            task.wait(0.3)
+                            local ok2 = pcall(function()
+                                PetBreedSystem.ClientCreateBreeding(breedFatherId, breedMotherId)
+                            end)
+                            if ok2 then
+                                BreedStatusLbl.Text = "Collected! Auto-breeding again: " .. tostring(breedFatherLabel) .. " x " .. tostring(breedMotherLabel)
+                                BreedStatusLbl.TextColor3 = C.green
+                            end
+                        else
+                            BreedStatusLbl.Text = "Slot 1: Collected! Pick pets to breed again."
+                            BreedStatusLbl.TextColor3 = C.green
+                        end
+                    end
+                end
+            end
+        end
     end
 end)
