@@ -2252,6 +2252,13 @@ local function getBossMonsterPos(m)
     return nil
 end
 
+-- Module-level (not local to waitForBossThenDefeat) so CloseBtn can
+-- force-disconnect these even if the per-cycle thread gets force-killed
+-- mid-fight. task.cancel() cannot run any cleanup code inside the
+-- cancelled thread, so the function's own markDefeated() would never
+-- fire in that case — these would otherwise leak forever.
+local bossAncestryConn, bossDestroyingConn = nil, nil
+
 local function findNearestBoss()
     local hrp = getRoot()
     if not hrp then return nil end
@@ -2303,19 +2310,18 @@ local function waitForBossThenDefeat()
     -- here on purpose — once a real fight is underway we wait however
     -- long it actually takes rather than risk cutting it short.
     local defeated = false
-    local ancestryConn, destroyingConn
 
     local function markDefeated()
         if defeated then return end
         defeated = true
-        if ancestryConn then ancestryConn:Disconnect() end
-        if destroyingConn then destroyingConn:Disconnect() end
+        if bossAncestryConn then bossAncestryConn:Disconnect(); bossAncestryConn = nil end
+        if bossDestroyingConn then bossDestroyingConn:Disconnect(); bossDestroyingConn = nil end
     end
 
-    ancestryConn = target.AncestryChanged:Connect(function(_, parent)
+    bossAncestryConn = target.AncestryChanged:Connect(function(_, parent)
         if parent ~= clientMonsters then markDefeated() end
     end)
-    destroyingConn = target.Destroying:Connect(markDefeated)
+    bossDestroyingConn = target.Destroying:Connect(markDefeated)
 
     while not defeated and bossLoopEnabled do
         if not clientMonsters:FindFirstChild(target.Name) then
@@ -2349,7 +2355,14 @@ spawnTracked("bossLoop", function()
             lastBossTrigger = markKey
             bossCycleRunning = true
 
-            task.spawn(function()
+            -- Tracked (not plain task.spawn) so CloseBtn's
+            -- cancelAllTrackedThreads() can actually stop a cycle that's
+            -- mid-teleport/mid-fight, instead of it running to completion
+            -- in the background after the panel is already gone.
+            -- bossCycleRunning guards against two cycles ever overlapping,
+            -- so reusing the fixed name "bossCycle" every quarter-mark is
+            -- safe — there's never more than one in flight at a time.
+            spawnTracked("bossCycle", function()
                 local ok, err = pcall(function()
                     BossLoopLiveStatusLbl.Text = "Status: Teleporting to Boss..."
                     BossLoopLiveStatusLbl.TextColor3 = C.gold
@@ -2439,6 +2452,16 @@ CloseBtn.MouseButton1Click:Connect(function()
     runId += 1
     unglueTarget()
     unequipAll()
+
+    -- cancelAllTrackedThreads() below will kill the "bossCycle" thread if
+    -- one is mid-fight, but task.cancel() cannot run cleanup code inside
+    -- the thread it kills — so that thread's own markDefeated() never
+    -- gets a chance to run. Disconnect the boss AncestryChanged/Destroying
+    -- connections here explicitly so they can't dangle past Close.
+    if bossAncestryConn then bossAncestryConn:Disconnect(); bossAncestryConn = nil end
+    if bossDestroyingConn then bossDestroyingConn:Disconnect(); bossDestroyingConn = nil end
+    bossCycleRunning = false
+
     cancelAllTrackedThreads()
     sg:Destroy()
 end)
