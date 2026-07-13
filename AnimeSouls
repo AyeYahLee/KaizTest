@@ -1,7 +1,7 @@
 -- ==========================================
 -- 0. GAME ID SECURITY CHECK
 -- ==========================================
-local TARGET_PLACE_ID = 10385510755 -- ⚠️ REPLACE THIS WITH YOUR GAME'S PLACE ID
+local TARGET_PLACE_ID = 118884500321949 -- ⚠️ REPLACE THIS WITH YOUR GAME'S PLACE ID
 
 if game.PlaceId ~= TARGET_PLACE_ID then
     warn("[Noxar Panel] Execution blocked: Incorrect Game/Place ID. Current ID: " .. tostring(game.PlaceId))
