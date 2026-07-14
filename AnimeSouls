@@ -14,15 +14,14 @@ if _G.StopNoxarFarm then
 end
 
 -- ══════════════════════════════════════════════════════════════════
---  AutoFarm  –  Anime Souls (Unified Save System)
+-- AutoFarm – Anime Souls (Unified Save System)
 -- ══════════════════════════════════════════════════════════════════
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local RS = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
 
-local Players        = game:GetService("Players")
-local RunService     = game:GetService("RunService")
-local RS             = game:GetService("ReplicatedStorage")
-local HttpService    = game:GetService("HttpService")
-
-local lp   = Players.LocalPlayer
+local lp = Players.LocalPlayer
 local char = lp.Character or lp.CharacterAdded:Wait()
 local root = char:WaitForChild("HumanoidRootPart")
 
@@ -36,13 +35,14 @@ local SETTINGS_FILE = "AnimeSouls_NoxarSave.json"
 
 -- Farm State
 local farmRunning = false
-local farmThread  = nil
+local farmThread = nil
 local targetNames = {}
 
 -- Server/Rejoin State
 local rejoinTimerEnabled = false
 local rejoinMinutes = 60
 local rejoinDeadline = nil
+local autoKickEnabled = true -- NEW: Auto Kick State (Defaults to true)
 
 -- Spin State
 local autoSpinEnabled = false
@@ -57,10 +57,10 @@ local gamblePulls = 3
 -- ── Unified Save / Load System ────────────────────────────────────
 local function saveSettings()
     if not writefile then return end
-    
+
     local targetsList = {}
     for name, _ in pairs(targetNames) do table.insert(targetsList, name) end
-    
+
     local spinList = {}
     for channel, _ in pairs(selectedSpins) do table.insert(spinList, channel) end
 
@@ -69,6 +69,7 @@ local function saveSettings()
         selectedMonsters = targetsList,
         rejoinEnabled = rejoinTimerEnabled,
         rejoinMinutes = rejoinMinutes,
+        autoKickEnabled = autoKickEnabled, -- Saved here
         autoSpinEnabled = autoSpinEnabled,
         spinDelay = spinDelay,
         selectedSpins = spinList,
@@ -76,6 +77,7 @@ local function saveSettings()
         gambleDelay = gambleDelay,
         gamblePulls = gamblePulls
     }
+
     pcall(function()
         writefile(SETTINGS_FILE, HttpService:JSONEncode(data))
     end)
@@ -83,24 +85,36 @@ end
 
 local function loadSettings()
     if not (isfile and readfile and isfile(SETTINGS_FILE)) then return end
+
     local ok, data = pcall(function()
         return HttpService:JSONDecode(readfile(SETTINGS_FILE))
     end)
+
     if ok and data then
         -- Farm
         farmRunning = data.farmRunning or false
         if data.selectedMonsters then
-            for _, name in ipairs(data.selectedMonsters) do targetNames[name:lower()] = true end
+            for _, name in ipairs(data.selectedMonsters) do
+                targetNames[name:lower()] = true
+            end
         end
+
         -- Server
         rejoinTimerEnabled = data.rejoinEnabled or false
         rejoinMinutes = tonumber(data.rejoinMinutes) or 60
+        if data.autoKickEnabled ~= nil then
+            autoKickEnabled = data.autoKickEnabled
+        end
+
         -- Spin
         autoSpinEnabled = data.autoSpinEnabled or false
         spinDelay = tonumber(data.spinDelay) or 0.1
         if data.selectedSpins then
-            for _, channel in ipairs(data.selectedSpins) do selectedSpins[channel] = true end
+            for _, channel in ipairs(data.selectedSpins) do
+                selectedSpins[channel] = true
+            end
         end
+
         -- Gamble
         gambleEnabled = data.gambleEnabled or false
         gambleDelay = tonumber(data.gambleDelay) or 1.5
@@ -120,9 +134,11 @@ end
 loadSettings()
 
 -- ══════════════════════════════════════════════════════════════════
---  SERVER SECURITY — Anti-Public Server
+-- SERVER SECURITY — Anti-Public Server
 -- ══════════════════════════════════════════════════════════════════
 local function checkServerPop()
+    if not autoKickEnabled then return end -- Won't run if toggled off
+    
     -- game.PrivateServerId is empty if you are in a public server
     if game.PrivateServerId == "" then
         local playerCount = #Players:GetPlayers()
@@ -141,17 +157,12 @@ Players.PlayerAdded:Connect(function()
 end)
 
 -- ── Helpers ───────────────────────────────────────────────────────
-
 local function extractNameFromGui(gui)
     local lastName = nil
     for _, d in pairs(gui:GetDescendants()) do
         if d:IsA("TextLabel") then
             local t = d.Text
-            if t and t ~= "" and t ~= "PetName"
-                and not t:match("^Lv%.")
-                and not t:match("^%d")
-                and not t:match("%%")
-                and not t:match("^x ") then
+            if t and t ~= "" and t ~= "PetName" and not t:match("^Lv%.") and not t:match("^%d") and not t:match("%%") and not t:match("^x ") then
                 lastName = t
             end
         end
@@ -181,6 +192,7 @@ end
 local function getNearest()
     local cm = workspace:FindFirstChild("ClientMonsters")
     if not cm then return nil end
+
     local nearest, nearDist = nil, math.huge
     for _, m in pairs(cm:GetChildren()) do
         if m:IsA("Model") then
@@ -226,11 +238,9 @@ local function farmLoop()
 end
 
 -- ══════════════════════════════════════════════════════════════════
---  ANIME UI  — AutoFarm
+-- ANIME UI — AutoFarm
 -- ══════════════════════════════════════════════════════════════════
-
 local TweenService = game:GetService("TweenService")
-
 local existingGui = (gethui and gethui() or game:GetService("CoreGui")):FindFirstChild("AutoFarmGui")
 if existingGui then existingGui:Destroy() end
 
@@ -242,42 +252,48 @@ screenGui.IgnoreGuiInset = true
 screenGui.Parent = gethui and gethui() or game:GetService("CoreGui")
 
 local C = {
-    bg        = Color3.fromRGB(8,  6,  14),
-    bgMid     = Color3.fromRGB(16, 10, 28),
-    header1   = Color3.fromRGB(38, 10, 72),
-    header2   = Color3.fromRGB(12,  4, 30),
-    accent    = Color3.fromRGB(168, 85, 255),
-    accentDim = Color3.fromRGB(90,  30, 160),
-    glow      = Color3.fromRGB(200, 120, 255),
-    textMain  = Color3.fromRGB(235, 215, 255),
-    textDim   = Color3.fromRGB(150, 130, 175),
+    bg = Color3.fromRGB(8, 6, 14),
+    bgMid = Color3.fromRGB(16, 10, 28),
+    header1 = Color3.fromRGB(38, 10, 72),
+    header2 = Color3.fromRGB(12, 4, 30),
+    accent = Color3.fromRGB(168, 85, 255),
+    accentDim = Color3.fromRGB(90, 30, 160),
+    glow = Color3.fromRGB(200, 120, 255),
+    textMain = Color3.fromRGB(235, 215, 255),
+    textDim = Color3.fromRGB(150, 130, 175),
     textLabel = Color3.fromRGB(185, 100, 255),
-    btnOff    = Color3.fromRGB(20,  13, 36),
-    btnOn     = Color3.fromRGB(55,  18, 100),
-    green     = Color3.fromRGB(80,  220, 130),
-    red       = Color3.fromRGB(220, 60,  80),
-    divider   = Color3.fromRGB(55,  30,  80),
+    btnOff = Color3.fromRGB(20, 13, 36),
+    btnOn = Color3.fromRGB(55, 18, 100),
+    green = Color3.fromRGB(80, 220, 130),
+    red = Color3.fromRGB(220, 60, 80),
+    divider = Color3.fromRGB(55, 30, 80),
 }
 
-local function corner(r, p) local c=Instance.new("UICorner",p); c.CornerRadius=UDim.new(0,r); return c end
-local function stroke(w, col, p) local s=Instance.new("UIStroke",p); s.Thickness=w; s.Color=col; return s end
-local function tween(obj, t, props) TweenService:Create(obj, TweenInfo.new(t, Enum.EasingStyle.Quad), props):Play() end
+local function corner(r, p)
+    local c=Instance.new("UICorner",p); c.CornerRadius=UDim.new(0,r); return c
+end
+local function stroke(w, col, p)
+    local s=Instance.new("UIStroke",p); s.Thickness=w; s.Color=col; return s
+end
+local function tween(obj, t, props)
+    TweenService:Create(obj, TweenInfo.new(t, Enum.EasingStyle.Quad), props):Play()
+end
 
 local W, H = 270, 342
 local frame = Instance.new("Frame")
-frame.Size            = UDim2.new(0, W, 0, H)
-frame.Position        = UDim2.new(0.5, -W/2, 0.5, -H/2)
+frame.Size = UDim2.new(0, W, 0, H)
+frame.Position = UDim2.new(0.5, -W/2, 0.5, -H/2)
 frame.BackgroundColor3 = C.bg
 frame.BackgroundTransparency = 1
 frame.BorderSizePixel = 0
-frame.Active          = true
-frame.Draggable       = true
+frame.Active = true
+frame.Draggable = true
 frame.ClipsDescendants = true
-frame.Parent          = screenGui
+frame.Parent = screenGui
 corner(14, frame)
+
 local outerGlow = stroke(2, C.accent, frame)
 outerGlow.Transparency = 1
-
 local frameScale = Instance.new("UIScale", frame)
 frameScale.Scale = 0.85
 
@@ -296,10 +312,10 @@ end)
 
 local HEADER_H = 52
 local header = Instance.new("Frame")
-header.Size            = UDim2.new(1, 0, 0, HEADER_H)
+header.Size = UDim2.new(1, 0, 0, HEADER_H)
 header.BackgroundColor3 = C.header1
 header.BorderSizePixel = 0
-header.Parent          = frame
+header.Parent = frame
 corner(14, header)
 
 local hfix = Instance.new("Frame", header)
@@ -442,7 +458,7 @@ local uptimeLbl = Instance.new("TextLabel", frame)
 uptimeLbl.Size = UDim2.new(1,-24,0,18)
 uptimeLbl.Position = UDim2.new(0,12,0,HEADER_H+TAB_H+42)
 uptimeLbl.BackgroundTransparency = 1
-uptimeLbl.Text = "⏱  Uptime: 00:00"
+uptimeLbl.Text = "⏱ Uptime: 00:00"
 uptimeLbl.TextColor3 = C.textDim
 uptimeLbl.Font = Enum.Font.Gotham
 uptimeLbl.TextSize = 11
@@ -462,7 +478,7 @@ end
 local scriptStartTime = tick()
 task.spawn(function()
     while uptimeLbl.Parent do
-        uptimeLbl.Text = "⏱  Uptime: " .. formatUptime(tick() - scriptStartTime)
+        uptimeLbl.Text = "⏱ Uptime: " .. formatUptime(tick() - scriptStartTime)
         task.wait(1)
     end
 end)
@@ -471,7 +487,7 @@ local sectionLbl = Instance.new("TextLabel", frame)
 sectionLbl.Size = UDim2.new(1,-24,0,16)
 sectionLbl.Position = UDim2.new(0,12,0,HEADER_H+TAB_H+64)
 sectionLbl.BackgroundTransparency = 1
-sectionLbl.Text = "▸  SELECT MONSTERS"
+sectionLbl.Text = "▸ SELECT MONSTERS"
 sectionLbl.TextColor3 = C.textLabel
 sectionLbl.Font = Enum.Font.GothamBold
 sectionLbl.TextSize = 11
@@ -486,11 +502,11 @@ scroll.ScrollBarThickness = 2
 scroll.ScrollBarImageColor3 = C.accent
 scroll.CanvasSize = UDim2.new(0,0,0,0)
 scroll.ElasticBehavior = Enum.ElasticBehavior.Never
+
 local listLayout = Instance.new("UIListLayout", scroll)
 listLayout.Padding = UDim.new(0,5)
 
 local checkboxes = {}
-
 local function makeCheckbox(monName, index)
     local btn = Instance.new("TextButton", scroll)
     btn.Size = UDim2.new(1,0,0,30)
@@ -502,20 +518,20 @@ local function makeCheckbox(monName, index)
     btn.TextColor3 = C.textDim
     btn.TextTransparency = 1
     btn.TextXAlignment = Enum.TextXAlignment.Left
-    
+
     local monLower = monName:lower()
-    local sel = targetNames[monLower] == true 
-    
+    local sel = targetNames[monLower] == true
+
     if sel then
         btn.BackgroundColor3 = C.btnOn
         btn.TextColor3 = C.glow
-        btn.Text = "   ●  " .. monName
+        btn.Text = " ● " .. monName
     else
         btn.BackgroundColor3 = C.btnOff
         btn.TextColor3 = C.textDim
-        btn.Text = "   ○  " .. monName
+        btn.Text = " ○ " .. monName
     end
-    
+
     btn.LayoutOrder = index or 0
     corner(8, btn)
     local btnStroke = stroke(1, C.divider, btn)
@@ -536,15 +552,15 @@ local function makeCheckbox(monName, index)
             targetNames[monLower] = true
             tween(btn, 0.15, {BackgroundColor3 = C.btnOn})
             btn.TextColor3 = C.glow
-            btn.Text = "   ●  " .. monName
+            btn.Text = " ● " .. monName
         else
             targetNames[monLower] = nil
             tween(btn, 0.15, {BackgroundColor3 = C.btnOff})
             btn.TextColor3 = C.textDim
-            btn.Text = "   ○  " .. monName
+            btn.Text = " ○ " .. monName
         end
         saveSettings()
-        
+
         TweenService:Create(btnScale, TweenInfo.new(0.08), {Scale = 0.96}):Play()
         task.delay(0.08, function()
             TweenService:Create(btnScale, TweenInfo.new(0.12, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = 1}):Play()
@@ -553,7 +569,7 @@ local function makeCheckbox(monName, index)
     checkboxes[monName] = btn
 end
 
-local SCAN_Y  = HEADER_H + TAB_H + 182
+local SCAN_Y = HEADER_H + TAB_H + 182
 local START_Y = HEADER_H + TAB_H + 218
 
 local scanBtn = Instance.new("TextButton", frame)
@@ -564,7 +580,7 @@ scanBtn.BorderSizePixel = 0
 scanBtn.Font = Enum.Font.GothamBold
 scanBtn.TextSize = 12
 scanBtn.TextColor3 = C.accent
-scanBtn.Text = "🔍   Scan Monsters"
+scanBtn.Text = "🔍 Scan Monsters"
 corner(8, scanBtn)
 stroke(1, C.accentDim, scanBtn)
 
@@ -576,9 +592,10 @@ startBtn.BorderSizePixel = 0
 startBtn.Font = Enum.Font.GothamBold
 startBtn.TextSize = 14
 startBtn.TextColor3 = Color3.new(1,1,1)
-startBtn.Text = "▶   Start Farming"
+startBtn.Text = "▶ Start Farming"
 corner(10, startBtn)
 stroke(1.5, C.accent, startBtn)
+
 local startGrad = Instance.new("UIGradient", startBtn)
 startGrad.Color = ColorSequence.new({
     ColorSequenceKeypoint.new(0, Color3.fromRGB(200, 130, 255)),
@@ -592,9 +609,7 @@ local scanScale = Instance.new("UIScale", scanBtn)
 scanBtn.MouseEnter:Connect(function() tween(scanBtn,0.12,{BackgroundColor3=C.accentDim}) end)
 scanBtn.MouseLeave:Connect(function() tween(scanBtn,0.12,{BackgroundColor3=C.bgMid}) end)
 startBtn.MouseEnter:Connect(function() tween(startBtn,0.12,{BackgroundColor3=C.accent}) end)
-startBtn.MouseLeave:Connect(function()
-    tween(startBtn,0.12,{BackgroundColor3=farmRunning and C.red or C.accentDim})
-end)
+startBtn.MouseLeave:Connect(function() tween(startBtn,0.12,{BackgroundColor3=farmRunning and C.red or C.accentDim}) end)
 
 scanBtn.MouseButton1Down:Connect(function() tween(scanScale, 0.08, {Scale = 0.95}) end)
 scanBtn.MouseButton1Up:Connect(function() tween(scanScale, 0.12, {Scale = 1}) end)
@@ -602,11 +617,10 @@ startBtn.MouseButton1Down:Connect(function() tween(startScale, 0.08, {Scale = 0.
 startBtn.MouseButton1Up:Connect(function() tween(startScale, 0.12, {Scale = 1}) end)
 
 local currentWorld = nil
-
 local function getWorldName()
     local area = workspace:FindFirstChild("Area")
     if area then return area.Name end
-    return tostring(workspace.DistributedGameTime) 
+    return tostring(workspace.DistributedGameTime)
 end
 
 local function scanMonsters()
@@ -627,7 +641,10 @@ local function scanMonsters()
     local names = {}
     for n in pairs(found) do table.insert(names, n) end
     table.sort(names)
-    for i, n in ipairs(names) do makeCheckbox(n, i) end
+
+    for i, n in ipairs(names) do
+        makeCheckbox(n, i)
+    end
     scroll.CanvasSize = UDim2.new(0,0,0,#names*35)
 
     if #names > 0 then
@@ -635,7 +652,6 @@ local function scanMonsters()
     else
         setStatus("No monsters — are you in a world?", false)
     end
-
     currentWorld = getWorldName()
 end
 
@@ -654,32 +670,31 @@ local function setFarmState(state)
     farmRunning = state
     if farmRunning then
         if next(targetNames) == nil then
-            setStatus("⚠  Select at least one monster!", false)
+            setStatus("⚠ Select at least one monster!", false)
             tween(startBtn, 0.1, {BackgroundColor3 = C.red})
-            task.delay(0.5, function() 
-                if not farmRunning then 
-                    tween(startBtn,0.2,{BackgroundColor3=C.accentDim}) 
-                end 
+            task.delay(0.5, function()
+                if not farmRunning then tween(startBtn,0.2,{BackgroundColor3=C.accentDim}) end
             end)
             farmRunning = false
             saveSettings()
             return
         end
         tween(startBtn, 0.2, {BackgroundColor3 = C.red})
-        startBtn.Text = "⏹   Stop Farming"
+        startBtn.Text = "⏹ Stop Farming"
         local names = {}
         for n in pairs(targetNames) do table.insert(names, n) end
         setStatus("Farming: " .. table.concat(names, ", "), true)
+
         if farmThread then task.cancel(farmThread) end
         farmThread = task.spawn(farmLoop)
     else
         if farmThread then task.cancel(farmThread) end
         farmThread = nil
         tween(startBtn, 0.2, {BackgroundColor3 = C.accentDim})
-        startBtn.Text = "▶   Start Farming"
+        startBtn.Text = "▶ Start Farming"
         setStatus("Stopped", false)
     end
-    saveSettings() 
+    saveSettings()
 end
 
 startBtn.MouseButton1Click:Connect(function()
@@ -691,21 +706,21 @@ scanBtn.MouseButton1Click:Connect(scanMonsters)
 task.delay(1, function()
     scanMonsters()
     if farmRunning then
-        setFarmState(true) -- Restore farm state on execution if saved as true
+        setFarmState(true)
     end
 end)
 
 -- ══════════════════════════════════════════════════════════════════
---  SERVER TAB — auto-rejoin timer
+-- SERVER TAB — auto-rejoin timer & Auto Kick
 -- ══════════════════════════════════════════════════════════════════
 local TeleportService = game:GetService("TeleportService")
-local CONTENT_Y = HEADER_H + TAB_H  
+local CONTENT_Y = HEADER_H + TAB_H
 
 local rejoinLbl = Instance.new("TextLabel", frame)
 rejoinLbl.Size = UDim2.new(1,-24,0,16)
 rejoinLbl.Position = UDim2.new(0,12,0,CONTENT_Y+8)
 rejoinLbl.BackgroundTransparency = 1
-rejoinLbl.Text = "▸  AUTO-REJOIN TIMER"
+rejoinLbl.Text = "▸ AUTO-REJOIN TIMER"
 rejoinLbl.TextColor3 = C.textLabel
 rejoinLbl.Font = Enum.Font.GothamBold
 rejoinLbl.TextSize = 11
@@ -765,16 +780,69 @@ timerStatusLbl.TextSize = 11
 timerStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
 timerStatusLbl.Visible = false
 
+-- ── NEW AUTO KICK UI ──────────────────────────────────────────────
+local kickLbl = Instance.new("TextLabel", frame)
+kickLbl.Size = UDim2.new(1,-24,0,16)
+kickLbl.Position = UDim2.new(0,12,0,CONTENT_Y+94)
+kickLbl.BackgroundTransparency = 1
+kickLbl.Text = "▸ ANTI-PUBLIC SERVER"
+kickLbl.TextColor3 = C.textLabel
+kickLbl.Font = Enum.Font.GothamBold
+kickLbl.TextSize = 11
+kickLbl.TextXAlignment = Enum.TextXAlignment.Left
+kickLbl.Visible = false
+
+local kickRow = Instance.new("Frame", frame)
+kickRow.Size = UDim2.new(1,-24,0,34)
+kickRow.Position = UDim2.new(0,12,0,CONTENT_Y+114)
+kickRow.BackgroundColor3 = C.bgMid
+kickRow.BorderSizePixel = 0
+kickRow.Visible = false
+corner(8, kickRow)
+stroke(1, C.divider, kickRow)
+
+local kickDesc = Instance.new("TextLabel", kickRow)
+kickDesc.Size = UDim2.new(0, 140, 1, 0)
+kickDesc.Position = UDim2.new(0, 10, 0, 0)
+kickDesc.BackgroundTransparency = 1
+kickDesc.Text = "Auto-kick if players >= 2"
+kickDesc.TextColor3 = C.textDim
+kickDesc.Font = Enum.Font.Gotham
+kickDesc.TextSize = 11
+kickDesc.TextXAlignment = Enum.TextXAlignment.Left
+
+local kickToggleBtn = Instance.new("TextButton", kickRow)
+kickToggleBtn.Size = UDim2.new(0, 56, 0, 24)
+kickToggleBtn.Position = UDim2.new(1, -64, 0.5, -12)
+kickToggleBtn.BackgroundColor3 = autoKickEnabled and C.green or C.red
+kickToggleBtn.BorderSizePixel = 0
+kickToggleBtn.Text = autoKickEnabled and "ON" or "OFF"
+kickToggleBtn.TextColor3 = C.textMain
+kickToggleBtn.Font = Enum.Font.GothamBold
+kickToggleBtn.TextSize = 11
+corner(6, kickToggleBtn)
+
+kickToggleBtn.MouseButton1Click:Connect(function()
+    autoKickEnabled = not autoKickEnabled
+    if autoKickEnabled then
+        kickToggleBtn.Text = "ON"
+        tween(kickToggleBtn, 0.15, {BackgroundColor3 = C.green})
+        checkServerPop() -- Check immediately in case we're already in a crowded server
+    else
+        kickToggleBtn.Text = "OFF"
+        tween(kickToggleBtn, 0.15, {BackgroundColor3 = C.red})
+    end
+    saveSettings()
+end)
+-- ──────────────────────────────────────────────────────────────────
+
 local function rejoinSameServer()
     local placeId = game.PlaceId
     local ok, joinData = pcall(function() return lp:GetJoinData() end)
     local code = ok and joinData and joinData.PrivateServerAccessCode
-
     if code and code ~= "" then
-        task.wait(3) 
-        pcall(function()
-            TeleportService:TeleportToPrivateServer(placeId, code, {lp})
-        end)
+        task.wait(3)
+        pcall(function() TeleportService:TeleportToPrivateServer(placeId, code, {lp}) end)
     else
         task.wait(2)
         pcall(function() TeleportService:Teleport(placeId, lp) end)
@@ -782,8 +850,7 @@ local function rejoinSameServer()
 end
 
 local CoreGui = game:GetService("CoreGui")
-local promptOverlay = CoreGui:FindFirstChild("RobloxPromptGui")
-    and CoreGui.RobloxPromptGui:FindFirstChild("promptOverlay")
+local promptOverlay = CoreGui:FindFirstChild("RobloxPromptGui") and CoreGui.RobloxPromptGui:FindFirstChild("promptOverlay")
 if promptOverlay then
     promptOverlay.ChildAdded:Connect(function(child)
         if child.Name == "ErrorPrompt" then
@@ -842,21 +909,20 @@ task.spawn(function()
     end
 end)
 
--- Restore auto-rejoin state on load
 if rejoinTimerEnabled then applyRejoinState() end
 
 -- ══════════════════════════════════════════════════════════════════
---  SPIN TAB — auto spin for Aura / Shikai / Avatar / Breathing / Fighters
+-- SPIN TAB — auto spin for Aura / Shikai / Avatar / Breathing / Fighters
 -- ══════════════════════════════════════════════════════════════════
 local SPIN_TYPES = {
-    {label = "Aura",      channel = "RollAureole",   qty = 4}, 
-    {label = "Shikai",    channel = "RollNewSkill",  qty = 1}, 
-    {label = "Avatar",    channel = "RollCharacter", qty = 2}, 
-    {label = "Breathing", channel = "RollProperty",  qty = 5}, 
-    {label = "Fighters",  channel = "RollAttendant", qty = 1}, 
+    {label = "Aura", channel = "RollAureole", qty = 4},
+    {label = "Shikai", channel = "RollNewSkill", qty = 1},
+    {label = "Avatar", channel = "RollCharacter", qty = 2},
+    {label = "Breathing", channel = "RollProperty", qty = 5},
+    {label = "Fighters", channel = "RollAttendant", qty = 1},
 }
 
-local SPIN_SCROLL_H = H - CONTENT_Y - 12  
+local SPIN_SCROLL_H = H - CONTENT_Y - 12
 local spinScroll = Instance.new("ScrollingFrame", frame)
 spinScroll.Size = UDim2.new(1,-24,0,SPIN_SCROLL_H)
 spinScroll.Position = UDim2.new(0,12,0,CONTENT_Y+8)
@@ -876,7 +942,7 @@ spinList.SortOrder = Enum.SortOrder.LayoutOrder
 local spinSectionLbl = Instance.new("TextLabel", spinScroll)
 spinSectionLbl.Size = UDim2.new(1,0,0,16)
 spinSectionLbl.BackgroundTransparency = 1
-spinSectionLbl.Text = "▸  AUTO SPIN"
+spinSectionLbl.Text = "▸ AUTO SPIN"
 spinSectionLbl.TextColor3 = C.textLabel
 spinSectionLbl.Font = Enum.Font.GothamBold
 spinSectionLbl.TextSize = 11
@@ -886,10 +952,8 @@ spinSectionLbl.LayoutOrder = 1
 local function updateRowDisplay(t)
     local selected = selectedSpins[t.channel] == true
     local dot = selected and "●" or "○"
-    local text = "   " .. dot .. "  " .. t.label
-    if t.pityText then
-        text = text .. "  —  " .. t.pityText
-    end
+    local text = " " .. dot .. " " .. t.label
+    if t.pityText then text = text .. " — " .. t.pityText end
     t.row.Text = text
     tween(t.row, 0.15, {BackgroundColor3 = selected and C.btnOn or C.btnOff})
     t.row.TextColor3 = selected and C.glow or C.textDim
@@ -905,11 +969,11 @@ for i, t in ipairs(SPIN_TYPES) do
     row.TextSize = 13
     row.TextColor3 = C.textDim
     row.TextXAlignment = Enum.TextXAlignment.Left
-    row.Text = "   ○  " .. t.label
+    row.Text = " ○ " .. t.label
     row.LayoutOrder = 1 + i
     corner(8, row)
     stroke(1, C.divider, row)
-
+    
     t.row = row
     t.pityText = nil
 
@@ -919,8 +983,6 @@ for i, t in ipairs(SPIN_TYPES) do
         saveSettings()
     end)
     table.insert(spinToggleRows, row)
-    
-    -- Intialize visual state from loaded settings
     updateRowDisplay(t)
 end
 
@@ -1007,7 +1069,7 @@ local function describeValue(v)
     for _, val in pairs(v) do
         if type(val) == "number" then return tostring(val) end
     end
-    return "{table}" 
+    return "{table}"
 end
 
 local function describeResult(v)
@@ -1068,7 +1130,7 @@ task.spawn(function()
 end)
 
 -- ══════════════════════════════════════════════════════════════════
---  GAMBLE SECTION — separate mechanic (GambleJustDoItChannel)
+-- GAMBLE SECTION — separate mechanic (GambleJustDoItChannel)
 -- ══════════════════════════════════════════════════════════════════
 local gambleDivider = Instance.new("Frame", spinScroll)
 gambleDivider.Size = UDim2.new(1,0,0,1)
@@ -1079,7 +1141,7 @@ gambleDivider.LayoutOrder = 20
 local gambleSectionLbl = Instance.new("TextLabel", spinScroll)
 gambleSectionLbl.Size = UDim2.new(1,0,0,16)
 gambleSectionLbl.BackgroundTransparency = 1
-gambleSectionLbl.Text = "▸  GAMBLE"
+gambleSectionLbl.Text = "▸ GAMBLE"
 gambleSectionLbl.TextColor3 = C.textLabel
 gambleSectionLbl.Font = Enum.Font.GothamBold
 gambleSectionLbl.TextSize = 11
@@ -1172,7 +1234,7 @@ gambleSpacer.Size = UDim2.new(1,0,0,4)
 gambleSpacer.BackgroundTransparency = 1
 gambleSpacer.LayoutOrder = 25
 
-local GAMBLE_ID = "Gamble5_2" 
+local GAMBLE_ID = "Gamble5_2"
 local gambleSpinCount = 0
 local gambleHitCount = 0
 
@@ -1186,7 +1248,9 @@ end)
 
 gamblePullsBox.FocusLost:Connect(function()
     local n = tonumber(gamblePullsBox.Text)
-    if n and n >= 1 then gamblePulls = math.floor(n) end
+    if n and n >= 1 then
+        gamblePulls = math.floor(n)
+    end
     gamblePullsBox.Text = tostring(gamblePulls)
     saveSettings()
 end)
@@ -1228,26 +1292,29 @@ task.spawn(function()
 end)
 
 -- ── Tab switching ────────────────────────────────────────────────────
-local farmPageElements   = {statusPill, uptimeLbl, sectionLbl, scroll, scanBtn, startBtn}
-local serverPageElements = {rejoinLbl, timerRow, timerStatusLbl}
-local spinPageElements   = {spinScroll}
+local farmPageElements = {statusPill, uptimeLbl, sectionLbl, scroll, scanBtn, startBtn}
+local serverPageElements = {rejoinLbl, timerRow, timerStatusLbl, kickLbl, kickRow} -- ADDED KICK UI HERE
+local spinPageElements = {spinScroll}
 
 local function showTab(tab)
-    for _, el in ipairs(farmPageElements)   do el.Visible = (tab == "farm") end
+    for _, el in ipairs(farmPageElements) do el.Visible = (tab == "farm") end
     for _, el in ipairs(serverPageElements) do el.Visible = (tab == "server") end
-    for _, el in ipairs(spinPageElements)   do el.Visible = (tab == "spin") end
+    for _, el in ipairs(spinPageElements) do el.Visible = (tab == "spin") end
 
-    farmTabBtn.BackgroundColor3   = (tab == "farm")   and C.btnOn or C.bgMid
-    farmTabBtn.TextColor3         = (tab == "farm")   and C.glow  or C.textDim
+    farmTabBtn.BackgroundColor3 = (tab == "farm") and C.btnOn or C.bgMid
+    farmTabBtn.TextColor3 = (tab == "farm") and C.glow or C.textDim
+
     serverTabBtn.BackgroundColor3 = (tab == "server") and C.btnOn or C.bgMid
-    serverTabBtn.TextColor3       = (tab == "server") and C.glow  or C.textDim
-    spinTabBtn.BackgroundColor3   = (tab == "spin")   and C.btnOn or C.bgMid
-    spinTabBtn.TextColor3         = (tab == "spin")   and C.glow  or C.textDim
+    serverTabBtn.TextColor3 = (tab == "server") and C.glow or C.textDim
+
+    spinTabBtn.BackgroundColor3 = (tab == "spin") and C.btnOn or C.bgMid
+    spinTabBtn.TextColor3 = (tab == "spin") and C.glow or C.textDim
 end
 
 farmTabBtn.MouseButton1Click:Connect(function() showTab("farm") end)
 serverTabBtn.MouseButton1Click:Connect(function() showTab("server") end)
 spinTabBtn.MouseButton1Click:Connect(function() showTab("spin") end)
+
 showTab("farm")
 
 print("[AutoFarm] Loaded — Anime UI ready with fully unified persistent Auto-Saves.")
