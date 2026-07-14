@@ -8,8 +8,13 @@ if game.PlaceId ~= TARGET_PLACE_ID then
     return
 end
 
+-- Stop any previously running script threads before executing
+if _G.StopNoxarFarm then
+    _G.StopNoxarFarm()
+end
+
 -- ══════════════════════════════════════════════════════════════════
---  AutoFarm  –  Anime Souls
+--  AutoFarm  –  Anime Souls (Unified Save System)
 -- ══════════════════════════════════════════════════════════════════
 
 local Players        = game:GetService("Players")
@@ -26,10 +31,114 @@ lp.CharacterAdded:Connect(function(c)
     root = c:WaitForChild("HumanoidRootPart")
 end)
 
--- ── State ─────────────────────────────────────────────────────────
+-- ── Master State & Save Configuration ─────────────────────────────
+local SETTINGS_FILE = "AnimeSouls_NoxarSave.json"
+
+-- Farm State
 local farmRunning = false
 local farmThread  = nil
 local targetNames = {}
+
+-- Server/Rejoin State
+local rejoinTimerEnabled = false
+local rejoinMinutes = 60
+local rejoinDeadline = nil
+
+-- Spin State
+local autoSpinEnabled = false
+local spinDelay = 0.1
+local selectedSpins = {}
+
+-- Gamble State
+local gambleEnabled = false
+local gambleDelay = 1.5
+local gamblePulls = 3
+
+-- ── Unified Save / Load System ────────────────────────────────────
+local function saveSettings()
+    if not writefile then return end
+    
+    local targetsList = {}
+    for name, _ in pairs(targetNames) do table.insert(targetsList, name) end
+    
+    local spinList = {}
+    for channel, _ in pairs(selectedSpins) do table.insert(spinList, channel) end
+
+    local data = {
+        farmRunning = farmRunning,
+        selectedMonsters = targetsList,
+        rejoinEnabled = rejoinTimerEnabled,
+        rejoinMinutes = rejoinMinutes,
+        autoSpinEnabled = autoSpinEnabled,
+        spinDelay = spinDelay,
+        selectedSpins = spinList,
+        gambleEnabled = gambleEnabled,
+        gambleDelay = gambleDelay,
+        gamblePulls = gamblePulls
+    }
+    pcall(function()
+        writefile(SETTINGS_FILE, HttpService:JSONEncode(data))
+    end)
+end
+
+local function loadSettings()
+    if not (isfile and readfile and isfile(SETTINGS_FILE)) then return end
+    local ok, data = pcall(function()
+        return HttpService:JSONDecode(readfile(SETTINGS_FILE))
+    end)
+    if ok and data then
+        -- Farm
+        farmRunning = data.farmRunning or false
+        if data.selectedMonsters then
+            for _, name in ipairs(data.selectedMonsters) do targetNames[name:lower()] = true end
+        end
+        -- Server
+        rejoinTimerEnabled = data.rejoinEnabled or false
+        rejoinMinutes = tonumber(data.rejoinMinutes) or 60
+        -- Spin
+        autoSpinEnabled = data.autoSpinEnabled or false
+        spinDelay = tonumber(data.spinDelay) or 0.1
+        if data.selectedSpins then
+            for _, channel in ipairs(data.selectedSpins) do selectedSpins[channel] = true end
+        end
+        -- Gamble
+        gambleEnabled = data.gambleEnabled or false
+        gambleDelay = tonumber(data.gambleDelay) or 1.5
+        gamblePulls = tonumber(data.gamblePulls) or 3
+    end
+end
+
+-- Global cleanup function registered for re-execution safety
+_G.StopNoxarFarm = function()
+    farmRunning = false
+    autoSpinEnabled = false
+    gambleEnabled = false
+    if farmThread then pcall(function() task.cancel(farmThread) end) end
+end
+
+-- Load settings immediately on execution
+loadSettings()
+
+-- ══════════════════════════════════════════════════════════════════
+--  SERVER SECURITY — Anti-Public Server
+-- ══════════════════════════════════════════════════════════════════
+local function checkServerPop()
+    -- game.PrivateServerId is empty if you are in a public server
+    if game.PrivateServerId == "" then
+        local playerCount = #Players:GetPlayers()
+        if playerCount >= 2 then
+            lp:Kick("[Noxar Panel] Security: Kicked to prevent farming in a public server with other players.")
+        end
+    end
+end
+
+-- Run on execution
+checkServerPop()
+
+-- Run whenever a new player joins
+Players.PlayerAdded:Connect(function()
+    checkServerPop()
+end)
 
 -- ── Helpers ───────────────────────────────────────────────────────
 
@@ -94,22 +203,17 @@ end
 local function tpTo(m)
     local r = m:FindFirstChild("Root")
     if r and root then
-        -- Teleport once, flat on same Y so no up/down shake
         local pos = r.CFrame.Position
         root.CFrame = CFrame.new(pos.X + 3, pos.Y, pos.Z)
     end
 end
 
 -- ── Farm loop ─────────────────────────────────────────────────────
--- No clicking needed — game has auto attack built in.
--- We just teleport on top of the nearest alive target every frame.
--- The moment it dies, getNearest() returns a different one instantly.
 local function farmLoop()
     local lastTarget = nil
     while farmRunning do
         local target = getNearest()
         if target then
-            -- Only teleport if target changed, avoids any jitter
             if target ~= lastTarget then
                 tpTo(target)
                 lastTarget = target
@@ -127,7 +231,6 @@ end
 
 local TweenService = game:GetService("TweenService")
 
--- Remove any existing GUI first to prevent duplicates
 local existingGui = (gethui and gethui() or game:GetService("CoreGui")):FindFirstChild("AutoFarmGui")
 if existingGui then existingGui:Destroy() end
 
@@ -138,7 +241,6 @@ screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screenGui.IgnoreGuiInset = true
 screenGui.Parent = gethui and gethui() or game:GetService("CoreGui")
 
--- ── Colours ───────────────────────────────────────────────────────
 local C = {
     bg        = Color3.fromRGB(8,  6,  14),
     bgMid     = Color3.fromRGB(16, 10, 28),
@@ -161,7 +263,6 @@ local function corner(r, p) local c=Instance.new("UICorner",p); c.CornerRadius=U
 local function stroke(w, col, p) local s=Instance.new("UIStroke",p); s.Thickness=w; s.Color=col; return s end
 local function tween(obj, t, props) TweenService:Create(obj, TweenInfo.new(t, Enum.EasingStyle.Quad), props):Play() end
 
--- ── Root frame ────────────────────────────────────────────────────
 local W, H = 270, 342
 local frame = Instance.new("Frame")
 frame.Size            = UDim2.new(0, W, 0, H)
@@ -180,12 +281,10 @@ outerGlow.Transparency = 1
 local frameScale = Instance.new("UIScale", frame)
 frameScale.Scale = 0.85
 
--- Entrance animation: fade + scale in
 tween(frame, 0.35, {BackgroundTransparency = 0})
 tween(outerGlow, 0.35, {Transparency = 0})
 TweenService:Create(frameScale, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = 1}):Play()
 
--- Pulsing glow animation on border
 task.spawn(function()
     while frame.Parent do
         tween(outerGlow, 1.4, {Color = C.glow, Thickness = 2.5})
@@ -195,7 +294,6 @@ task.spawn(function()
     end
 end)
 
--- ── Header ────────────────────────────────────────────────────────
 local HEADER_H = 52
 local header = Instance.new("Frame")
 header.Size            = UDim2.new(1, 0, 0, HEADER_H)
@@ -203,14 +301,13 @@ header.BackgroundColor3 = C.header1
 header.BorderSizePixel = 0
 header.Parent          = frame
 corner(14, header)
--- fix bottom corners
+
 local hfix = Instance.new("Frame", header)
 hfix.Size = UDim2.new(1,0,0,14)
 hfix.Position = UDim2.new(0,0,1,-14)
 hfix.BackgroundColor3 = C.header1
 hfix.BorderSizePixel = 0
 
--- Subtle bottom divider line under header
 local hline = Instance.new("Frame", frame)
 hline.Size = UDim2.new(1,0,0,1)
 hline.Position = UDim2.new(0,0,0,HEADER_H)
@@ -218,7 +315,6 @@ hline.BackgroundColor3 = C.accent
 hline.BorderSizePixel = 0
 hline.BackgroundTransparency = 0.4
 
--- ── Tab bar ───────────────────────────────────────────────────────
 local TAB_H = 28
 local tabBar = Instance.new("Frame", frame)
 tabBar.Size = UDim2.new(1, 0, 0, TAB_H)
@@ -256,7 +352,6 @@ spinTabBtn.TextSize = 12
 spinTabBtn.TextColor3 = C.textDim
 spinTabBtn.Text = "🎰"
 
--- Icon + title
 local icon = Instance.new("TextLabel", header)
 icon.Size = UDim2.new(0, 36, 0, 36)
 icon.Position = UDim2.new(0, 12, 0.5, -18)
@@ -286,7 +381,6 @@ subtitle.Font = Enum.Font.Gotham
 subtitle.TextSize = 10
 subtitle.TextXAlignment = Enum.TextXAlignment.Left
 
--- Minimize button
 local minimized = false
 local minBtn = Instance.new("TextButton", header)
 minBtn.Size = UDim2.new(0, 34, 0, 28)
@@ -307,7 +401,6 @@ local function setMinimized(state)
 end
 minBtn.MouseButton1Click:Connect(function() setMinimized(not minimized) end)
 
--- ── Status pill ───────────────────────────────────────────────────
 local statusPill = Instance.new("Frame", frame)
 statusPill.Size = UDim2.new(1,-24,0,30)
 statusPill.Position = UDim2.new(0,12,0,HEADER_H+TAB_H+8)
@@ -345,7 +438,6 @@ local function setStatus(text, active)
     end
 end
 
--- Uptime tracker
 local uptimeLbl = Instance.new("TextLabel", frame)
 uptimeLbl.Size = UDim2.new(1,-24,0,18)
 uptimeLbl.Position = UDim2.new(0,12,0,HEADER_H+TAB_H+42)
@@ -375,7 +467,6 @@ task.spawn(function()
     end
 end)
 
--- ── Section label ─────────────────────────────────────────────────
 local sectionLbl = Instance.new("TextLabel", frame)
 sectionLbl.Size = UDim2.new(1,-24,0,16)
 sectionLbl.Position = UDim2.new(0,12,0,HEADER_H+TAB_H+64)
@@ -386,7 +477,6 @@ sectionLbl.Font = Enum.Font.GothamBold
 sectionLbl.TextSize = 11
 sectionLbl.TextXAlignment = Enum.TextXAlignment.Left
 
--- ── Monster scroll list ───────────────────────────────────────────
 local scroll = Instance.new("ScrollingFrame", frame)
 scroll.Size = UDim2.new(1,-24,0,92)
 scroll.Position = UDim2.new(0,12,0,HEADER_H+TAB_H+84)
@@ -412,13 +502,25 @@ local function makeCheckbox(monName, index)
     btn.TextColor3 = C.textDim
     btn.TextTransparency = 1
     btn.TextXAlignment = Enum.TextXAlignment.Left
-    btn.Text = "   ○  " .. monName
+    
+    local monLower = monName:lower()
+    local sel = targetNames[monLower] == true 
+    
+    if sel then
+        btn.BackgroundColor3 = C.btnOn
+        btn.TextColor3 = C.glow
+        btn.Text = "   ●  " .. monName
+    else
+        btn.BackgroundColor3 = C.btnOff
+        btn.TextColor3 = C.textDim
+        btn.Text = "   ○  " .. monName
+    end
+    
     btn.LayoutOrder = index or 0
     corner(8, btn)
     local btnStroke = stroke(1, C.divider, btn)
     btnStroke.Transparency = 1
 
-    -- Staggered fade-in as the list populates
     task.delay((index or 1) * 0.045, function()
         if not btn.Parent then return end
         tween(btn, 0.2, {BackgroundTransparency = 0})
@@ -428,20 +530,21 @@ local function makeCheckbox(monName, index)
 
     local btnScale = Instance.new("UIScale", btn)
 
-    local sel = false
     btn.MouseButton1Click:Connect(function()
         sel = not sel
         if sel then
-            targetNames[monName:lower()] = true
+            targetNames[monLower] = true
             tween(btn, 0.15, {BackgroundColor3 = C.btnOn})
             btn.TextColor3 = C.glow
             btn.Text = "   ●  " .. monName
         else
-            targetNames[monName:lower()] = nil
+            targetNames[monLower] = nil
             tween(btn, 0.15, {BackgroundColor3 = C.btnOff})
             btn.TextColor3 = C.textDim
             btn.Text = "   ○  " .. monName
         end
+        saveSettings()
+        
         TweenService:Create(btnScale, TweenInfo.new(0.08), {Scale = 0.96}):Play()
         task.delay(0.08, function()
             TweenService:Create(btnScale, TweenInfo.new(0.12, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = 1}):Play()
@@ -450,7 +553,6 @@ local function makeCheckbox(monName, index)
     checkboxes[monName] = btn
 end
 
--- ── Bottom buttons ────────────────────────────────────────────────
 local SCAN_Y  = HEADER_H + TAB_H + 182
 local START_Y = HEADER_H + TAB_H + 218
 
@@ -487,7 +589,6 @@ startGrad.Rotation = 90
 local startScale = Instance.new("UIScale", startBtn)
 local scanScale = Instance.new("UIScale", scanBtn)
 
--- Hover effects
 scanBtn.MouseEnter:Connect(function() tween(scanBtn,0.12,{BackgroundColor3=C.accentDim}) end)
 scanBtn.MouseLeave:Connect(function() tween(scanBtn,0.12,{BackgroundColor3=C.bgMid}) end)
 startBtn.MouseEnter:Connect(function() tween(startBtn,0.12,{BackgroundColor3=C.accent}) end)
@@ -495,26 +596,22 @@ startBtn.MouseLeave:Connect(function()
     tween(startBtn,0.12,{BackgroundColor3=farmRunning and C.red or C.accentDim})
 end)
 
--- Press-down micro animation (tactile feedback)
 scanBtn.MouseButton1Down:Connect(function() tween(scanScale, 0.08, {Scale = 0.95}) end)
 scanBtn.MouseButton1Up:Connect(function() tween(scanScale, 0.12, {Scale = 1}) end)
 startBtn.MouseButton1Down:Connect(function() tween(startScale, 0.08, {Scale = 0.95}) end)
 startBtn.MouseButton1Up:Connect(function() tween(startScale, 0.12, {Scale = 1}) end)
 
--- ── Scan logic ────────────────────────────────────────────────────
 local currentWorld = nil
 
 local function getWorldName()
-    -- Try to detect world from workspace area objects
     local area = workspace:FindFirstChild("Area")
     if area then return area.Name end
-    return tostring(workspace.DistributedGameTime) -- fallback unique value
+    return tostring(workspace.DistributedGameTime) 
 end
 
 local function scanMonsters()
     for _, c in pairs(checkboxes) do c:Destroy() end
     checkboxes = {}
-    targetNames = {}
 
     local found = {}
     local guiFolder = workspace:FindFirstChild("SelfGUI")
@@ -542,7 +639,6 @@ local function scanMonsters()
     currentWorld = getWorldName()
 end
 
--- Auto re-scan when world changes
 task.spawn(function()
     while true do
         task.wait(3)
@@ -554,43 +650,57 @@ task.spawn(function()
     end
 end)
 
--- ── Start/Stop ────────────────────────────────────────────────────
-startBtn.MouseButton1Click:Connect(function()
+local function setFarmState(state)
+    farmRunning = state
     if farmRunning then
-        farmRunning = false
-        if farmThread then task.cancel(farmThread) end
-        farmThread = nil
-        tween(startBtn, 0.2, {BackgroundColor3 = C.accentDim})
-        startBtn.Text = "▶   Start Farming"
-        setStatus("Stopped", false)
-    else
         if next(targetNames) == nil then
             setStatus("⚠  Select at least one monster!", false)
             tween(startBtn, 0.1, {BackgroundColor3 = C.red})
-            task.delay(0.5, function() tween(startBtn,0.2,{BackgroundColor3=C.accentDim}) end)
+            task.delay(0.5, function() 
+                if not farmRunning then 
+                    tween(startBtn,0.2,{BackgroundColor3=C.accentDim}) 
+                end 
+            end)
+            farmRunning = false
+            saveSettings()
             return
         end
-        farmRunning = true
         tween(startBtn, 0.2, {BackgroundColor3 = C.red})
         startBtn.Text = "⏹   Stop Farming"
         local names = {}
         for n in pairs(targetNames) do table.insert(names, n) end
         setStatus("Farming: " .. table.concat(names, ", "), true)
+        if farmThread then task.cancel(farmThread) end
         farmThread = task.spawn(farmLoop)
+    else
+        if farmThread then task.cancel(farmThread) end
+        farmThread = nil
+        tween(startBtn, 0.2, {BackgroundColor3 = C.accentDim})
+        startBtn.Text = "▶   Start Farming"
+        setStatus("Stopped", false)
     end
+    saveSettings() 
+end
+
+startBtn.MouseButton1Click:Connect(function()
+    setFarmState(not farmRunning)
 end)
 
 scanBtn.MouseButton1Click:Connect(scanMonsters)
-task.delay(1, scanMonsters)
+
+task.delay(1, function()
+    scanMonsters()
+    if farmRunning then
+        setFarmState(true) -- Restore farm state on execution if saved as true
+    end
+end)
 
 -- ══════════════════════════════════════════════════════════════════
 --  SERVER TAB — auto-rejoin timer
 -- ══════════════════════════════════════════════════════════════════
 local TeleportService = game:GetService("TeleportService")
+local CONTENT_Y = HEADER_H + TAB_H  
 
-local CONTENT_Y = HEADER_H + TAB_H  -- 80, top of content area on both tabs
-
--- ── Auto-Rejoin Timer section ───────────────────────────────────────
 local rejoinLbl = Instance.new("TextLabel", frame)
 rejoinLbl.Size = UDim2.new(1,-24,0,16)
 rejoinLbl.Position = UDim2.new(0,12,0,CONTENT_Y+8)
@@ -616,7 +726,7 @@ minutesBox.Size = UDim2.new(0, 50, 0, 24)
 minutesBox.Position = UDim2.new(0, 8, 0.5, -12)
 minutesBox.BackgroundColor3 = C.btnOff
 minutesBox.BorderSizePixel = 0
-minutesBox.Text = "60"
+minutesBox.Text = tostring(rejoinMinutes)
 minutesBox.TextColor3 = C.textMain
 minutesBox.Font = Enum.Font.Gotham
 minutesBox.TextSize = 13
@@ -636,9 +746,9 @@ minutesLbl.TextXAlignment = Enum.TextXAlignment.Left
 local timerToggleBtn = Instance.new("TextButton", timerRow)
 timerToggleBtn.Size = UDim2.new(0, 56, 0, 24)
 timerToggleBtn.Position = UDim2.new(1, -64, 0.5, -12)
-timerToggleBtn.BackgroundColor3 = C.red
+timerToggleBtn.BackgroundColor3 = rejoinTimerEnabled and C.green or C.red
 timerToggleBtn.BorderSizePixel = 0
-timerToggleBtn.Text = "OFF"
+timerToggleBtn.Text = rejoinTimerEnabled and "ON" or "OFF"
 timerToggleBtn.TextColor3 = C.textMain
 timerToggleBtn.Font = Enum.Font.GothamBold
 timerToggleBtn.TextSize = 11
@@ -655,16 +765,13 @@ timerStatusLbl.TextSize = 11
 timerStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
 timerStatusLbl.Visible = false
 
--- Uses the private server's actual access code (from GetJoinData) when present —
--- this is what TeleportToPlaceInstance was missing, causing Error 773 on
--- private servers. Falls back to a normal teleport for public servers.
 local function rejoinSameServer()
     local placeId = game.PlaceId
     local ok, joinData = pcall(function() return lp:GetJoinData() end)
     local code = ok and joinData and joinData.PrivateServerAccessCode
 
     if code and code ~= "" then
-        task.wait(3) -- lets the current server shut down cleanly first
+        task.wait(3) 
         pcall(function()
             TeleportService:TeleportToPrivateServer(placeId, code, {lp})
         end)
@@ -674,8 +781,6 @@ local function rejoinSameServer()
     end
 end
 
--- Live disconnect monitor — catches connection-lost/kick prompts while
--- Roblox itself is still open (not a full app crash, but the common case).
 local CoreGui = game:GetService("CoreGui")
 local promptOverlay = CoreGui:FindFirstChild("RobloxPromptGui")
     and CoreGui.RobloxPromptGui:FindFirstChild("promptOverlay")
@@ -688,7 +793,6 @@ if promptOverlay then
     end)
 end
 
--- Anti-AFK
 lp.Idled:Connect(function()
     local VirtualUser = game:GetService("VirtualUser")
     VirtualUser:Button2Down(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
@@ -696,37 +800,9 @@ lp.Idled:Connect(function()
     VirtualUser:Button2Up(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
 end)
 
--- ── Auto-rejoin timer logic ─────────────────────────────────────────
-local SETTINGS_FILE = "AnimeSouls_ServerSettings.json"
-local rejoinTimerEnabled = false
-local rejoinDeadline = nil
-
-local function saveServerSettings()
-    if not writefile then return end
-    local data = {
-        rejoinEnabled = rejoinTimerEnabled,
-        rejoinMinutes = tonumber(minutesBox.Text) or 60,
-    }
-    pcall(function()
-        writefile(SETTINGS_FILE, HttpService:JSONEncode(data))
-    end)
-end
-
-local function loadServerSettings()
-    if not (isfile and readfile and isfile(SETTINGS_FILE)) then return nil end
-    local ok, data = pcall(function()
-        return HttpService:JSONDecode(readfile(SETTINGS_FILE))
-    end)
-    if ok then return data end
-    return nil
-end
-
-local function setRejoinTimer(enabled, mins)
-    rejoinTimerEnabled = enabled
-    if enabled then
-        mins = mins or tonumber(minutesBox.Text) or 60
-        minutesBox.Text = tostring(mins)
-        rejoinDeadline = tick() + mins * 60
+local function applyRejoinState()
+    if rejoinTimerEnabled then
+        rejoinDeadline = tick() + rejoinMinutes * 60
         timerToggleBtn.Text = "ON"
         timerToggleBtn.BackgroundColor3 = C.green
     else
@@ -735,20 +811,20 @@ local function setRejoinTimer(enabled, mins)
         timerToggleBtn.BackgroundColor3 = C.red
         timerStatusLbl.Text = "Disabled"
     end
-    saveServerSettings()
 end
 
 timerToggleBtn.MouseButton1Click:Connect(function()
-    setRejoinTimer(not rejoinTimerEnabled)
+    rejoinTimerEnabled = not rejoinTimerEnabled
+    applyRejoinState()
+    saveSettings()
 end)
 
 minutesBox.FocusLost:Connect(function()
     local mins = tonumber(minutesBox.Text) or 60
+    rejoinMinutes = mins
     minutesBox.Text = tostring(mins)
-    if rejoinTimerEnabled then
-        rejoinDeadline = tick() + mins * 60
-    end
-    saveServerSettings()
+    applyRejoinState()
+    saveSettings()
 end)
 
 task.spawn(function()
@@ -766,28 +842,21 @@ task.spawn(function()
     end
 end)
 
--- Auto-restore saved settings from before the last rejoin/reload
-local savedSettings = loadServerSettings()
-if savedSettings and savedSettings.rejoinEnabled then
-    setRejoinTimer(true, savedSettings.rejoinMinutes)
-end
+-- Restore auto-rejoin state on load
+if rejoinTimerEnabled then applyRejoinState() end
 
 -- ══════════════════════════════════════════════════════════════════
 --  SPIN TAB — auto spin for Aura / Shikai / Avatar / Breathing / Fighters
 -- ══════════════════════════════════════════════════════════════════
 local SPIN_TYPES = {
-    {label = "Aura",      channel = "RollAureole",   qty = 4}, -- exact captured value
-    {label = "Shikai",    channel = "RollNewSkill",  qty = 1}, -- re-captured, was 2, server now wants 1
-    {label = "Avatar",    channel = "RollCharacter", qty = 2}, -- exact captured value
-    {label = "Breathing", channel = "RollProperty",  qty = 5}, -- exact captured value
-    {label = "Fighters",  channel = "RollAttendant", qty = 1}, -- re-captured, was 2, server now wants 1
+    {label = "Aura",      channel = "RollAureole",   qty = 4}, 
+    {label = "Shikai",    channel = "RollNewSkill",  qty = 1}, 
+    {label = "Avatar",    channel = "RollCharacter", qty = 2}, 
+    {label = "Breathing", channel = "RollProperty",  qty = 5}, 
+    {label = "Fighters",  channel = "RollAttendant", qty = 1}, 
 }
-local selectedSpins  = {}
-local autoSpinEnabled = false
-local spinDelay = 0.1
 
--- ── Spin tab: everything lives inside one scrolling frame ──────────
-local SPIN_SCROLL_H = H - CONTENT_Y - 12  -- fills remaining window height
+local SPIN_SCROLL_H = H - CONTENT_Y - 12  
 local spinScroll = Instance.new("ScrollingFrame", frame)
 spinScroll.Size = UDim2.new(1,-24,0,SPIN_SCROLL_H)
 spinScroll.Position = UDim2.new(0,12,0,CONTENT_Y+8)
@@ -847,8 +916,12 @@ for i, t in ipairs(SPIN_TYPES) do
     row.MouseButton1Click:Connect(function()
         selectedSpins[t.channel] = not selectedSpins[t.channel] or nil
         updateRowDisplay(t)
+        saveSettings()
     end)
     table.insert(spinToggleRows, row)
+    
+    -- Intialize visual state from loaded settings
+    updateRowDisplay(t)
 end
 
 local spinDelayRow = Instance.new("Frame", spinScroll)
@@ -864,7 +937,7 @@ spinDelayBox.Size = UDim2.new(0, 50, 0, 24)
 spinDelayBox.Position = UDim2.new(0, 8, 0.5, -12)
 spinDelayBox.BackgroundColor3 = C.btnOff
 spinDelayBox.BorderSizePixel = 0
-spinDelayBox.Text = "0.1"
+spinDelayBox.Text = tostring(spinDelay)
 spinDelayBox.TextColor3 = C.textMain
 spinDelayBox.Font = Enum.Font.Gotham
 spinDelayBox.TextSize = 13
@@ -884,9 +957,9 @@ spinDelayLbl.TextXAlignment = Enum.TextXAlignment.Left
 local spinToggleBtn = Instance.new("TextButton", spinDelayRow)
 spinToggleBtn.Size = UDim2.new(0, 56, 0, 24)
 spinToggleBtn.Position = UDim2.new(1, -64, 0.5, -12)
-spinToggleBtn.BackgroundColor3 = C.red
+spinToggleBtn.BackgroundColor3 = autoSpinEnabled and C.green or C.red
 spinToggleBtn.BorderSizePixel = 0
-spinToggleBtn.Text = "OFF"
+spinToggleBtn.Text = autoSpinEnabled and "ON" or "OFF"
 spinToggleBtn.TextColor3 = C.textMain
 spinToggleBtn.Font = Enum.Font.GothamBold
 spinToggleBtn.TextSize = 11
@@ -907,6 +980,7 @@ spinDelayBox.FocusLost:Connect(function()
     if v < 0.01 then v = 0.01 end
     spinDelay = v
     spinDelayBox.Text = tostring(v)
+    saveSettings()
 end)
 
 spinToggleBtn.MouseButton1Click:Connect(function()
@@ -919,29 +993,21 @@ spinToggleBtn.MouseButton1Click:Connect(function()
         tween(spinToggleBtn, 0.15, {BackgroundColor3 = C.red})
         spinStatusLbl.Text = "Disabled"
     end
+    saveSettings()
 end)
 
--- Turns any value into a short readable string. Tables get unwrapped one
--- level instead of printing a raw memory address, e.g. {current=1260,max=5000}
--- becomes "1260/5000".
 local function describeValue(v)
     if type(v) ~= "table" then return tostring(v) end
-    -- Try common nested field names first
     for _, key in ipairs({"current", "count", "value", "amount"}) do
         if v[key] ~= nil then
-            if v.max then
-                return tostring(v[key]) .. "/" .. tostring(v.max)
-            end
+            if v.max then return tostring(v[key]) .. "/" .. tostring(v.max) end
             return tostring(v[key])
         end
     end
-    -- Fallback: grab the first number-looking value in the table
     for _, val in pairs(v) do
-        if type(val) == "number" then
-            return tostring(val)
-        end
+        if type(val) == "number" then return tostring(val) end
     end
-    return "{table}" -- last resort, at least don't show a memory address
+    return "{table}" 
 end
 
 local function describeResult(v)
@@ -953,10 +1019,6 @@ local function describeResult(v)
     return "{" .. table.concat(parts, ", ") .. "}"
 end
 
--- Pulls a "...Pity..." field straight out of the server's own response,
--- e.g. {PityCount=1260, ...} -> "PityCount: 1260"
--- Some spin types nest it one level deeper, e.g. {PityCount={current=1260,max=5000}},
--- so we unwrap that case instead of printing the raw table address.
 local function extractPityInfo(result)
     if type(result) ~= "table" then return nil end
     for k, v in pairs(result) do
@@ -1007,7 +1069,6 @@ end)
 
 -- ══════════════════════════════════════════════════════════════════
 --  GAMBLE SECTION — separate mechanic (GambleJustDoItChannel)
---  Lives in the same spinScroll, stacked below Auto Spin via LayoutOrder
 -- ══════════════════════════════════════════════════════════════════
 local gambleDivider = Instance.new("Frame", spinScroll)
 gambleDivider.Size = UDim2.new(1,0,0,1)
@@ -1038,7 +1099,7 @@ gambleDelayBox.Size = UDim2.new(0, 50, 0, 22)
 gambleDelayBox.Position = UDim2.new(0, 8, 0.5, -11)
 gambleDelayBox.BackgroundColor3 = C.btnOff
 gambleDelayBox.BorderSizePixel = 0
-gambleDelayBox.Text = "1.5"
+gambleDelayBox.Text = tostring(gambleDelay)
 gambleDelayBox.TextColor3 = C.textMain
 gambleDelayBox.Font = Enum.Font.Gotham
 gambleDelayBox.TextSize = 12
@@ -1068,7 +1129,7 @@ gamblePullsBox.Size = UDim2.new(0, 50, 0, 22)
 gamblePullsBox.Position = UDim2.new(0, 8, 0.5, -11)
 gamblePullsBox.BackgroundColor3 = C.btnOff
 gamblePullsBox.BorderSizePixel = 0
-gamblePullsBox.Text = "3"
+gamblePullsBox.Text = tostring(gamblePulls)
 gamblePullsBox.TextColor3 = C.textMain
 gamblePullsBox.Font = Enum.Font.Gotham
 gamblePullsBox.TextSize = 12
@@ -1088,9 +1149,9 @@ gamblePullsLbl.TextXAlignment = Enum.TextXAlignment.Left
 local gambleToggleBtn = Instance.new("TextButton", gamblePullsRow)
 gambleToggleBtn.Size = UDim2.new(0, 56, 0, 22)
 gambleToggleBtn.Position = UDim2.new(1, -64, 0.5, -11)
-gambleToggleBtn.BackgroundColor3 = C.red
+gambleToggleBtn.BackgroundColor3 = gambleEnabled and C.green or C.red
 gambleToggleBtn.BorderSizePixel = 0
-gambleToggleBtn.Text = "OFF"
+gambleToggleBtn.Text = gambleEnabled and "ON" or "OFF"
 gambleToggleBtn.TextColor3 = C.textMain
 gambleToggleBtn.Font = Enum.Font.GothamBold
 gambleToggleBtn.TextSize = 11
@@ -1106,16 +1167,12 @@ gambleStatusLbl.TextSize = 11
 gambleStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
 gambleStatusLbl.LayoutOrder = 24
 
--- small bottom spacer so the last row isn't flush against the scroll edge
 local gambleSpacer = Instance.new("Frame", spinScroll)
 gambleSpacer.Size = UDim2.new(1,0,0,4)
 gambleSpacer.BackgroundTransparency = 1
 gambleSpacer.LayoutOrder = 25
 
-local GAMBLE_ID = "Gamble5_2" -- captured from your manual spin
-local gambleEnabled = false
-local gambleDelay = 1.5
-local gamblePulls = 3
+local GAMBLE_ID = "Gamble5_2" 
 local gambleSpinCount = 0
 local gambleHitCount = 0
 
@@ -1124,12 +1181,14 @@ gambleDelayBox.FocusLost:Connect(function()
     if v < 0.1 then v = 0.1 end
     gambleDelay = v
     gambleDelayBox.Text = tostring(v)
+    saveSettings()
 end)
 
 gamblePullsBox.FocusLost:Connect(function()
     local n = tonumber(gamblePullsBox.Text)
     if n and n >= 1 then gamblePulls = math.floor(n) end
     gamblePullsBox.Text = tostring(gamblePulls)
+    saveSettings()
 end)
 
 gambleToggleBtn.MouseButton1Click:Connect(function()
@@ -1141,6 +1200,7 @@ gambleToggleBtn.MouseButton1Click:Connect(function()
         gambleToggleBtn.Text = "OFF"
         tween(gambleToggleBtn, 0.15, {BackgroundColor3 = C.red})
     end
+    saveSettings()
 end)
 
 local function doGamble()
@@ -1190,4 +1250,4 @@ serverTabBtn.MouseButton1Click:Connect(function() showTab("server") end)
 spinTabBtn.MouseButton1Click:Connect(function() showTab("spin") end)
 showTab("farm")
 
-print("[AutoFarm] Loaded — Anime UI ready.")
+print("[AutoFarm] Loaded — Anime UI ready with fully unified persistent Auto-Saves.")
