@@ -48,6 +48,41 @@ local function cancelAllTrackedThreads()
     _G.NoxarPanelThreads = {}
 end
 
+-- _G.NoxarPanelConnections is the same idea as _G.NoxarPanelThreads above,
+-- but for event connections instead of threads. This matters because a
+-- few listeners here connect to persistent objects that outlive the
+-- script (NotificationEvent is a RemoteEvent, promptOverlay is a CoreGui
+-- object, RunService.Heartbeat is a service) -- a plain local connection
+-- variable can't be reached by a fresh script re-execution, so without
+-- this registry every re-run stacked a brand new listener on top of any
+-- still-alive one from the previous run.
+if _G.NoxarPanelConnections then
+    for _, conn in pairs(_G.NoxarPanelConnections) do
+        pcall(function() conn:Disconnect() end)
+    end
+end
+_G.NoxarPanelConnections = {}
+
+-- connectTracked(name, signal, fn): same as signal:Connect(fn), but
+-- stores the connection under `name` in the registry so it can be
+-- disconnected later (by CloseBtn, or by the next script re-execution
+-- above).
+local function connectTracked(name, signal, fn)
+    if _G.NoxarPanelConnections[name] then
+        pcall(function() _G.NoxarPanelConnections[name]:Disconnect() end)
+    end
+    local conn = signal:Connect(fn)
+    _G.NoxarPanelConnections[name] = conn
+    return conn
+end
+
+local function disconnectAllTrackedConnections()
+    for _, conn in pairs(_G.NoxarPanelConnections) do
+        pcall(function() conn:Disconnect() end)
+    end
+    _G.NoxarPanelConnections = {}
+end
+
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
 local UIS = game:GetService("UserInputService")
@@ -88,7 +123,6 @@ local selectedMonster = nil
 local monstersEquipped = false
 local currentTarget = nil
 local nameCache = {}
-local glueConnection = nil
 local autoClaimEnabled = true
 local antiAfkEnabled = true 
 local autoHatchEnabled = false
@@ -102,17 +136,24 @@ local rejoinDeadline = nil
 local savedPositions = {} 
 
 -- AreaFarm States (completely separate from savedPositions above)
--- farmingSpot / bossSpot shape: {areaId = number, areaName = string, x = number, y = number, z = number} or nil if unset
+-- farmingSpot shape: {areaId = number, areaName = string, x = number, y = number, z = number} or nil if unset
 local farmingSpot = nil
-local bossSpot = nil
 local bossLoopEnabled = false
 local bossLoopStatus = "Idle"
-local lastBossTrigger = nil -- "!YYYY-MM-DD HH:MM" string of the last UTC 15-min mark we already fired on, prevents double-firing within the same minute
-local bossCycleRunning = false -- true while a full teleport→wait→defeat→return cycle is in flight; stops a stuck cycle from overlapping with the next quarter-mark
-local BOSS_SPAWN_TIMEOUT = 60 -- seconds to wait at the boss spot for it to actually spawn before giving up and heading back to the farm spot instead of waiting forever
-local BOSS_TRACK_DISTANCE = 20 -- studs; how far from your character to look for the boss. Tweakable via textbox, persisted across rejoins.
+-- selectedBosses: bossName -> true, which bosses from BOSS_LIST (defined
+-- further down, near the event-driven boss loop) the user has opted in
+-- to auto-farm. bossQueue: FIFO array of {name=, area=} for selected
+-- bosses that have spawned and are waiting their turn. currentBossFight:
+-- {name=, area=} of whichever boss is actively being fought right now,
+-- or nil if idle -- also doubles as the "don't interrupt a fight in
+-- progress" guard.
+local selectedBosses = {}
+local bossQueue = {}
+local currentBossFight = nil
+local wasFarmingBeforeBossFight = false -- lets the boss loop cleanly pause/resume the regular Auto-Farm toggle instead of fighting over glue/equip with it
 
 local DataPullFunc = RS:WaitForChild("CommonLibrary"):WaitForChild("Tool"):WaitForChild("RemoteManager"):WaitForChild("Funcs"):WaitForChild("DataPullFunc")
+local NotificationEvent = RS:WaitForChild("CommonLibrary"):WaitForChild("Tool"):WaitForChild("RemoteManager"):WaitForChild("Events"):WaitForChild("NotificationEvent")
 local clientMonsters = workspace:WaitForChild("ClientMonsters")
 
 -- Direct access to the game's own hatch logic (more reliable than raw
@@ -287,8 +328,8 @@ local function saveConfig()
             eggName = selectedEggName,
             -- AreaFarm data, kept as separate keys from `positions` above
             areaFarmingSpot = farmingSpot,
-            areaBossSpot = bossSpot,
             areaBossLoopEnabled = bossLoopEnabled,
+            selectedBosses = selectedBosses,
             -- Pet breeding: selected parents + auto toggles, so a rejoin
             -- can resume the breed -> hatch -> breed loop automatically
             breedFatherId = breedFatherId,
@@ -296,8 +337,7 @@ local function saveConfig()
             breedMotherId = breedMotherId,
             breedMotherLabel = breedMotherLabel,
             autoBreedHatchEnabled = autoBreedHatchEnabled,
-            autoBreedEnabled = autoBreedEnabled,
-            bossTrackDistance = BOSS_TRACK_DISTANCE
+            autoBreedEnabled = autoBreedEnabled
         }
         pcall(function()
             writefile(configFileName, HttpService:JSONEncode(data))
@@ -322,8 +362,8 @@ local function loadConfig()
             if data.eggName ~= nil then selectedEggName = data.eggName end
             -- AreaFarm data, kept separate from `positions` above
             if data.areaFarmingSpot ~= nil then farmingSpot = data.areaFarmingSpot end
-            if data.areaBossSpot ~= nil then bossSpot = data.areaBossSpot end
             if data.areaBossLoopEnabled ~= nil then bossLoopEnabled = data.areaBossLoopEnabled end
+            if data.selectedBosses ~= nil then selectedBosses = data.selectedBosses end
             -- Pet breeding restore
             if data.breedFatherId ~= nil then breedFatherId = data.breedFatherId end
             if data.breedFatherLabel ~= nil then breedFatherLabel = data.breedFatherLabel end
@@ -331,7 +371,6 @@ local function loadConfig()
             if data.breedMotherLabel ~= nil then breedMotherLabel = data.breedMotherLabel end
             if data.autoBreedHatchEnabled ~= nil then autoBreedHatchEnabled = data.autoBreedHatchEnabled end
             if data.autoBreedEnabled ~= nil then autoBreedEnabled = data.autoBreedEnabled end
-            if data.bossTrackDistance ~= nil then BOSS_TRACK_DISTANCE = data.bossTrackDistance end
         end)
     end
 end
@@ -361,42 +400,82 @@ local function getRoot()
     return char and char:FindFirstChild("HumanoidRootPart")
 end
 
-local function unglueTarget()
-    if glueConnection then
-        glueConnection:Disconnect()
-        glueConnection = nil
+-- unlockTarget: disconnects the persistent farm-lock connection (see
+-- lockOntoTarget below). Tracked via connectTracked, so a stale lock
+-- from a previous script re-execution also gets cleaned up automatically
+-- at the top of the file, same as every other tracked connection here.
+local function unlockTarget()
+    if _G.NoxarPanelConnections["farmLock"] then
+        pcall(function() _G.NoxarPanelConnections["farmLock"]:Disconnect() end)
+        _G.NoxarPanelConnections["farmLock"] = nil
     end
 end
 
-local function glueToTarget(targetRoot)
-    unglueTarget()
+-- lockOntoTarget: this is the original continuous glue behavior --
+-- a RunService.Heartbeat connection that re-locks the player's CFrame
+-- onto the target every single frame, which is what makes regular
+-- Auto-Farm feel smooth/instant instead of snapping in discrete steps.
+-- Used only by the regular farm loop (startFarming), which calls this
+-- once per acquired target and unlockTarget() when it's done with it --
+-- NOT called repeatedly per attack tick, since the Heartbeat connection
+-- itself is what keeps it locked every frame in between.
+local function lockOntoTarget(targetRoot)
+    unlockTarget()
     if not targetRoot or not targetRoot.Parent then return end
 
     local initialPos = targetRoot.Position
     local _, monsterYRotation, _ = targetRoot.CFrame:ToOrientation()
 
     groundRayParams.FilterDescendantsInstances = {
-        LP.Character, 
-        targetRoot.Parent, 
+        LP.Character,
+        targetRoot.Parent,
         clientMonsters
     }
-    
+
     local rayOrigin = Vector3.new(initialPos.X, initialPos.Y + 5, initialPos.Z)
     local raycastResult = workspace:Raycast(rayOrigin, rayDirection, groundRayParams)
     local groundY = raycastResult and raycastResult.Position.Y or (initialPos.Y - 4)
 
     local lockedCFrame = CFrame.new(initialPos.X, groundY + HOVER_HEIGHT, initialPos.Z) * CFrame.fromOrientation(0, monsterYRotation, 0)
 
-    glueConnection = RunService.Heartbeat:Connect(function()
+    connectTracked("farmLock", RunService.Heartbeat, function()
         local r = getRoot()
         if r and targetRoot and targetRoot.Parent then
             r.CFrame = lockedCFrame
             r.AssemblyLinearVelocity = Vector3.zero
             r.AssemblyAngularVelocity = Vector3.zero
         else
-            unglueTarget()
+            unlockTarget()
         end
     end)
+end
+
+-- glueToTarget: teleports the player on top of the target once (a
+-- "snap TP"), instead of holding a persistent connection. This is used
+-- only by the boss fight (fightBossUntilDead), which snaps once when
+-- the fight starts and then relies on your in-game auto-attack -- it
+-- doesn't need continuous re-locking the way regular farming does.
+local function glueToTarget(targetRoot)
+    if not targetRoot or not targetRoot.Parent then return end
+    local r = getRoot()
+    if not r then return end
+
+    local pos = targetRoot.Position
+    local _, monsterYRotation, _ = targetRoot.CFrame:ToOrientation()
+
+    groundRayParams.FilterDescendantsInstances = {
+        LP.Character,
+        targetRoot.Parent,
+        clientMonsters
+    }
+
+    local rayOrigin = Vector3.new(pos.X, pos.Y + 5, pos.Z)
+    local raycastResult = workspace:Raycast(rayOrigin, rayDirection, groundRayParams)
+    local groundY = raycastResult and raycastResult.Position.Y or (pos.Y - 4)
+
+    r.CFrame = CFrame.new(pos.X, groundY + HOVER_HEIGHT, pos.Z) * CFrame.fromOrientation(0, monsterYRotation, 0)
+    r.AssemblyLinearVelocity = Vector3.zero
+    r.AssemblyAngularVelocity = Vector3.zero
 end
 
 local function buildNameCache()
@@ -473,7 +552,7 @@ local function startFarming(statusLbl)
 
         if #monsters == 0 then
             currentTarget = nil
-            unglueTarget()
+            unlockTarget()
             unequipAll()
             statusLbl.Text = "Status: Waiting for spawns..."
             task.wait(0.5)
@@ -484,7 +563,7 @@ local function startFarming(statusLbl)
         currentTarget = target.model
 
         if target.root then
-            glueToTarget(target.root)
+            lockOntoTarget(target.root)
         end
         
         unequipAll()
@@ -501,7 +580,7 @@ local function startFarming(statusLbl)
         while running and runId == myId do
             if not clientMonsters:FindFirstChild(target.model.Name) then
                 killed += 1
-                unglueTarget()
+                unlockTarget()
                 unequipAll()
                 currentTarget = nil
                 statusLbl.Text = "Status: Killed " .. killed .. " (" .. (selectedMonster or "All") .. ")"
@@ -517,7 +596,7 @@ local function startFarming(statusLbl)
     end
     
     currentTarget = nil
-    unglueTarget()
+    unlockTarget()
     unequipAll()
     statusLbl.Text = "Status: Stopped. Killed: " .. killed
 end
@@ -553,7 +632,7 @@ end
 -- 3. SERVER & ANTI-AFK MECHANICS 
 -- ==========================================
 local VirtualUser = game:GetService("VirtualUser")
-LP.Idled:Connect(function()
+connectTracked("antiAfkWatcher", LP.Idled, function()
     if antiAfkEnabled then
         VirtualUser:Button2Down(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
         task.wait(1)
@@ -581,7 +660,7 @@ local CoreGui = game:GetService("CoreGui")
 local promptOverlay = CoreGui:FindFirstChild("RobloxPromptGui")
     and CoreGui.RobloxPromptGui:FindFirstChild("promptOverlay")
 if promptOverlay then
-    promptOverlay.ChildAdded:Connect(function(child)
+    connectTracked("promptErrorWatcher", promptOverlay.ChildAdded, function(child)
         if child.Name == "ErrorPrompt" then
             rejoinSameServer()
         end
@@ -957,7 +1036,7 @@ local function toggleFarming(forceState)
         StartFarmBtn.BackgroundColor3 = C.green
         StartFarmBtn.TextColor3 = C.bg
         StartFarmBtn.Text = "▶ Start Auto Farm"
-        unglueTarget()
+        unlockTarget()
     end
 end
 
@@ -1940,7 +2019,7 @@ local function teleportToAreaFarmSpot(spot, skipSettle, preSnapWait)
             if hum then
                 for i = 1, 2 do
                     hum:ChangeState(Enum.HumanoidStateType.Jumping)
-                    task.wait(5) -- short gap so the second jump registers as a new jump
+                    task.wait(0.5) -- short gap so the second jump registers as a new jump
                 end
             end
         end
@@ -1997,136 +2076,106 @@ ClearFarmSpotBtn.MouseButton1Click:Connect(function()
     saveConfig()
 end)
 
--- ── Boss Spot ────────────────────────────────────────────────
-local BossSpotDivider = Instance.new("Frame", AreaFarmTab)
-BossSpotDivider.Size = UDim2.new(1, -20, 0, 1)
-BossSpotDivider.BackgroundColor3 = C.border
-BossSpotDivider.BorderSizePixel = 0
-BossSpotDivider.LayoutOrder = 7
+-- ── Boss Loop (event-driven) ────────────────────────────────
+-- Regular + Ultra Rare bosses, confirmed from captured spawn
+-- notifications. We now listen for BOTH event kinds:
+--   "MonsterAppear" and "UltraRareMonsterAppear".
+-- Areas here match the existing AreaFarmIDs keys exactly, and the live
+-- spawn notification's DescParams[2] is still used as the source of truth
+-- when queueing a fight.
+local BOSS_LIST = {
+    -- Regular boss spawns (MonsterAppear)
+    { name = "Flaragon",         area = "Volcano",          tier = "Boss" },
+    { name = "Gildron",          area = "Duneveil Isle",    tier = "Boss" },
+    { name = "ShadeKnight",      area = "Neverland",        tier = "Boss" },
+    { name = "Mountusk",         area = "Frost Isle",       tier = "Boss" },
+    { name = "Glazadon",         area = "Frost Isle",       tier = "Boss" },
+    { name = "TideVex",          area = "Tideland",         tier = "Boss" },
+    { name = "Frostwyrm",        area = "Spirit Grove",     tier = "Boss" },
+    { name = "Beatopus",         area = "Nova Coast",       tier = "Boss" },
+    { name = "Dracospike",       area = "Dragon's Breath",  tier = "Boss" },
+    { name = "Thunderclaw",      area = "Blossom Haven",    tier = "Boss" },
+    { name = "Lampyr",           area = "Mobius Circus",    tier = "Boss" },
+    { name = "Scareaper",        area = "Specter Shallows", tier = "Boss" },
 
-local BossSpotLbl = Instance.new("TextLabel", AreaFarmTab)
-BossSpotLbl.Size = UDim2.new(1, -20, 0, 16)
-BossSpotLbl.BackgroundTransparency = 1
-BossSpotLbl.Text = "💀 Boss Farm"
-BossSpotLbl.TextColor3 = C.gold
-BossSpotLbl.Font = Enum.Font.GothamBold
-BossSpotLbl.TextSize = 11
-BossSpotLbl.TextXAlignment = Enum.TextXAlignment.Left
-BossSpotLbl.LayoutOrder = 8
+    -- Ultra Rare monster spawns (UltraRareMonsterAppear)
+    { name = "Bladetooth",       area = "Blossom Haven",    tier = "Ultra" },
+    { name = "Cobaltwing",       area = "Spirit Grove",     tier = "Ultra" },
+    { name = "Stellar Sentinel", area = "Mobius Circus",    tier = "Ultra" },
+    { name = "Capshark",         area = "Nova Coast",       tier = "Ultra" },
+    { name = "Crabblaze",        area = "Nova Coast",       tier = "Ultra" },
+    { name = "Walrusk",          area = "Tideland",         tier = "Ultra" },
+    { name = "Undine",           area = "Tideland",         tier = "Ultra" },
+    { name = "Bull Lord",        area = "Specter Shallows", tier = "Ultra" },
+}
 
-local function bossSpotStatusText()
-    if bossSpot then
-        return "Saved: " .. bossSpot.areaName
-    end
-    return "Saved: None"
-end
-
-local BossSpotStatusLbl = Instance.new("TextLabel", AreaFarmTab)
-BossSpotStatusLbl.Size = UDim2.new(1, -20, 0, 16)
-BossSpotStatusLbl.BackgroundTransparency = 1
-BossSpotStatusLbl.Text = bossSpotStatusText()
-BossSpotStatusLbl.TextColor3 = bossSpot and C.green or C.sub
-BossSpotStatusLbl.Font = Enum.Font.GothamSemibold
-BossSpotStatusLbl.TextSize = 10
-BossSpotStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
-BossSpotStatusLbl.LayoutOrder = 9
-
-local BossSpotRow = Instance.new("Frame", AreaFarmTab)
-BossSpotRow.Size = UDim2.new(1, -20, 0, 28)
-BossSpotRow.BackgroundTransparency = 1
-BossSpotRow.LayoutOrder = 10
-
-local SaveBossSpotBtn = Instance.new("TextButton", BossSpotRow)
-SaveBossSpotBtn.Size = UDim2.new(0.34, -4, 1, 0)
-SaveBossSpotBtn.Position = UDim2.new(0, 0, 0, 0)
-SaveBossSpotBtn.BackgroundColor3 = C.card
-SaveBossSpotBtn.TextColor3 = C.text
-SaveBossSpotBtn.Font = Enum.Font.GothamBold
-SaveBossSpotBtn.TextSize = 10
-SaveBossSpotBtn.Text = "Save"
-SaveBossSpotBtn.BorderSizePixel = 0
-Instance.new("UICorner", SaveBossSpotBtn).CornerRadius = UDim.new(0, 5)
-
-local TPBossSpotBtn = Instance.new("TextButton", BossSpotRow)
-TPBossSpotBtn.Size = UDim2.new(0.33, -4, 1, 0)
-TPBossSpotBtn.Position = UDim2.new(0.34, 4, 0, 0)
-TPBossSpotBtn.BackgroundColor3 = C.accent
-TPBossSpotBtn.TextColor3 = C.text
-TPBossSpotBtn.Font = Enum.Font.GothamBold
-TPBossSpotBtn.TextSize = 10
-TPBossSpotBtn.Text = "TP"
-TPBossSpotBtn.BorderSizePixel = 0
-Instance.new("UICorner", TPBossSpotBtn).CornerRadius = UDim.new(0, 5)
-
-local ClearBossSpotBtn = Instance.new("TextButton", BossSpotRow)
-ClearBossSpotBtn.Size = UDim2.new(0.33, -4, 1, 0)
-ClearBossSpotBtn.Position = UDim2.new(0.67, 4, 0, 0)
-ClearBossSpotBtn.BackgroundColor3 = C.red
-ClearBossSpotBtn.TextColor3 = C.text
-ClearBossSpotBtn.Font = Enum.Font.GothamBold
-ClearBossSpotBtn.TextSize = 10
-ClearBossSpotBtn.Text = "Clear"
-ClearBossSpotBtn.BorderSizePixel = 0
-Instance.new("UICorner", ClearBossSpotBtn).CornerRadius = UDim.new(0, 5)
-
-SaveBossSpotBtn.MouseButton1Click:Connect(function()
-    local r = getRoot()
-    if r then
-        local detectedName, detectedId = detectCurrentArea()
-        if not detectedName or not detectedId then
-            BossSpotStatusLbl.Text = "Couldn't detect area — not in a known zone!"
-            BossSpotStatusLbl.TextColor3 = C.red
-            return
-        end
-        local p = r.CFrame.Position
-        bossSpot = {
-            areaId = detectedId,
-            areaName = detectedName,
-            x = p.X, y = p.Y, z = p.Z
-        }
-        BossSpotStatusLbl.Text = bossSpotStatusText()
-        BossSpotStatusLbl.TextColor3 = C.green
-        saveConfig()
-    end
-end)
-
-TPBossSpotBtn.MouseButton1Click:Connect(function()
-    if bossSpot then
-        BossSpotStatusLbl.Text = "Teleporting..."
-        BossSpotStatusLbl.TextColor3 = C.sub
-        teleportToAreaFarmSpot(bossSpot, false, 7)
-        BossSpotStatusLbl.Text = bossSpotStatusText()
-        BossSpotStatusLbl.TextColor3 = C.green
-    else
-        BossSpotStatusLbl.Text = "No Boss Spot saved!"
-        BossSpotStatusLbl.TextColor3 = C.red
-    end
-end)
-
-ClearBossSpotBtn.MouseButton1Click:Connect(function()
-    bossSpot = nil
-    BossSpotStatusLbl.Text = bossSpotStatusText()
-    BossSpotStatusLbl.TextColor3 = C.sub
-    saveConfig()
-end)
-
--- ── Boss Loop Toggle ─────────────────────────────────────────
 local BossLoopDivider = Instance.new("Frame", AreaFarmTab)
 BossLoopDivider.Size = UDim2.new(1, -20, 0, 1)
 BossLoopDivider.BackgroundColor3 = C.border
 BossLoopDivider.BorderSizePixel = 0
-BossLoopDivider.LayoutOrder = 11
+BossLoopDivider.LayoutOrder = 7
 
-local BossLoopStatusLbl = Instance.new("TextLabel", AreaFarmTab)
-BossLoopStatusLbl.Size = UDim2.new(1, -20, 0, 16)
-BossLoopStatusLbl.BackgroundTransparency = 1
-BossLoopStatusLbl.Text = "Runs every 15 min at :00/:15/:30/:45 UTC"
-BossLoopStatusLbl.TextColor3 = C.sub
-BossLoopStatusLbl.Font = Enum.Font.Gotham
-BossLoopStatusLbl.TextSize = 9
-BossLoopStatusLbl.TextWrapped = true
-BossLoopStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
-BossLoopStatusLbl.LayoutOrder = 12
+local BossLoopTitleLbl = Instance.new("TextLabel", AreaFarmTab)
+BossLoopTitleLbl.Size = UDim2.new(1, -20, 0, 16)
+BossLoopTitleLbl.BackgroundTransparency = 1
+BossLoopTitleLbl.Text = "💀 Boss Loop"
+BossLoopTitleLbl.TextColor3 = C.gold
+BossLoopTitleLbl.Font = Enum.Font.GothamBold
+BossLoopTitleLbl.TextSize = 11
+BossLoopTitleLbl.TextXAlignment = Enum.TextXAlignment.Left
+BossLoopTitleLbl.LayoutOrder = 8
+
+local BossListHintLbl = Instance.new("TextLabel", AreaFarmTab)
+BossListHintLbl.Size = UDim2.new(1, -20, 0, 14)
+BossListHintLbl.BackgroundTransparency = 1
+BossListHintLbl.Text = "Select regular/Ultra spawns (event-driven):"
+BossListHintLbl.TextColor3 = C.sub
+BossListHintLbl.Font = Enum.Font.Gotham
+BossListHintLbl.TextSize = 9
+BossListHintLbl.TextWrapped = true
+BossListHintLbl.TextXAlignment = Enum.TextXAlignment.Left
+BossListHintLbl.LayoutOrder = 9
+
+local BossListScroll = Instance.new("ScrollingFrame", AreaFarmTab)
+BossListScroll.Size = UDim2.new(1, -20, 0, 130)
+BossListScroll.BackgroundColor3 = C.card
+BossListScroll.BorderSizePixel = 0
+BossListScroll.ScrollBarThickness = 3
+BossListScroll.ScrollBarImageColor3 = C.accent
+BossListScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+BossListScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+BossListScroll.LayoutOrder = 10
+Instance.new("UICorner", BossListScroll).CornerRadius = UDim.new(0, 6)
+
+local BossListLayout = Instance.new("UIListLayout", BossListScroll)
+BossListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+BossListLayout.Padding = UDim.new(0, 3)
+Instance.new("UIPadding", BossListScroll).PaddingTop = UDim.new(0, 4)
+
+for i, boss in ipairs(BOSS_LIST) do
+    local row = Instance.new("TextButton", BossListScroll)
+    row.Size = UDim2.new(1, -8, 0, 24)
+    row.Position = UDim2.new(0, 4, 0, 0)
+    row.BackgroundColor3 = selectedBosses[boss.name] and C.green or C.red
+    row.BorderSizePixel = 0
+    row.AutoButtonColor = false
+    row.Font = Enum.Font.Gotham
+    row.TextSize = 10
+    row.TextColor3 = C.text
+    row.TextXAlignment = Enum.TextXAlignment.Left
+    local tierSuffix = (boss.tier == "Ultra") and "  [Ultra]" or ""
+    row.Text = (selectedBosses[boss.name] and "   ●  " or "   ○  ") .. boss.name .. tierSuffix .. "  —  " .. boss.area
+    row.LayoutOrder = i
+    Instance.new("UICorner", row).CornerRadius = UDim.new(0, 4)
+
+    row.MouseButton1Click:Connect(function()
+        local nowOn = not selectedBosses[boss.name]
+        selectedBosses[boss.name] = nowOn or nil
+        row.BackgroundColor3 = nowOn and C.green or C.red
+        row.Text = (nowOn and "   ●  " or "   ○  ") .. boss.name .. tierSuffix .. "  —  " .. boss.area
+        saveConfig()
+    end)
+end
 
 local BossLoopLiveStatusLbl = Instance.new("TextLabel", AreaFarmTab)
 BossLoopLiveStatusLbl.Size = UDim2.new(1, -20, 0, 16)
@@ -2136,61 +2185,7 @@ BossLoopLiveStatusLbl.TextColor3 = C.sub
 BossLoopLiveStatusLbl.Font = Enum.Font.Gotham
 BossLoopLiveStatusLbl.TextSize = 10
 BossLoopLiveStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
-BossLoopLiveStatusLbl.LayoutOrder = 13
-
--- ── Boss Track Distance (tweakable, persisted) ──────────────────
-local BossDistRow = Instance.new("Frame", AreaFarmTab)
-BossDistRow.Size = UDim2.new(1, -20, 0, 26)
-BossDistRow.BackgroundColor3 = C.surface
-BossDistRow.BorderSizePixel = 0
-BossDistRow.LayoutOrder = 14
-Instance.new("UICorner", BossDistRow).CornerRadius = UDim.new(0, 5)
-
-local BossDistLbl = Instance.new("TextLabel", BossDistRow)
-BossDistLbl.Size = UDim2.new(0, 90, 1, 0)
-BossDistLbl.Position = UDim2.new(0, 8, 0, 0)
-BossDistLbl.BackgroundTransparency = 1
-BossDistLbl.Text = "Boss Distance:"
-BossDistLbl.TextColor3 = C.sub
-BossDistLbl.Font = Enum.Font.Gotham
-BossDistLbl.TextSize = 10
-BossDistLbl.TextXAlignment = Enum.TextXAlignment.Left
-
-local BossDistBox = Instance.new("TextBox", BossDistRow)
-BossDistBox.Size = UDim2.new(0, 44, 0, 18)
-BossDistBox.Position = UDim2.new(0, 100, 0.5, -9)
-BossDistBox.BackgroundColor3 = C.card
-BossDistBox.TextColor3 = C.text
-BossDistBox.Font = Enum.Font.GothamBold
-BossDistBox.TextSize = 10
-BossDistBox.ClearTextOnFocus = false
-BossDistBox.Text = tostring(BOSS_TRACK_DISTANCE)
-Instance.new("UICorner", BossDistBox).CornerRadius = UDim.new(0, 4)
-
-local BossDistUnitLbl = Instance.new("TextLabel", BossDistRow)
-BossDistUnitLbl.Size = UDim2.new(0, 50, 1, 0)
-BossDistUnitLbl.Position = UDim2.new(0, 150, 0, 0)
-BossDistUnitLbl.BackgroundTransparency = 1
-BossDistUnitLbl.Text = "studs"
-BossDistUnitLbl.TextColor3 = C.sub
-BossDistUnitLbl.Font = Enum.Font.Gotham
-BossDistUnitLbl.TextSize = 10
-BossDistUnitLbl.TextXAlignment = Enum.TextXAlignment.Left
-
--- Commits on FocusLost (covers both pressing Enter and tapping away,
--- which is how mobile keyboards typically dismiss). Invalid/empty input
--- just reverts the box back to whatever BOSS_TRACK_DISTANCE already is,
--- rather than silently accepting garbage.
-BossDistBox.FocusLost:Connect(function(enterPressed)
-    local n = tonumber(BossDistBox.Text)
-    if n and n > 0 then
-        BOSS_TRACK_DISTANCE = math.floor(n)
-        BossDistBox.Text = tostring(BOSS_TRACK_DISTANCE)
-        saveConfig()
-    else
-        BossDistBox.Text = tostring(BOSS_TRACK_DISTANCE)
-    end
-end)
+BossLoopLiveStatusLbl.LayoutOrder = 11
 
 local ToggleBossLoopBtn = Instance.new("TextButton", AreaFarmTab)
 ToggleBossLoopBtn.Size = UDim2.new(1, -20, 0, 30)
@@ -2198,209 +2193,238 @@ ToggleBossLoopBtn.BackgroundColor3 = bossLoopEnabled and C.green or C.red
 ToggleBossLoopBtn.TextColor3 = C.text
 ToggleBossLoopBtn.Font = Enum.Font.GothamBold
 ToggleBossLoopBtn.TextSize = 11
-ToggleBossLoopBtn.Text = bossLoopEnabled and "● BOSS AUTO-LOOP: ON" or "● BOSS AUTO-LOOP: OFF"
+ToggleBossLoopBtn.Text = bossLoopEnabled and "● BOSS LOOP: ON" or "● BOSS LOOP: OFF"
 ToggleBossLoopBtn.BorderSizePixel = 0
 Instance.new("UICorner", ToggleBossLoopBtn).CornerRadius = UDim.new(0, 5)
-ToggleBossLoopBtn.LayoutOrder = 15
+ToggleBossLoopBtn.LayoutOrder = 12
 
 ToggleBossLoopBtn.MouseButton1Click:Connect(function()
     bossLoopEnabled = not bossLoopEnabled
-    if bossLoopEnabled and (not farmingSpot or not bossSpot) then
+    if bossLoopEnabled and not farmingSpot then
         bossLoopEnabled = false
-        BossLoopLiveStatusLbl.Text = "Status: Need both spots saved first!"
+        BossLoopLiveStatusLbl.Text = "Status: Save a Farming Spot first!"
         BossLoopLiveStatusLbl.TextColor3 = C.red
         return
     end
     if bossLoopEnabled then
         ToggleBossLoopBtn.BackgroundColor3 = C.green
-        ToggleBossLoopBtn.Text = "● BOSS AUTO-LOOP: ON"
-        BossLoopLiveStatusLbl.Text = "Status: Waiting for next :00/:15/:30/:45..."
+        ToggleBossLoopBtn.Text = "● BOSS LOOP: ON"
+        BossLoopLiveStatusLbl.Text = "Status: Waiting for a boss spawn..."
         BossLoopLiveStatusLbl.TextColor3 = C.sub
     else
         ToggleBossLoopBtn.BackgroundColor3 = C.red
-        ToggleBossLoopBtn.Text = "● BOSS AUTO-LOOP: OFF"
+        ToggleBossLoopBtn.Text = "● BOSS LOOP: OFF"
         BossLoopLiveStatusLbl.Text = "Status: Disabled"
         BossLoopLiveStatusLbl.TextColor3 = C.sub
+        table.clear(bossQueue)
     end
     saveConfig()
 end)
 
 -- ==========================================
--- BOSS TRACKING — replaces the old fixed 20s wait with real detection.
--- Ported from the standalone Monster Tracker test (confirmed working:
--- catches deaths via AncestryChanged/Destroying instantly, 2s poll as
--- a fallback).
+-- BOSS TRACKING — fully event-driven. Replaces the old fixed-position
+-- bookmark + UTC 15-min timer entirely: no more guessing a schedule and
+-- polling "is a boss here yet" -- instead this reacts directly to the
+-- server's own spawn notification (NotificationEvent), and travels to
+-- wherever the boss actually is.
 -- ==========================================
--- BOSS_TRACK_DISTANCE is declared near the top of the script (with the
--- other boss loop state) so it can be persisted via saveConfig/loadConfig
--- and tweaked live from the textbox below.
 
-local function getBossMonsterPos(m)
-    local root = m:FindFirstChild("Root")
-        or m:FindFirstChild("HumanoidRootPart")
-        or m.PrimaryPart
-
-    if root and root:IsA("BasePart") then
-        return root.Position
-    end
-
-    for _, obj in ipairs(m:GetDescendants()) do
-        if obj:IsA("BasePart") then
-            return obj.Position
+-- Finds the exact monster instance in ClientMonsters whose resolved
+-- nameplate matches the boss name from the notification -- no distance
+-- cap needed here (unlike the old findNearestBoss), since we already
+-- know exactly which area we just teleported into.
+local function findBossByName(bossName)
+    buildNameCache()
+    for _, m in ipairs(clientMonsters:GetChildren()) do
+        local info = nameCache[m.Name]
+        local displayName = info and info.name or m.Name
+        if displayName == bossName then
+            return m
         end
     end
     return nil
 end
 
--- Module-level (not local to waitForBossThenDefeat) so CloseBtn can
--- force-disconnect these even if the per-cycle thread gets force-killed
--- mid-fight. task.cancel() cannot run any cleanup code inside the
--- cancelled thread, so the function's own markDefeated() would never
--- fire in that case — these would otherwise leak forever.
-local bossAncestryConn, bossDestroyingConn = nil, nil
-
-local function findNearestBoss()
-    local hrp = getRoot()
-    if not hrp then return nil end
-    buildNameCache()
-
-    local nearest, nearestDist = nil, math.huge
-    for _, m in ipairs(clientMonsters:GetChildren()) do
-        local pos = getBossMonsterPos(m)
-        if pos then
-            local dist = (hrp.Position - pos).Magnitude
-            if dist <= BOSS_TRACK_DISTANCE and dist < nearestDist then
-                nearest, nearestDist = m, dist
+-- Waits for ClientMonsters' child count to stop changing (settled) or a
+-- max timeout -- avoids scanning before the new area has actually
+-- streamed its monsters in.
+local function waitForMonstersToSettle(maxWait)
+    local start = os.clock()
+    local lastCount = -1
+    local stableSince = nil
+    while os.clock() - start < maxWait do
+        local count = #clientMonsters:GetChildren()
+        if count == lastCount then
+            stableSince = stableSince or os.clock()
+            if os.clock() - stableSince >= 1 then
+                return true -- stable for a full second, good enough
             end
+        else
+            stableSince = nil
         end
+        lastCount = count
+        task.wait(0.25)
     end
-    return nearest
+    return false -- hit the timeout instead of settling
 end
 
--- Waits indefinitely (no timeout) until a boss spawns nearby, then waits
--- until that exact instance is defeated/removed. Bails out early if the
--- boss loop gets toggled off while waiting at any point.
--- Returns "defeated" if a boss was found and killed, "timeout" if
--- BOSS_SPAWN_TIMEOUT elapsed with no boss ever showing up, or nil if the
--- loop got toggled off mid-wait (the caller already re-checks
--- bossLoopEnabled separately right after calling this either way).
-local function waitForBossThenDefeat()
-    -- Phase 1: stay put and keep checking until the boss actually spawns,
-    -- but give up after BOSS_SPAWN_TIMEOUT seconds so a boss that never
-    -- shows up can't strand the whole cycle here indefinitely.
-    local target
-    local waited = 0
-    while bossLoopEnabled do
-        target = findNearestBoss()
-        if target then break end
-        if waited >= BOSS_SPAWN_TIMEOUT then
-            return "timeout"
-        end
-        task.wait(1)
-        waited += 1
+-- Fights a specific boss instance until it dies. Teleports onto it once
+-- (same one-shot style as the saved-farm-spot TP button) and then just
+-- watches for it to disappear from ClientMonsters -- damage is expected
+-- to come from your in-game auto-attack (e.g. equipped pets), not from
+-- this script clicking anything. "Still present in ClientMonsters" is
+-- the same death check used everywhere else in this file. Bails out
+-- early (returns false) if bossLoopEnabled goes false mid-fight.
+local function fightBossUntilDead(monster)
+    local root = monster:FindFirstChild("Root")
+    if root then
+        glueToTarget(root) -- one-time snap onto the boss, not a repeating lock
     end
-    if not bossLoopEnabled or not target then return end
 
-    local info = nameCache[target.Name]
-    local displayName = info and info.name or target.Name
-    BossLoopLiveStatusLbl.Text = "Status: Boss found (" .. displayName .. "), fighting..."
+    while bossLoopEnabled do
+        if not clientMonsters:FindFirstChild(monster.Name) then
+            return true -- boss is dead
+        end
+        task.wait(0.5) -- just polling for death now, no need to run at ATTACK_DELAY speed
+    end
+
+    return false -- got turned off mid-fight
+end
+
+-- Runs the full cycle for one queued boss: travel to its area, scan for
+-- it by name, teleport onto it, fight until dead.
+local function runBossFight(entry)
+    currentBossFight = entry
+    BossLoopLiveStatusLbl.Text = "Status: " .. entry.name .. " @ " .. entry.area .. " — traveling..."
     BossLoopLiveStatusLbl.TextColor3 = C.gold
 
-    -- Phase 2: wait until this specific boss instance is gone. No timeout
-    -- here on purpose — once a real fight is underway we wait however
-    -- long it actually takes rather than risk cutting it short.
-    local defeated = false
-
-    local function markDefeated()
-        if defeated then return end
-        defeated = true
-        if bossAncestryConn then bossAncestryConn:Disconnect(); bossAncestryConn = nil end
-        if bossDestroyingConn then bossDestroyingConn:Disconnect(); bossDestroyingConn = nil end
+    local areaId = AreaFarmIDs[entry.area]
+    if not areaId then
+        BossLoopLiveStatusLbl.Text = "Status: ❌ Unknown area for " .. entry.name .. " (" .. entry.area .. ")"
+        BossLoopLiveStatusLbl.TextColor3 = C.red
+        currentBossFight = nil
+        return
     end
 
-    bossAncestryConn = target.AncestryChanged:Connect(function(_, parent)
-        if parent ~= clientMonsters then markDefeated() end
+    pcall(function()
+        DataPullFunc:InvokeServer("AreaTeleportToRegionChannel", areaId)
     end)
-    bossDestroyingConn = target.Destroying:Connect(markDefeated)
+    task.wait(2)
+    if not bossLoopEnabled then currentBossFight = nil; return end
 
-    while not defeated and bossLoopEnabled do
-        if not clientMonsters:FindFirstChild(target.Name) then
-            markDefeated()
-            break
-        end
-        task.wait(2)
+    BossLoopLiveStatusLbl.Text = "Status: Waiting for monsters to load in " .. entry.area .. "..."
+    waitForMonstersToSettle(6)
+    if not bossLoopEnabled then currentBossFight = nil; return end
+
+    BossLoopLiveStatusLbl.Text = "Status: Scanning for " .. entry.name .. "..."
+    local monster = findBossByName(entry.name)
+    if not monster then
+        task.wait(1.5) -- one more attempt in case it streamed in a moment late
+        monster = findBossByName(entry.name)
     end
 
-    -- Covers the case where we exited because bossLoopEnabled went false
-    -- mid-fight rather than because the boss died — markDefeated() is a
-    -- no-op if already called, so this just guarantees the two
-    -- connections are always cleaned up before this function returns.
-    markDefeated()
-    return "defeated"
+    if not monster then
+        BossLoopLiveStatusLbl.Text = "Status: ❌ " .. entry.name .. " not found after arriving"
+        BossLoopLiveStatusLbl.TextColor3 = C.red
+        currentBossFight = nil
+        return
+    end
+
+    BossLoopLiveStatusLbl.Text = "Status: Fighting " .. entry.name .. "..."
+    BossLoopLiveStatusLbl.TextColor3 = C.gold
+    local won = fightBossUntilDead(monster)
+
+    if won then
+        BossLoopLiveStatusLbl.Text = "Status: " .. entry.name .. " defeated! Waiting 3s..."
+        task.wait(3)
+    end
+
+    currentBossFight = nil
 end
 
--- Background watcher: fires once per UTC 15-minute mark while the loop
--- is enabled. Uses os.date("!*t") the same way getSecondsUntilReset()
--- above already does for UTC time in this file.
+-- Dedup guard for the queue -- true if this exact boss is already queued
+-- or is the one currently being fought, so a duplicate notification (or
+-- the same boss spawning again while one's already queued) doesn't pile
+-- up multiple entries for it.
+local function isAlreadyTracked(bossName)
+    if currentBossFight and currentBossFight.name == bossName then return true end
+    for _, q in ipairs(bossQueue) do
+        if q.name == bossName then return true end
+    end
+    return false
+end
+
+connectTracked("notificationEvent", NotificationEvent.OnClientEvent, function(...)
+    local args = table.pack(...) -- table.pack, not ipairs -- some slots are nil and ipairs would silently stop early
+    if not bossLoopEnabled then return end
+    if args[1] ~= "ViewBubble" then return end
+
+    -- Regular bosses use "MonsterAppear"; Ultra Rare monsters use
+    -- "UltraRareMonsterAppear". Both payload shapes include Name and
+    -- DescParams[2] = area name, so the same queue/fight path can handle both.
+    local eventKind = args[2]
+    if eventKind ~= "MonsterAppear" and eventKind ~= "UltraRareMonsterAppear" then return end
+
+    local payload = args[4]
+    if type(payload) ~= "table" then return end
+
+    local bossName = payload.Name
+    local areaName = payload.DescParams and payload.DescParams[2]
+    if not bossName or not areaName then return end
+
+    if not selectedBosses[bossName] then return end -- not one you've opted in to
+    if isAlreadyTracked(bossName) then return end
+
+    table.insert(bossQueue, { name = bossName, area = areaName })
+    if not currentBossFight then
+        BossLoopLiveStatusLbl.Text = "Status: " .. bossName .. " spawned @ " .. areaName .. " — queued (" .. #bossQueue .. ")"
+    else
+        BossLoopLiveStatusLbl.Text = "Status: Fighting " .. currentBossFight.name .. " — " .. bossName .. " queued next (" .. #bossQueue .. ")"
+    end
+end)
+
+-- Dispatcher: whenever nothing's currently being fought and the queue has
+-- something waiting, pop the next one (FIFO) and run it -- never
+-- interrupting whatever fight is already in progress. When the queue
+-- drains completely, return to the farming spot and cleanly resume the
+-- regular Auto-Farm loop if it was on before the boss loop took over.
 spawnTracked("bossLoop", function()
-    while task.wait(1) do
-        if not bossLoopEnabled then continue end
-        if not farmingSpot or not bossSpot then continue end
+    local returnedToFarmSpot = true -- starts true so it doesn't try to "return" before ever leaving
+    while task.wait(0.5) do
+        if not bossLoopEnabled then
+            returnedToFarmSpot = true
+            continue
+        end
 
-        local t = os.date("!*t")
-        local isQuarterMark = (t.min % 15 == 0) and (t.sec <= 2)
-        local markKey = string.format("%d-%d-%d %d:%d", t.year, t.month, t.day, t.hour, t.min)
+        if not currentBossFight and #bossQueue > 0 then
+            returnedToFarmSpot = false
+            if running then
+                wasFarmingBeforeBossFight = true
+                toggleFarming(false) -- cleanly stop Auto-Farm (updates its button too), not just flipping `running`
+            else
+                wasFarmingBeforeBossFight = false
+            end
 
-        if isQuarterMark and lastBossTrigger ~= markKey and not bossCycleRunning then
-            lastBossTrigger = markKey
-            bossCycleRunning = true
+            local nextEntry = table.remove(bossQueue, 1)
+            runBossFight(nextEntry)
 
-            -- Tracked (not plain task.spawn) so CloseBtn's
-            -- cancelAllTrackedThreads() can actually stop a cycle that's
-            -- mid-teleport/mid-fight, instead of it running to completion
-            -- in the background after the panel is already gone.
-            -- bossCycleRunning guards against two cycles ever overlapping,
-            -- so reusing the fixed name "bossCycle" every quarter-mark is
-            -- safe — there's never more than one in flight at a time.
-            spawnTracked("bossCycle", function()
-                local ok, err = pcall(function()
-                    BossLoopLiveStatusLbl.Text = "Status: Teleporting to Boss..."
-                    BossLoopLiveStatusLbl.TextColor3 = C.gold
-                    teleportToAreaFarmSpot(bossSpot, true, 7) -- skipSettle=true, preSnapWait=7 so the 7s gap sits between the area teleport and the exact-spot CFrame snap, giving the area time to load first
-
-                    BossLoopLiveStatusLbl.Text = "Status: At Boss, waiting for it to spawn..."
-                    local result = waitForBossThenDefeat()
-
-                    if not bossLoopEnabled then return end -- got turned off mid-wait
-
-                    if result == "timeout" then
-                        BossLoopLiveStatusLbl.Text = "Status: Boss never spawned (1min), returning..."
-                        BossLoopLiveStatusLbl.TextColor3 = C.red
-                    else
-                        BossLoopLiveStatusLbl.Text = "Status: Boss defeated! Waiting 3s..."
-                        task.wait(3)
-
-                        if not bossLoopEnabled then return end -- got turned off mid-wait
-                    end
-
-                    BossLoopLiveStatusLbl.Text = "Status: Returning to Farming Spot..."
-                    teleportToAreaFarmSpot(farmingSpot, false, 7)
-
-                    BossLoopLiveStatusLbl.Text = "Status: Waiting for next :00/:15/:30/:45..."
-                    BossLoopLiveStatusLbl.TextColor3 = C.sub
-                end)
-
-                if not ok then
-                    warn("[BossLoop] Cycle error: " .. tostring(err))
-                end
-                -- Always reset, no matter which path the cycle exited through
-                -- (normal finish, early return above, or an outright error) —
-                -- this is what stops the flag from ever getting stuck true.
-                bossCycleRunning = false
-            end)
+        elseif not currentBossFight and #bossQueue == 0 and not returnedToFarmSpot then
+            if farmingSpot then
+                BossLoopLiveStatusLbl.Text = "Status: Queue empty — returning to Farming Spot..."
+                BossLoopLiveStatusLbl.TextColor3 = C.sub
+                teleportToAreaFarmSpot(farmingSpot, false, 7)
+            end
+            if wasFarmingBeforeBossFight then
+                toggleFarming(true) -- cleanly restart Auto-Farm (spawns a fresh farmLoop thread, updates its button)
+                wasFarmingBeforeBossFight = false
+            end
+            BossLoopLiveStatusLbl.Text = "Status: Waiting for a boss spawn..."
+            BossLoopLiveStatusLbl.TextColor3 = C.sub
+            returnedToFarmSpot = true
         end
     end
 end)
+
 
 -- ==========================================
 -- 8. TABBING & INTERACTIVE TWEEN MECHANICS
@@ -2450,19 +2474,21 @@ end)
 CloseBtn.MouseButton1Click:Connect(function()
     running = false
     runId += 1
-    unglueTarget()
     unequipAll()
 
-    -- cancelAllTrackedThreads() below will kill the "bossCycle" thread if
-    -- one is mid-fight, but task.cancel() cannot run cleanup code inside
-    -- the thread it kills — so that thread's own markDefeated() never
-    -- gets a chance to run. Disconnect the boss AncestryChanged/Destroying
-    -- connections here explicitly so they can't dangle past Close.
-    if bossAncestryConn then bossAncestryConn:Disconnect(); bossAncestryConn = nil end
-    if bossDestroyingConn then bossDestroyingConn:Disconnect(); bossDestroyingConn = nil end
-    bossCycleRunning = false
+    -- The boss loop reuses the same equip/attack helpers as regular
+    -- farming and its glueToTarget call is just a one-shot teleport, so
+    -- there's no separate connection to worry about there. The regular
+    -- farm loop's persistent lock (lockOntoTarget/"farmLock") gets torn
+    -- down by disconnectAllTrackedConnections() below along with
+    -- everything else in the registry -- just clear the boss queue state
+    -- so nothing tries to resume a fight after the panel is gone.
+    bossLoopEnabled = false
+    table.clear(bossQueue)
+    currentBossFight = nil
 
     cancelAllTrackedThreads()
+    disconnectAllTrackedConnections()
     sg:Destroy()
 end)
 
@@ -2560,53 +2586,51 @@ spawnTracked("autoHatchLoop", function()
     while task.wait(3) do
         if not autoHatchEnabled or not selectedEggId then continue end
 
-        task.spawn(function()
-            -- First pass ever: seed every slot as a Start candidate so
-            -- slots left empty from before we started still get filled.
-            if not hatchBootstrapped then
-                hatchBootstrapped = true
-                for i = 1, 5 do incubatorKnownEmpty[i] = true end
+        -- First pass ever: seed every slot as a Start candidate so
+        -- slots left empty from before we started still get filled.
+        if not hatchBootstrapped then
+            hatchBootstrapped = true
+            for i = 1, 5 do incubatorKnownEmpty[i] = true end
+        end
+
+        for incubatorIndex = 1, 5 do
+            if not autoHatchEnabled then break end
+
+            -- Always attempt to claim — if it's not ready, this
+            -- should just fail/no-op server-side rather than error.
+            -- If it succeeds, the slot is now empty, so mark it for
+            -- a Start attempt below.
+            local claimedOk = pcall(function()
+                if EggSystem then
+                    EggSystem.ClientHatchTaken(incubatorIndex)
+                else
+                    DataPullFunc:InvokeServer("EggHatchTakenChannel", incubatorIndex)
+                end
+            end)
+            if claimedOk then
+                incubatorKnownEmpty[incubatorIndex] = true
             end
+            task.wait(0.2)
 
-            for incubatorIndex = 1, 5 do
-                if not autoHatchEnabled then break end
-
-                -- Always attempt to claim — if it's not ready, this
-                -- should just fail/no-op server-side rather than error.
-                -- If it succeeds, the slot is now empty, so mark it for
-                -- a Start attempt below.
-                local claimedOk = pcall(function()
+            -- Only Start a slot we know is actually empty (either
+            -- just claimed above, or seeded on the first pass) —
+            -- never blind-restart a slot that might already be
+            -- hatching.
+            if incubatorKnownEmpty[incubatorIndex] then
+                pcall(function()
                     if EggSystem then
-                        EggSystem.ClientHatchTaken(incubatorIndex)
+                        EggSystem.ClientHatchStart(incubatorIndex, selectedEggId)
                     else
-                        DataPullFunc:InvokeServer("EggHatchTakenChannel", incubatorIndex)
+                        DataPullFunc:InvokeServer("EggHatchStartChannel", incubatorIndex, selectedEggId)
                     end
                 end)
-                if claimedOk then
-                    incubatorKnownEmpty[incubatorIndex] = true
-                end
+                -- Once started, we no longer know it's empty — clear
+                -- the flag so we don't Start it again until we've
+                -- claimed it fresh.
+                incubatorKnownEmpty[incubatorIndex] = nil
                 task.wait(0.2)
-
-                -- Only Start a slot we know is actually empty (either
-                -- just claimed above, or seeded on the first pass) —
-                -- never blind-restart a slot that might already be
-                -- hatching.
-                if incubatorKnownEmpty[incubatorIndex] then
-                    pcall(function()
-                        if EggSystem then
-                            EggSystem.ClientHatchStart(incubatorIndex, selectedEggId)
-                        else
-                            DataPullFunc:InvokeServer("EggHatchStartChannel", incubatorIndex, selectedEggId)
-                        end
-                    end)
-                    -- Once started, we no longer know it's empty — clear
-                    -- the flag so we don't Start it again until we've
-                    -- claimed it fresh.
-                    incubatorKnownEmpty[incubatorIndex] = nil
-                    task.wait(0.2)
-                end
             end
-        end)
+        end
     end
 end)
 
