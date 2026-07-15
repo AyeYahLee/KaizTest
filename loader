@@ -1,0 +1,33 @@
+-- ==========================================
+-- NOXAR TINY LOADER - FLUENT PRO
+-- ==========================================
+-- Upload NoxarRemoteFull_FluentPro_Current.lua.txt somewhere raw, then either:
+--   1) replace REMOTE_URL below, or
+--   2) set getgenv().NoxarRemoteURL before running this loader.
+
+local REMOTE_URL = (getgenv and getgenv().NoxarRemoteURL) or _G.NoxarRemoteURL or "PASTE_RAW_FULL_SCRIPT_URL_HERE"
+
+if REMOTE_URL == "PASTE_RAW_FULL_SCRIPT_URL_HERE" then
+    warn("[Noxar] Missing remote URL. Upload NoxarRemoteFull_FluentPro_Current.lua.txt and paste the raw link into REMOTE_URL.")
+    return
+end
+
+local ok, result = pcall(function()
+    return game:HttpGet(REMOTE_URL)
+end)
+
+if not ok or type(result) ~= "string" or result == "" then
+    warn("[Noxar] Failed to download remote script:", tostring(result))
+    return
+end
+
+local fn, compileErr = loadstring(result)
+if not fn then
+    warn("[Noxar] Failed to compile remote script:", tostring(compileErr))
+    return
+end
+
+local runOk, runErr = pcall(fn)
+if not runOk then
+    warn("[Noxar] Remote script runtime error:", tostring(runErr))
+end
