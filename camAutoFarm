@@ -877,6 +877,33 @@ _G.NoxarUI.corner(Main, 14)
 _G.NoxarUI.stroke(Main, C.border, 0.18, 1)
 _G.NoxarUI.grad(Main, Color3.fromRGB(9, 11, 18), Color3.fromRGB(13, 16, 25), 90)
 
+-- Responsive scaling for different mobile/tablet screen sizes.
+-- Keeps the same design proportions, but shrinks the whole panel on smaller
+-- screens so it doesn't cover too much or get cut off.
+_G.NoxarUI.MainScale = Instance.new("UIScale", Main)
+function _G.NoxarUI.applyResponsiveScale()
+    local cam = workspace.CurrentCamera
+    local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
+
+    -- 390x330 was tuned around mobile landscape. Scale down on smaller
+    -- screens, but avoid making the controls unreadably tiny.
+    local scale = math.min(vp.X / 1450, vp.Y / 720)
+    scale = math.clamp(scale, 0.72, 1)
+    _G.NoxarUI.MainScale.Scale = scale
+
+    -- Always position from the FULL open panel size. If we use miniSize here,
+    -- minimizing recenters the tiny topbar and makes it jump down/middle.
+    -- This keeps the minimized topbar exactly where the open titlebar was.
+    Main.Position = UDim2.new(0.5, -math.floor((normalSize.X.Offset * scale) / 2), 0.42, -math.floor((normalSize.Y.Offset * scale) / 2))
+end
+
+_G.NoxarUI.applyResponsiveScale()
+if workspace.CurrentCamera then
+    connectTracked("responsiveScale", workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"), function()
+        _G.NoxarUI.applyResponsiveScale()
+    end)
+end
+
 -- Header
 local TitleBar = Instance.new("Frame", Main)
 TitleBar.Size = UDim2.new(1, 0, 0, 42)
@@ -2755,6 +2782,8 @@ MinBtn.MouseButton1Click:Connect(function()
     ContentArea.Visible = not isMinimized
     HeaderBottomFix.Visible = not isMinimized
     TitleLbl.Text = "Noxar Fluent Pro"
+    -- Do not call applyResponsiveScale here; changing size should collapse
+    -- from the current top-left position, not recenter the minimized bar.
 end)
 
 CloseBtn.MouseButton1Click:Connect(function()
