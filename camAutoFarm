@@ -2689,8 +2689,8 @@ local function runBossFight(entry)
     local won = fightBossUntilDead(monster)
 
     if won then
-        BossLoopLiveStatusLbl.Text = "Status: " .. entry.name .. " defeated! Waiting 3s..."
-        task.wait(3)
+        BossLoopLiveStatusLbl.Text = "Status: " .. entry.name .. " defeated! Waiting 2s..."
+        task.wait(2)
     end
 
     currentBossFight = nil
