@@ -2659,15 +2659,26 @@ local function runBossFight(entry)
     waitForMonstersToSettle(6)
     if not bossLoopEnabled then currentBossFight = nil; return end
 
-    BossLoopLiveStatusLbl.Text = "Status: Scanning for " .. entry.name .. "..."
-    local monster = findBossByName(entry.name)
-    if not monster then
-        task.wait(1.5) -- one more attempt in case it streamed in a moment late
+    BossLoopLiveStatusLbl.Text = "Status: Searching for " .. entry.name .. "..."
+    local monster = nil
+    local searchStartedAt = os.clock()
+    local maxFindWait = 15
+
+    while bossLoopEnabled and os.clock() - searchStartedAt < maxFindWait do
         monster = findBossByName(entry.name)
+        if monster then
+            break -- found early, do not wait the rest of the timeout
+        end
+
+        local remaining = math.max(0, maxFindWait - (os.clock() - searchStartedAt))
+        BossLoopLiveStatusLbl.Text = "Status: Searching for " .. entry.name .. "... " .. string.format("%.0f", remaining) .. "s"
+        task.wait(0.5)
     end
 
+    if not bossLoopEnabled then currentBossFight = nil; return end
+
     if not monster then
-        BossLoopLiveStatusLbl.Text = "Status: ❌ " .. entry.name .. " not found after arriving"
+        BossLoopLiveStatusLbl.Text = "Status: ❌ " .. entry.name .. " not found after 15s search"
         BossLoopLiveStatusLbl.TextColor3 = C.red
         currentBossFight = nil
         return
