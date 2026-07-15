@@ -162,6 +162,21 @@ local DataPullFunc = RS:WaitForChild("CommonLibrary"):WaitForChild("Tool"):WaitF
 local NotificationEvent = RS:WaitForChild("CommonLibrary"):WaitForChild("Tool"):WaitForChild("RemoteManager"):WaitForChild("Events"):WaitForChild("NotificationEvent")
 local clientMonsters = workspace:WaitForChild("ClientMonsters")
 
+-- Boss Loop mount helper. Uses the exact remote from your MountTest:
+-- DataPullFunc:InvokeServer("PetSwitchRideStatusChannel", true/false)
+_G.NoxarBossMountState = false
+function _G.NoxarSetBossMount(state, force)
+    state = state and true or false
+    if not force and _G.NoxarBossMountState == state then
+        return true
+    end
+    _G.NoxarBossMountState = state
+    local ok = pcall(function()
+        DataPullFunc:InvokeServer("PetSwitchRideStatusChannel", state)
+    end)
+    return ok
+end
+
 -- Direct access to the game's own hatch logic (more reliable than raw
 -- remote calls — this is the actual client function the Hatch button uses).
 local EggSystem
@@ -2560,6 +2575,7 @@ ToggleBossLoopBtn.MouseButton1Click:Connect(function()
         BossLoopLiveStatusLbl.Text = "Status: Disabled"
         BossLoopLiveStatusLbl.TextColor3 = Color3.fromRGB(205, 215, 245)
         table.clear(bossQueue)
+        _G.NoxarSetBossMount(false, true)
     end
     saveConfig()
 end)
@@ -2622,6 +2638,8 @@ local function fightBossUntilDead(monster)
     local root = monster:FindFirstChild("Root")
     if root then
         glueToTarget(root) -- one-time snap onto the boss, not a repeating lock
+        task.wait(0.2) -- let snap apply before unmounting for the actual fight
+        _G.NoxarSetBossMount(false)
     end
 
     while bossLoopEnabled do
@@ -2638,6 +2656,7 @@ end
 -- it by name, teleport onto it, fight until dead.
 local function runBossFight(entry)
     currentBossFight = entry
+    _G.NoxarSetBossMount(true) -- mount while traveling between boss/special areas
     BossLoopLiveStatusLbl.Text = "Status: " .. entry.name .. " @ " .. entry.area .. " — traveling..."
     BossLoopLiveStatusLbl.TextColor3 = C.gold
 
@@ -2689,6 +2708,7 @@ local function runBossFight(entry)
     local won = fightBossUntilDead(monster)
 
     if won then
+        _G.NoxarSetBossMount(true) -- remount after kill so next travel/return is mounted
         BossLoopLiveStatusLbl.Text = "Status: " .. entry.name .. " defeated! Waiting 2s..."
         task.wait(2)
     end
@@ -2770,6 +2790,7 @@ spawnTracked("bossLoop", function()
                 -- anti-AFK jumps continue in the background so farming resumes sooner.
                 teleportToAreaFarmSpot(farmingSpot, true, 5)
             end
+            _G.NoxarSetBossMount(false, true) -- final unmount once boss queue is finished/return is done
             if wasFarmingBeforeBossFight then
                 toggleFarming(true) -- cleanly restart Auto-Farm (spawns a fresh farmLoop thread, updates its button)
                 wasFarmingBeforeBossFight = false
@@ -2849,14 +2870,17 @@ CloseBtn.MouseButton1Click:Connect(function()
     bossLoopEnabled = false
     table.clear(bossQueue)
     currentBossFight = nil
+    _G.NoxarSetBossMount(false, true)
 
     cancelAllTrackedThreads()
     disconnectAllTrackedConnections()
 
-    -- Clear UI globals that hold direct Instance references. Helper functions
-    -- can stay cached on _G.NoxarUI, but instance refs should not keep old GUI
-    -- objects alive after closing.
+    -- Clear globals that hold direct runtime references. Helper functions can
+    -- stay cached, but instance refs / mount closure state should not keep old
+    -- objects or old script closures alive after closing.
     _G.NoxarUIScaleControls = nil
+    _G.NoxarBossMountState = nil
+    _G.NoxarSetBossMount = nil
     if _G.NoxarUI then
         _G.NoxarUI.MainScale = nil
     end
