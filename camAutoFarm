@@ -96,20 +96,25 @@ local LP = Players.LocalPlayer
 -- 1. CONFIGURATION & COMPACT MOBILE STATE
 -- ==========================================
 local C = {
-    bg      = Color3.fromRGB(11, 11, 16),
-    surface = Color3.fromRGB(20, 20, 28),
-    card    = Color3.fromRGB(28, 28, 38),
-    border  = Color3.fromRGB(50, 50, 70),
-    accent  = Color3.fromRGB(130, 95, 255),
-    green   = Color3.fromRGB(46, 204, 113),
-    red     = Color3.fromRGB(231, 76, 60),
-    text    = Color3.fromRGB(240, 240, 255),
-    sub     = Color3.fromRGB(140, 140, 160),
-    gold    = Color3.fromRGB(241, 196, 15)
+    -- Fluent Pro theme: clean, muted, executor-library inspired
+    bg         = Color3.fromRGB(9, 11, 18),
+    surface    = Color3.fromRGB(15, 18, 28),
+    card       = Color3.fromRGB(23, 27, 40),
+    card2      = Color3.fromRGB(30, 35, 52),
+    border     = Color3.fromRGB(55, 64, 92),
+    borderSoft = Color3.fromRGB(38, 45, 66),
+    accent     = Color3.fromRGB(108, 99, 255),
+    accent2    = Color3.fromRGB(70, 185, 255),
+    green      = Color3.fromRGB(46, 204, 113),
+    red        = Color3.fromRGB(235, 82, 108),
+    text       = Color3.fromRGB(242, 245, 252),
+    sub        = Color3.fromRGB(145, 155, 180),
+    gold       = Color3.fromRGB(255, 198, 75)
 }
 
-local normalSize = UDim2.new(0, 285, 0, 310) 
-local miniSize = UDim2.new(0, 285, 0, 36)
+-- Fluent Pro layout: compact for mobile landscape, with real sidebar tabs.
+local normalSize = UDim2.new(0, 386, 0, 326)
+local miniSize = UDim2.new(0, 386, 0, 42)
 local isMinimized = false
 
 -- Core Farm/Claim States (Defaults)
@@ -668,140 +673,334 @@ if promptOverlay then
 end
 
 -- ==========================================
--- 4. COMPACT MOBILE UI SYSTEM
+-- 4. FLUENT PRO UI - COMPLETE VISUAL REWRITE
 -- ==========================================
+-- Professional sidebar app layout. This intentionally does NOT reuse the old
+-- top-tab structure. Original instance variable names are preserved so all
+-- existing feature code continues to connect to the right controls.
+_G.NoxarUI = _G.NoxarUI or {}
+function _G.NoxarUI.corner(obj, r)
+    local c = obj:FindFirstChildOfClass("UICorner") or Instance.new("UICorner", obj)
+    c.CornerRadius = UDim.new(0, r or 8)
+    return c
+end
+function _G.NoxarUI.stroke(obj, color, trans, thick)
+    local s = obj:FindFirstChildOfClass("UIStroke") or Instance.new("UIStroke", obj)
+    s.Color = color or C.border
+    s.Transparency = trans or 0.4
+    s.Thickness = thick or 1
+    return s
+end
+function _G.NoxarUI.grad(obj, a, b, rot)
+    local g = obj:FindFirstChildOfClass("UIGradient") or Instance.new("UIGradient", obj)
+    g.Color = ColorSequence.new(a or C.surface, b or C.card)
+    g.Rotation = rot or 90
+    return g
+end
+function _G.NoxarUI.nav(btn, active)
+    btn.BorderSizePixel = 0
+    btn.AutoButtonColor = false
+    btn.BackgroundTransparency = 0
+    btn.BackgroundColor3 = active and Color3.fromRGB(33, 38, 58) or Color3.fromRGB(14, 17, 27)
+    btn.TextColor3 = active and C.text or C.sub
+    btn.Font = Enum.Font.GothamSemibold
+    btn.TextSize = 11
+    btn.TextXAlignment = Enum.TextXAlignment.Left
+    _G.NoxarUI.corner(btn, 8)
+    _G.NoxarUI.stroke(btn, active and C.accent or C.borderSoft, active and 0.25 or 0.75, 1)
+    if not btn:FindFirstChildOfClass("UIPadding") then
+        Instance.new("UIPadding", btn).PaddingLeft = UDim.new(0, 12)
+    end
+end
+function _G.NoxarUI.drop(btn)
+    btn.BorderSizePixel = 0
+    btn.AutoButtonColor = true
+    btn.BackgroundColor3 = C.card2
+    btn.TextColor3 = C.text
+    btn.Font = Enum.Font.GothamSemibold
+    btn.TextSize = 11
+    btn.TextXAlignment = Enum.TextXAlignment.Left
+    _G.NoxarUI.corner(btn, 8)
+    _G.NoxarUI.stroke(btn, C.borderSoft, 0.45, 1)
+    if not btn:FindFirstChildOfClass("UIPadding") then
+        Instance.new("UIPadding", btn).PaddingLeft = UDim.new(0, 10)
+    end
+end
+
+function _G.NoxarUI.animateDrop(frame, open, height)
+    height = height or 100
+    if open then
+        frame.Visible = true
+        frame.ClipsDescendants = true
+        frame.Size = UDim2.new(1, -20, 0, 0)
+        TS:Create(frame, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, -20, 0, height)}):Play()
+    else
+        frame.ClipsDescendants = true
+        local tw = TS:Create(frame, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {Size = UDim2.new(1, -20, 0, 0)})
+        tw:Play()
+        task.delay(0.17, function()
+            if frame and frame.Parent and frame.Size.Y.Offset <= 2 then
+                frame.Visible = false
+            end
+        end)
+    end
+end
+
+function _G.NoxarUI.choiceRow(parent, title, meta, active)
+    local row = Instance.new("TextButton", parent)
+    row.Size = UDim2.new(1, -10, 0, 34)
+    row.BackgroundColor3 = active and Color3.fromRGB(36, 44, 68) or Color3.fromRGB(17, 21, 32)
+    row.BorderSizePixel = 0
+    row.AutoButtonColor = false
+    row.Text = ""
+    _G.NoxarUI.corner(row, 9)
+    _G.NoxarUI.stroke(row, active and C.accent or C.borderSoft, active and 0.25 or 0.72, 1)
+
+    local bar = Instance.new("Frame", row)
+    bar.Size = UDim2.new(0, 4, 1, -12)
+    bar.Position = UDim2.new(0, 8, 0, 6)
+    bar.BackgroundColor3 = active and C.accent2 or C.borderSoft
+    bar.BorderSizePixel = 0
+    _G.NoxarUI.corner(bar, 4)
+
+    local name = Instance.new("TextLabel", row)
+    name.Size = UDim2.new(1, -95, 1, 0)
+    name.Position = UDim2.new(0, 20, 0, 0)
+    name.BackgroundTransparency = 1
+    name.Text = title or "Item"
+    name.TextColor3 = C.text
+    name.Font = Enum.Font.GothamSemibold
+    name.TextSize = 11
+    name.TextXAlignment = Enum.TextXAlignment.Left
+
+    local pill = Instance.new("TextLabel", row)
+    pill.Size = UDim2.new(0, 62, 0, 20)
+    pill.Position = UDim2.new(1, -70, 0.5, -10)
+    pill.BackgroundColor3 = active and C.accent or C.card2
+    pill.Text = meta or ""
+    pill.TextColor3 = active and C.text or C.sub
+    pill.Font = Enum.Font.GothamBold
+    pill.TextSize = 9
+    pill.BorderSizePixel = 0
+    _G.NoxarUI.corner(pill, 10)
+
+    return row, name, pill, bar
+end
+
+function _G.NoxarUI.toggleRow(parent, title, subtitle, on)
+    local row = Instance.new("TextButton", parent)
+    row.Size = UDim2.new(1, -8, 0, 40)
+    row.BackgroundColor3 = Color3.fromRGB(17, 21, 32)
+    row.BorderSizePixel = 0
+    row.AutoButtonColor = false
+    row.Text = ""
+    _G.NoxarUI.corner(row, 10)
+    _G.NoxarUI.stroke(row, on and C.accent or C.borderSoft, on and 0.3 or 0.7, 1)
+
+    local name = Instance.new("TextLabel", row)
+    name.Size = UDim2.new(1, -92, 0, 20)
+    name.Position = UDim2.new(0, 12, 0, 5)
+    name.BackgroundTransparency = 1
+    name.Text = title
+    name.TextColor3 = C.text
+    name.Font = Enum.Font.GothamSemibold
+    name.TextSize = 11
+    name.TextXAlignment = Enum.TextXAlignment.Left
+
+    local sub = Instance.new("TextLabel", row)
+    sub.Size = UDim2.new(1, -92, 0, 14)
+    sub.Position = UDim2.new(0, 12, 0, 23)
+    sub.BackgroundTransparency = 1
+    sub.Text = subtitle
+    sub.TextColor3 = C.sub
+    sub.Font = Enum.Font.Gotham
+    sub.TextSize = 8
+    sub.TextXAlignment = Enum.TextXAlignment.Left
+
+    local sw = Instance.new("Frame", row)
+    sw.Size = UDim2.new(0, 42, 0, 22)
+    sw.Position = UDim2.new(1, -54, 0.5, -11)
+    sw.BackgroundColor3 = on and C.green or Color3.fromRGB(47, 54, 75)
+    sw.BorderSizePixel = 0
+    _G.NoxarUI.corner(sw, 12)
+
+    local knob = Instance.new("Frame", sw)
+    knob.Size = UDim2.new(0, 16, 0, 16)
+    knob.Position = on and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8)
+    knob.BackgroundColor3 = C.text
+    knob.BorderSizePixel = 0
+    _G.NoxarUI.corner(knob, 10)
+
+    return row, sw, knob
+end
+
+function _G.NoxarUI.setSwitch(sw, knob, on)
+    sw.BackgroundColor3 = on and C.green or Color3.fromRGB(47, 54, 75)
+    TS:Create(knob, TweenInfo.new(0.15, Enum.EasingStyle.Quad), {Position = on and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8)}):Play()
+end
+
+function _G.NoxarUI.updateChoiceRow(row, pill, bar, active, activeText, inactiveText)
+    if not row then return end
+    row.BackgroundColor3 = active and Color3.fromRGB(36, 44, 68) or Color3.fromRGB(17, 21, 32)
+    local stroke = row:FindFirstChildOfClass("UIStroke")
+    if stroke then
+        stroke.Color = active and C.accent or C.borderSoft
+        stroke.Transparency = active and 0.25 or 0.72
+    end
+    if bar then
+        bar.BackgroundColor3 = active and C.accent2 or C.borderSoft
+    end
+    if pill then
+        pill.BackgroundColor3 = active and C.accent or C.card2
+        pill.TextColor3 = active and C.text or C.sub
+        pill.Text = active and (activeText or "Selected") or (inactiveText or "Select")
+    end
+end
+
 local old = LP.PlayerGui:FindFirstChild("NoxarMobilePanel")
 if old then old:Destroy() end
 
 local sg = Instance.new("ScreenGui")
 sg.Name = "NoxarMobilePanel"
 sg.ResetOnSpawn = false
+sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 sg.Parent = LP.PlayerGui
 
 local Main = Instance.new("Frame", sg)
 Main.Size = normalSize
-Main.Position = UDim2.new(0.5, -142, 0.4, -155)
+Main.Position = UDim2.new(0.5, -193, 0.42, -163) -- starts slightly higher on mobile landscape
 Main.BackgroundColor3 = C.bg
 Main.ClipsDescendants = true
 Main.BorderSizePixel = 0
-Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 10)
-Instance.new("UIStroke", Main).Color = C.border
+Main.Active = true
+_G.NoxarUI.corner(Main, 14)
+_G.NoxarUI.stroke(Main, C.border, 0.18, 1)
+_G.NoxarUI.grad(Main, Color3.fromRGB(9, 11, 18), Color3.fromRGB(13, 16, 25), 90)
 
+-- Header
 local TitleBar = Instance.new("Frame", Main)
-TitleBar.Size = UDim2.new(1, 0, 0, 36)
-TitleBar.BackgroundColor3 = C.surface
+TitleBar.Size = UDim2.new(1, 0, 0, 42)
+TitleBar.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
 TitleBar.BorderSizePixel = 0
-local TitleFix = Instance.new("Frame", TitleBar)
-TitleFix.Size = UDim2.new(1, 0, 0.5, 0)
-TitleFix.Position = UDim2.new(0, 0, 0.5, 0)
-TitleFix.BackgroundColor3 = C.surface
-TitleFix.BorderSizePixel = 0
+_G.NoxarUI.grad(TitleBar, Color3.fromRGB(0, 0, 0), Color3.fromRGB(0, 0, 0), 0)
+_G.NoxarUI.corner(TitleBar, 14)
+TitleBar.ClipsDescendants = true
+-- Keeps the header bottom edge straight while expanded, but lets the full
+-- titlebar round cleanly when minimized.
+local HeaderBottomFix = Instance.new("Frame", TitleBar)
+HeaderBottomFix.Size = UDim2.new(1, 0, 0, 14)
+HeaderBottomFix.Position = UDim2.new(0, 0, 1, -14)
+HeaderBottomFix.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+HeaderBottomFix.BorderSizePixel = 0
 
 local TitleLbl = Instance.new("TextLabel", TitleBar)
-TitleLbl.Size = UDim2.new(1, -90, 1, 0)
-TitleLbl.Position = UDim2.new(0, 12, 0, 0)
+TitleLbl.Size = UDim2.new(1, -96, 1, 0)
+TitleLbl.Position = UDim2.new(0, 14, 0, 0)
 TitleLbl.BackgroundTransparency = 1
-TitleLbl.Text = "Noxar Mobile Admin"
-TitleLbl.TextColor3 = C.accent
+TitleLbl.Text = "Noxar Fluent Pro"
+TitleLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
 TitleLbl.Font = Enum.Font.GothamBold
-TitleLbl.TextSize = 13
+TitleLbl.TextSize = 14
 TitleLbl.TextXAlignment = Enum.TextXAlignment.Left
 
 local MinBtn = Instance.new("TextButton", TitleBar)
-MinBtn.Size = UDim2.new(0, 26, 0, 22)
-MinBtn.Position = UDim2.new(1, -62, 0.5, -11)
-MinBtn.BackgroundColor3 = C.card
+MinBtn.Size = UDim2.new(0, 30, 0, 25)
+MinBtn.Position = UDim2.new(1, -70, 0.5, -12)
 MinBtn.Text = "—"
+_G.NoxarUI.nav(MinBtn, false)
 MinBtn.TextColor3 = C.text
-MinBtn.Font = Enum.Font.GothamBold
-MinBtn.TextSize = 12
-Instance.new("UICorner", MinBtn).CornerRadius = UDim.new(0, 5)
+MinBtn.TextXAlignment = Enum.TextXAlignment.Center
 
 local CloseBtn = Instance.new("TextButton", TitleBar)
-CloseBtn.Size = UDim2.new(0, 26, 0, 22)
-CloseBtn.Position = UDim2.new(1, -31, 0.5, -11)
-CloseBtn.BackgroundColor3 = Color3.fromRGB(75, 25, 25)
-CloseBtn.Text = "✕"
+CloseBtn.Size = UDim2.new(0, 30, 0, 25)
+CloseBtn.Position = UDim2.new(1, -35, 0.5, -12)
+CloseBtn.Text = "×"
+_G.NoxarUI.nav(CloseBtn, false)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(76, 31, 42)
 CloseBtn.TextColor3 = C.red
-CloseBtn.Font = Enum.Font.GothamBold
-CloseBtn.TextSize = 11
-Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 5)
+CloseBtn.TextXAlignment = Enum.TextXAlignment.Center
 
--- Tabs Area
+-- Sidebar tabs
 local TabBar = Instance.new("Frame", Main)
-TabBar.Size = UDim2.new(1, 0, 0, 30)
-TabBar.Position = UDim2.new(0, 0, 0, 36)
-TabBar.BackgroundColor3 = C.surface
+TabBar.Size = UDim2.new(0, 104, 1, -42)
+TabBar.Position = UDim2.new(0, 0, 0, 42)
+TabBar.BackgroundColor3 = Color3.fromRGB(10, 12, 20)
 TabBar.BorderSizePixel = 0
-
-local TabFarmBtn = Instance.new("TextButton", TabBar)
-TabFarmBtn.Size = UDim2.new(0.2, 0, 1, 0)
-TabFarmBtn.Position = UDim2.new(0, 0, 0, 0)
-TabFarmBtn.BackgroundTransparency = 1
-TabFarmBtn.Text = "⚔️ Farm"
-TabFarmBtn.TextColor3 = C.text
-TabFarmBtn.Font = Enum.Font.GothamBold
-TabFarmBtn.TextSize = 11
-
-local TabClaimBtn = Instance.new("TextButton", TabBar)
-TabClaimBtn.Size = UDim2.new(0.2, 0, 1, 0)
-TabClaimBtn.Position = UDim2.new(0.2, 0, 0, 0)
-TabClaimBtn.BackgroundTransparency = 1
-TabClaimBtn.Text = "🎁 Claim"
-TabClaimBtn.TextColor3 = C.sub
-TabClaimBtn.Font = Enum.Font.GothamBold
-TabClaimBtn.TextSize = 11
-
-local TabServerBtn = Instance.new("TextButton", TabBar)
-TabServerBtn.Size = UDim2.new(0.2, 0, 1, 0)
-TabServerBtn.Position = UDim2.new(0.4, 0, 0, 0)
-TabServerBtn.BackgroundTransparency = 1
-TabServerBtn.Text = "🌐 Server"
-TabServerBtn.TextColor3 = C.sub
-TabServerBtn.Font = Enum.Font.GothamBold
-TabServerBtn.TextSize = 11
-
-local TabHatchBtn = Instance.new("TextButton", TabBar)
-TabHatchBtn.Size = UDim2.new(0.2, 0, 1, 0)
-TabHatchBtn.Position = UDim2.new(0.6, 0, 0, 0)
-TabHatchBtn.BackgroundTransparency = 1
-TabHatchBtn.Text = "🥚 Hatch"
-TabHatchBtn.TextColor3 = C.sub
-TabHatchBtn.Font = Enum.Font.GothamBold
-TabHatchBtn.TextSize = 11
-
-local TabAreaFarmBtn = Instance.new("TextButton", TabBar)
-TabAreaFarmBtn.Size = UDim2.new(0.2, 0, 1, 0)
-TabAreaFarmBtn.Position = UDim2.new(0.8, 0, 0, 0)
-TabAreaFarmBtn.BackgroundTransparency = 1
-TabAreaFarmBtn.Text = "🗺️ Area"
-TabAreaFarmBtn.TextColor3 = C.sub
-TabAreaFarmBtn.Font = Enum.Font.GothamBold
-TabAreaFarmBtn.TextSize = 11
+_G.NoxarUI.corner(TabBar, 14)
+_G.NoxarUI.stroke(TabBar, C.borderSoft, 0.78, 1)
 
 local TabIndicator = Instance.new("Frame", TabBar)
-TabIndicator.Size = UDim2.new(0.2, 0, 0, 2)
-TabIndicator.Position = UDim2.new(0, 0, 1, -2)
+TabIndicator.Size = UDim2.new(0, 3, 0, 36)
+TabIndicator.Position = UDim2.new(0, 0, 0, 10)
 TabIndicator.BackgroundColor3 = C.accent
 TabIndicator.BorderSizePixel = 0
+_G.NoxarUI.corner(TabIndicator, 3)
 
+local TabFarmBtn = Instance.new("TextButton", TabBar)
+TabFarmBtn.Size = UDim2.new(1, -12, 0, 36)
+TabFarmBtn.Position = UDim2.new(0, 7, 0, 10)
+TabFarmBtn.Text = "  Farm"
+_G.NoxarUI.nav(TabFarmBtn, true)
+
+local TabClaimBtn = Instance.new("TextButton", TabBar)
+TabClaimBtn.Size = UDim2.new(1, -12, 0, 36)
+TabClaimBtn.Position = UDim2.new(0, 7, 0, 136)
+TabClaimBtn.Text = "  Claim"
+_G.NoxarUI.nav(TabClaimBtn, false)
+
+local TabServerBtn = Instance.new("TextButton", TabBar)
+TabServerBtn.Size = UDim2.new(1, -12, 0, 36)
+TabServerBtn.Position = UDim2.new(0, 7, 0, 178)
+TabServerBtn.Text = "  Server"
+_G.NoxarUI.nav(TabServerBtn, false)
+
+local TabHatchBtn = Instance.new("TextButton", TabBar)
+TabHatchBtn.Size = UDim2.new(1, -12, 0, 36)
+TabHatchBtn.Position = UDim2.new(0, 7, 0, 94)
+TabHatchBtn.Text = "  Hatch"
+_G.NoxarUI.nav(TabHatchBtn, false)
+
+local TabAreaFarmBtn = Instance.new("TextButton", TabBar)
+TabAreaFarmBtn.Size = UDim2.new(1, -12, 0, 36)
+TabAreaFarmBtn.Position = UDim2.new(0, 7, 0, 52)
+TabAreaFarmBtn.Text = "  Area"
+_G.NoxarUI.nav(TabAreaFarmBtn, false)
+
+-- Page area
 local ContentArea = Instance.new("Frame", Main)
-ContentArea.Size = UDim2.new(1, 0, 1, -66)
-ContentArea.Position = UDim2.new(0, 0, 0, 66)
-ContentArea.BackgroundTransparency = 1
+ContentArea.Size = UDim2.new(1, -104, 1, -42)
+ContentArea.Position = UDim2.new(0, 104, 0, 42)
+ContentArea.BackgroundColor3 = Color3.fromRGB(9, 11, 19)
+ContentArea.BorderSizePixel = 0
+_G.NoxarUI.corner(ContentArea, 14)
 
-local FarmTab = Instance.new("Frame", ContentArea)
+local FarmTab = Instance.new("ScrollingFrame", ContentArea)
 FarmTab.Size = UDim2.new(1, 0, 1, 0)
 FarmTab.BackgroundTransparency = 1
+FarmTab.BorderSizePixel = 0
+FarmTab.ScrollBarThickness = 3
+FarmTab.ScrollBarImageColor3 = C.accent
+FarmTab.CanvasSize = UDim2.new(0, 0, 0, 0)
+FarmTab.AutomaticCanvasSize = Enum.AutomaticSize.Y
 
-local ClaimTab = Instance.new("Frame", ContentArea)
+local ClaimTab = Instance.new("ScrollingFrame", ContentArea)
 ClaimTab.Size = UDim2.new(1, 0, 1, 0)
 ClaimTab.BackgroundTransparency = 1
+ClaimTab.BorderSizePixel = 0
+ClaimTab.ScrollBarThickness = 3
+ClaimTab.ScrollBarImageColor3 = C.accent
+ClaimTab.CanvasSize = UDim2.new(0, 0, 0, 0)
+ClaimTab.AutomaticCanvasSize = Enum.AutomaticSize.Y
 ClaimTab.Visible = false
 
-local ServerTab = Instance.new("Frame", ContentArea)
+local ServerTab = Instance.new("ScrollingFrame", ContentArea)
 ServerTab.Size = UDim2.new(1, 0, 1, 0)
 ServerTab.BackgroundTransparency = 1
+ServerTab.BorderSizePixel = 0
+ServerTab.ScrollBarThickness = 3
+ServerTab.ScrollBarImageColor3 = C.accent
+ServerTab.CanvasSize = UDim2.new(0, 0, 0, 0)
+ServerTab.AutomaticCanvasSize = Enum.AutomaticSize.Y
 ServerTab.Visible = false
 
 local HatchTab = Instance.new("ScrollingFrame", ContentArea)
@@ -811,7 +1010,7 @@ HatchTab.Visible = false
 HatchTab.BorderSizePixel = 0
 HatchTab.ScrollBarThickness = 3
 HatchTab.ScrollBarImageColor3 = C.accent
-HatchTab.CanvasSize = UDim2.new(0, 0, 0, 0) -- recalculated below once content is laid out
+HatchTab.CanvasSize = UDim2.new(0, 0, 0, 0)
 HatchTab.AutomaticCanvasSize = Enum.AutomaticSize.Y
 
 local AreaFarmTab = Instance.new("ScrollingFrame", ContentArea)
@@ -843,65 +1042,69 @@ TargetLbl.TextSize = 11
 TargetLbl.TextXAlignment = Enum.TextXAlignment.Left
 TargetLbl.LayoutOrder = 1
 
+local TargetDropBtn = Instance.new("TextButton", FarmTab)
+TargetDropBtn.Size = UDim2.new(1, -20, 0, 30)
+TargetDropBtn.BackgroundColor3 = C.card2
+TargetDropBtn.Text = selectedMonster and ("▼  " .. selectedMonster) or "▼  All Monsters"
+TargetDropBtn.LayoutOrder = 2
+_G.NoxarUI.drop(TargetDropBtn)
+
 local ScanBtn = Instance.new("TextButton", FarmTab)
-ScanBtn.Size = UDim2.new(1, -20, 0, 26)
+ScanBtn.Size = UDim2.new(1, -20, 0, 30)
 ScanBtn.BackgroundColor3 = C.accent
 ScanBtn.TextColor3 = C.text
 ScanBtn.Text = "🔍 Scan Game Monsters"
 ScanBtn.Font = Enum.Font.GothamBold
 ScanBtn.TextSize = 11
-Instance.new("UICorner", ScanBtn).CornerRadius = UDim.new(0, 5)
-ScanBtn.LayoutOrder = 2
+Instance.new("UICorner", ScanBtn).CornerRadius = UDim.new(0, 9)
+ScanBtn.LayoutOrder = 3
 
 local ScrollFarm = Instance.new("ScrollingFrame", FarmTab)
-ScrollFarm.Size = UDim2.new(1, -20, 0, 65) 
+ScrollFarm.Size = UDim2.new(1, -20, 0, 84) 
 ScrollFarm.BackgroundColor3 = C.surface
 ScrollFarm.ScrollBarThickness = 3
 ScrollFarm.ScrollBarImageColor3 = C.accent
 ScrollFarm.BorderSizePixel = 0
-Instance.new("UICorner", ScrollFarm).CornerRadius = UDim.new(0, 5)
-ScrollFarm.LayoutOrder = 3
+Instance.new("UICorner", ScrollFarm).CornerRadius = UDim.new(0, 9)
+ScrollFarm.LayoutOrder = 4
+ScrollFarm.Size = UDim2.new(1, -20, 0, 0)
+ScrollFarm.Visible = false
 local ScrollList = Instance.new("UIListLayout", ScrollFarm)
 ScrollList.Padding = UDim.new(0, 3)
 Instance.new("UIPadding", ScrollFarm).PaddingTop = UDim.new(0, 3)
+
+TargetDropBtn.MouseButton1Click:Connect(function()
+    local open = not ScrollFarm.Visible
+    TargetDropBtn.Text = (open and "▲  " or "▼  ") .. (selectedMonster or "All Monsters")
+    _G.NoxarUI.animateDrop(ScrollFarm, open, 132)
+end)
 
 local function populateList(types)
     for _, c in ipairs(ScrollFarm:GetChildren()) do
         if c:IsA("TextButton") then c:Destroy() end
     end
-    
-    local allBtn = Instance.new("TextButton", ScrollFarm)
-    allBtn.Size = UDim2.new(1, -10, 0, 24)
-    allBtn.BackgroundColor3 = C.green
-    allBtn.TextColor3 = C.bg
-    allBtn.Font = Enum.Font.GothamBold
-    allBtn.TextSize = 10
-    allBtn.Text = "⚔️ Farm Everything"
-    Instance.new("UICorner", allBtn).CornerRadius = UDim.new(0, 4)
-    
+
+    local allBtn = _G.NoxarUI.choiceRow(ScrollFarm, "Everything", "ALL", selectedMonster == nil)
     allBtn.MouseButton1Click:Connect(function()
         selectedMonster = nil
         TargetLbl.Text = "Target: All Monsters"
         TargetLbl.TextColor3 = C.green
+        TargetDropBtn.Text = "▼  All Monsters"
+        _G.NoxarUI.animateDrop(ScrollFarm, false, 132)
         saveConfig()
     end)
-    
+
     for _, t in ipairs(types) do
-        local btn = Instance.new("TextButton", ScrollFarm)
-        btn.Size = UDim2.new(1, -10, 0, 24)
-        btn.BackgroundColor3 = C.card
-        btn.TextColor3 = C.text
-        btn.Font = Enum.Font.Gotham
-        btn.TextSize = 10
-        local lvlStr = (t.level ~= "") and " " .. t.level or ""
-        btn.Text = "  " .. t.displayName .. lvlStr .. " (x" .. t.count .. ")"
-        btn.TextXAlignment = Enum.TextXAlignment.Left
-        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
-        
+        local lvlStr = (t.level ~= "") and t.level or ""
+        local meta = "x" .. tostring(t.count)
+        if lvlStr ~= "" then meta = lvlStr .. " • " .. meta end
+        local btn = _G.NoxarUI.choiceRow(ScrollFarm, t.displayName, meta, selectedMonster == t.displayName)
         btn.MouseButton1Click:Connect(function()
             selectedMonster = t.displayName
             TargetLbl.Text = "Target: " .. t.displayName
             TargetLbl.TextColor3 = C.gold
+            TargetDropBtn.Text = "▼  " .. t.displayName
+            _G.NoxarUI.animateDrop(ScrollFarm, false, 132)
             saveConfig()
         end)
     end
@@ -933,12 +1136,12 @@ end)
 local DelaysFrame = Instance.new("Frame", FarmTab)
 DelaysFrame.Size = UDim2.new(1, -20, 0, 24)
 DelaysFrame.BackgroundTransparency = 1
-DelaysFrame.LayoutOrder = 4
+DelaysFrame.LayoutOrder = 5
 
 local SpamBg = Instance.new("Frame", DelaysFrame)
 SpamBg.Size = UDim2.new(0.48, 0, 1, 0)
 SpamBg.BackgroundColor3 = C.card
-Instance.new("UICorner", SpamBg).CornerRadius = UDim.new(0, 5)
+Instance.new("UICorner", SpamBg).CornerRadius = UDim.new(0, 9)
 
 local SpamLbl = Instance.new("TextLabel", SpamBg)
 SpamLbl.Size = UDim2.new(0.5, 0, 1, 0)
@@ -958,7 +1161,7 @@ SpamBox.TextColor3 = C.text
 SpamBox.Font = Enum.Font.GothamBold
 SpamBox.TextSize = 10
 SpamBox.Text = tostring(ATTACK_DELAY)
-Instance.new("UICorner", SpamBox).CornerRadius = UDim.new(0, 4)
+Instance.new("UICorner", SpamBox).CornerRadius = UDim.new(0, 7)
 
 SpamBox.FocusLost:Connect(function()
     ATTACK_DELAY = tonumber(SpamBox.Text) or 0.05
@@ -970,7 +1173,7 @@ local EquipBg = Instance.new("Frame", DelaysFrame)
 EquipBg.Size = UDim2.new(0.48, 0, 1, 0)
 EquipBg.Position = UDim2.new(0.52, 0, 0, 0)
 EquipBg.BackgroundColor3 = C.card
-Instance.new("UICorner", EquipBg).CornerRadius = UDim.new(0, 5)
+Instance.new("UICorner", EquipBg).CornerRadius = UDim.new(0, 9)
 
 local EquipLbl = Instance.new("TextLabel", EquipBg)
 EquipLbl.Size = UDim2.new(0.5, 0, 1, 0)
@@ -990,7 +1193,7 @@ EquipBox.TextColor3 = C.text
 EquipBox.Font = Enum.Font.GothamBold
 EquipBox.TextSize = 10
 EquipBox.Text = tostring(EQUIP_DELAY)
-Instance.new("UICorner", EquipBox).CornerRadius = UDim.new(0, 4)
+Instance.new("UICorner", EquipBox).CornerRadius = UDim.new(0, 7)
 
 EquipBox.FocusLost:Connect(function()
     EQUIP_DELAY = tonumber(EquipBox.Text) or 0.5
@@ -1005,17 +1208,17 @@ FarmStatus.Text = "Status: Idle"
 FarmStatus.TextColor3 = C.sub
 FarmStatus.Font = Enum.Font.Gotham
 FarmStatus.TextSize = 10
-FarmStatus.LayoutOrder = 5
+FarmStatus.LayoutOrder = 6
 
 local StartFarmBtn = Instance.new("TextButton", FarmTab)
-StartFarmBtn.Size = UDim2.new(1, -20, 0, 28)
+StartFarmBtn.Size = UDim2.new(1, -20, 0, 34)
 StartFarmBtn.BackgroundColor3 = C.green
 StartFarmBtn.TextColor3 = C.bg
 StartFarmBtn.Text = "▶ Start Auto Farm"
 StartFarmBtn.Font = Enum.Font.GothamBold
 StartFarmBtn.TextSize = 12
-Instance.new("UICorner", StartFarmBtn).CornerRadius = UDim.new(0, 5)
-StartFarmBtn.LayoutOrder = 6
+Instance.new("UICorner", StartFarmBtn).CornerRadius = UDim.new(0, 9)
+StartFarmBtn.LayoutOrder = 7
 
 local function toggleFarming(forceState)
     if forceState ~= nil then
@@ -1075,7 +1278,7 @@ ClaimStatus.Text = "Status: Idle"
 ClaimStatus.TextColor3 = C.text
 ClaimStatus.Font = Enum.Font.Gotham
 ClaimStatus.TextSize = 11
-Instance.new("UICorner", ClaimStatus).CornerRadius = UDim.new(0, 5)
+Instance.new("UICorner", ClaimStatus).CornerRadius = UDim.new(0, 9)
 ClaimStatus.LayoutOrder = 1
 
 local ClaimTimer = Instance.new("TextLabel", ClaimTab)
@@ -1103,17 +1306,17 @@ ToggleClaimBtn.TextColor3 = autoClaimEnabled and C.bg or C.text
 ToggleClaimBtn.Text = autoClaimEnabled and "● AUTO CLAIM: ON" or "● AUTO CLAIM: OFF"
 ToggleClaimBtn.Font = Enum.Font.GothamBold
 ToggleClaimBtn.TextSize = 11
-Instance.new("UICorner", ToggleClaimBtn).CornerRadius = UDim.new(0, 5)
+Instance.new("UICorner", ToggleClaimBtn).CornerRadius = UDim.new(0, 9)
 ToggleClaimBtn.LayoutOrder = 4
 
 local ClaimNowBtn = Instance.new("TextButton", ClaimTab)
 ClaimNowBtn.Size = UDim2.new(1, -20, 0, 32)
 ClaimNowBtn.BackgroundColor3 = C.card
 ClaimNowBtn.TextColor3 = C.text
-ClaimNowBtn.Text = "⚡ Manual Claim"
+ClaimNowBtn.Text = "Manual Claim"
 ClaimNowBtn.Font = Enum.Font.GothamBold
 ClaimNowBtn.TextSize = 11
-Instance.new("UICorner", ClaimNowBtn).CornerRadius = UDim.new(0, 5)
+Instance.new("UICorner", ClaimNowBtn).CornerRadius = UDim.new(0, 9)
 Instance.new("UIStroke", ClaimNowBtn).Color = C.border
 ClaimNowBtn.LayoutOrder = 5
 
@@ -1145,7 +1348,7 @@ ClaimNowBtn.MouseButton1Click:Connect(function()
         ClaimNowBtn.Text = "✕ Failed"
     end
     task.wait(1.5)
-    ClaimNowBtn.Text = "⚡ Manual Claim"
+    ClaimNowBtn.Text = "Manual Claim"
 end)
 
 -- ==========================================
@@ -1162,10 +1365,10 @@ local AntiAfkBtn = Instance.new("TextButton", ServerTab)
 AntiAfkBtn.Size = UDim2.new(1, -20, 0, 26)
 AntiAfkBtn.BackgroundColor3 = antiAfkEnabled and C.green or C.red
 AntiAfkBtn.TextColor3 = antiAfkEnabled and C.bg or C.text
-AntiAfkBtn.Text = antiAfkEnabled and "🛡️ Anti-AFK: ON" or "🛡️ Anti-AFK: OFF"
+AntiAfkBtn.Text = antiAfkEnabled and "Anti-AFK: ON" or "Anti-AFK: OFF"
 AntiAfkBtn.Font = Enum.Font.GothamBold
 AntiAfkBtn.TextSize = 11
-Instance.new("UICorner", AntiAfkBtn).CornerRadius = UDim.new(0, 5)
+Instance.new("UICorner", AntiAfkBtn).CornerRadius = UDim.new(0, 9)
 AntiAfkBtn.LayoutOrder = 1
 
 AntiAfkBtn.MouseButton1Click:Connect(function()
@@ -1173,11 +1376,11 @@ AntiAfkBtn.MouseButton1Click:Connect(function()
     if antiAfkEnabled then
         AntiAfkBtn.BackgroundColor3 = C.green
         AntiAfkBtn.TextColor3 = C.bg
-        AntiAfkBtn.Text = "🛡️ Anti-AFK: ON"
+        AntiAfkBtn.Text = "Anti-AFK: ON"
     else
         AntiAfkBtn.BackgroundColor3 = C.red
         AntiAfkBtn.TextColor3 = C.text
-        AntiAfkBtn.Text = "🛡️ Anti-AFK: OFF"
+        AntiAfkBtn.Text = "Anti-AFK: OFF"
     end
     saveConfig()
 end)
@@ -1198,7 +1401,7 @@ RejoinRow.Size = UDim2.new(1, -20, 0, 26)
 RejoinRow.BackgroundColor3 = C.surface
 RejoinRow.BorderSizePixel = 0
 RejoinRow.LayoutOrder = 3
-Instance.new("UICorner", RejoinRow).CornerRadius = UDim.new(0, 5)
+Instance.new("UICorner", RejoinRow).CornerRadius = UDim.new(0, 9)
 
 local RejoinBox = Instance.new("TextBox", RejoinRow)
 RejoinBox.Size = UDim2.new(0, 40, 0, 18)
@@ -1208,7 +1411,7 @@ RejoinBox.TextColor3 = C.text
 RejoinBox.Font = Enum.Font.GothamBold
 RejoinBox.TextSize = 10
 RejoinBox.Text = tostring(rejoinMinutes)
-Instance.new("UICorner", RejoinBox).CornerRadius = UDim.new(0, 4)
+Instance.new("UICorner", RejoinBox).CornerRadius = UDim.new(0, 7)
 
 local RejoinMinLbl = Instance.new("TextLabel", RejoinRow)
 RejoinMinLbl.Size = UDim2.new(0, 60, 1, 0)
@@ -1228,7 +1431,7 @@ RejoinToggleBtn.TextColor3 = rejoinTimerEnabled and C.bg or C.text
 RejoinToggleBtn.Text = rejoinTimerEnabled and "ON" or "OFF"
 RejoinToggleBtn.Font = Enum.Font.GothamBold
 RejoinToggleBtn.TextSize = 10
-Instance.new("UICorner", RejoinToggleBtn).CornerRadius = UDim.new(0, 4)
+Instance.new("UICorner", RejoinToggleBtn).CornerRadius = UDim.new(0, 7)
 
 local RejoinStatusLbl = Instance.new("TextLabel", ServerTab)
 RejoinStatusLbl.Size = UDim2.new(1, -20, 0, 14)
@@ -1305,17 +1508,17 @@ SavePosBtn.TextColor3 = C.text
 SavePosBtn.Text = "+ Save Current Location"
 SavePosBtn.Font = Enum.Font.GothamBold
 SavePosBtn.TextSize = 11
-Instance.new("UICorner", SavePosBtn).CornerRadius = UDim.new(0, 5)
+Instance.new("UICorner", SavePosBtn).CornerRadius = UDim.new(0, 9)
 Instance.new("UIStroke", SavePosBtn).Color = C.border
 SavePosBtn.LayoutOrder = 6
 
 local ScrollPos = Instance.new("ScrollingFrame", ServerTab)
-ScrollPos.Size = UDim2.new(1, -20, 0, 75) 
+ScrollPos.Size = UDim2.new(1, -20, 0, 96) 
 ScrollPos.BackgroundColor3 = C.surface
 ScrollPos.ScrollBarThickness = 3
 ScrollPos.ScrollBarImageColor3 = C.accent
 ScrollPos.BorderSizePixel = 0
-Instance.new("UICorner", ScrollPos).CornerRadius = UDim.new(0, 5)
+Instance.new("UICorner", ScrollPos).CornerRadius = UDim.new(0, 9)
 ScrollPos.LayoutOrder = 7
 local ScrollPosList = Instance.new("UIListLayout", ScrollPos)
 ScrollPosList.Padding = UDim.new(0, 4)
@@ -1330,7 +1533,7 @@ local function refreshPositionsList()
         local row = Instance.new("Frame", ScrollPos)
         row.Size = UDim2.new(1, -10, 0, 26)
         row.BackgroundColor3 = C.card
-        Instance.new("UICorner", row).CornerRadius = UDim.new(0, 4)
+        Instance.new("UICorner", row).CornerRadius = UDim.new(0, 7)
         
         local nameBox = Instance.new("TextBox", row)
         nameBox.Size = UDim2.new(1, -65, 1, 0)
@@ -1357,7 +1560,7 @@ local function refreshPositionsList()
         tpBtn.Font = Enum.Font.GothamBold
         tpBtn.TextSize = 10
         tpBtn.Text = "TP"
-        Instance.new("UICorner", tpBtn).CornerRadius = UDim.new(0, 4)
+        Instance.new("UICorner", tpBtn).CornerRadius = UDim.new(0, 7)
         
         tpBtn.MouseButton1Click:Connect(function()
             local r = getRoot()
@@ -1374,7 +1577,7 @@ local function refreshPositionsList()
         delBtn.Font = Enum.Font.GothamBold
         delBtn.TextSize = 10
         delBtn.Text = "X"
-        Instance.new("UICorner", delBtn).CornerRadius = UDim.new(0, 4)
+        Instance.new("UICorner", delBtn).CornerRadius = UDim.new(0, 7)
         
         delBtn.MouseButton1Click:Connect(function()
             table.remove(savedPositions, i)
@@ -1419,7 +1622,7 @@ HatchStatusLbl.Text = autoHatchEnabled and "Status: Active" or "Status: Idle"
 HatchStatusLbl.TextColor3 = C.text
 HatchStatusLbl.Font = Enum.Font.Gotham
 HatchStatusLbl.TextSize = 11
-Instance.new("UICorner", HatchStatusLbl).CornerRadius = UDim.new(0, 5)
+Instance.new("UICorner", HatchStatusLbl).CornerRadius = UDim.new(0, 9)
 HatchStatusLbl.LayoutOrder = 1
 
 local HatchTargetLbl = Instance.new("TextLabel", HatchTab)
@@ -1432,6 +1635,13 @@ HatchTargetLbl.TextSize = 11
 HatchTargetLbl.TextXAlignment = Enum.TextXAlignment.Left
 HatchTargetLbl.LayoutOrder = 2
 
+local EggDropBtn = Instance.new("TextButton", HatchTab)
+EggDropBtn.Size = UDim2.new(1, -20, 0, 30)
+EggDropBtn.BackgroundColor3 = C.card2
+EggDropBtn.Text = "▼  " .. selectedEggName .. "  |  ID " .. tostring(selectedEggId)
+EggDropBtn.LayoutOrder = 3
+_G.NoxarUI.drop(EggDropBtn)
+
 local EggSearchBox = Instance.new("TextBox", HatchTab)
 EggSearchBox.Size = UDim2.new(1, -20, 0, 24)
 EggSearchBox.BackgroundColor3 = C.card
@@ -1442,21 +1652,25 @@ EggSearchBox.Font = Enum.Font.Gotham
 EggSearchBox.TextSize = 11
 EggSearchBox.ClearTextOnFocus = false
 EggSearchBox.Text = ""
-Instance.new("UICorner", EggSearchBox).CornerRadius = UDim.new(0, 5)
+Instance.new("UICorner", EggSearchBox).CornerRadius = UDim.new(0, 9)
 Instance.new("UIPadding", EggSearchBox).PaddingLeft = UDim.new(0, 6)
-EggSearchBox.LayoutOrder = 3 -- between HatchTargetLbl (2) and ScrollHatch (4 below)
+EggSearchBox.LayoutOrder = 4
 
 local ScrollHatch = Instance.new("ScrollingFrame", HatchTab)
-ScrollHatch.Size = UDim2.new(1, -20, 0, 120)
+ScrollHatch.Size = UDim2.new(1, -20, 0, 124)
 ScrollHatch.BackgroundColor3 = C.surface
 ScrollHatch.ScrollBarThickness = 3
 ScrollHatch.ScrollBarImageColor3 = C.accent
 ScrollHatch.BorderSizePixel = 0
-Instance.new("UICorner", ScrollHatch).CornerRadius = UDim.new(0, 5)
-ScrollHatch.LayoutOrder = 4
+Instance.new("UICorner", ScrollHatch).CornerRadius = UDim.new(0, 9)
+ScrollHatch.LayoutOrder = 5
 local ScrollHatchList = Instance.new("UIListLayout", ScrollHatch)
 ScrollHatchList.Padding = UDim.new(0, 3)
 Instance.new("UIPadding", ScrollHatch).PaddingTop = UDim.new(0, 3)
+
+EggSearchBox.Visible = false
+ScrollHatch.Size = UDim2.new(1, -20, 0, 0)
+ScrollHatch.Visible = false
 
 local eggButtons = {} -- {btn = TextButton, searchName = "lowercase egg name"}
 
@@ -1481,21 +1695,22 @@ EggSearchBox:GetPropertyChangedSignal("Text"):Connect(function()
     applyEggFilter(EggSearchBox.Text)
 end)
 
-for _, egg in ipairs(EggDatabase) do
-    local btn = Instance.new("TextButton", ScrollHatch)
-    btn.Size = UDim2.new(1, -10, 0, 24)
-    btn.BackgroundColor3 = C.card
-    btn.TextColor3 = C.text
-    btn.Font = Enum.Font.Gotham
-    btn.TextSize = 10
-    btn.Text = "  " .. egg.name .. " (ID: " .. egg.id .. ")"
-    btn.TextXAlignment = Enum.TextXAlignment.Left
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
+EggDropBtn.MouseButton1Click:Connect(function()
+    local show = not ScrollHatch.Visible
+    EggSearchBox.Visible = show
+    EggDropBtn.Text = show and "▲  Close egg list" or ("▼  " .. selectedEggName .. "  |  ID " .. tostring(selectedEggId))
+    _G.NoxarUI.animateDrop(ScrollHatch, show, 142)
+end)
 
+for _, egg in ipairs(EggDatabase) do
+    local btn = _G.NoxarUI.choiceRow(ScrollHatch, egg.name, "ID " .. tostring(egg.id), selectedEggId == egg.id)
     btn.MouseButton1Click:Connect(function()
         selectedEggId = egg.id
         selectedEggName = egg.name
         HatchTargetLbl.Text = "Target: " .. selectedEggName .. " (" .. selectedEggId .. ")"
+        EggDropBtn.Text = "▼  " .. selectedEggName .. "  |  ID " .. tostring(selectedEggId)
+        EggSearchBox.Visible = false
+        _G.NoxarUI.animateDrop(ScrollHatch, false, 142)
         saveConfig()
     end)
 
@@ -1510,8 +1725,8 @@ ToggleHatchBtn.TextColor3 = autoHatchEnabled and C.bg or C.text
 ToggleHatchBtn.Text = autoHatchEnabled and "● AUTO HATCH: ON" or "● AUTO HATCH: OFF"
 ToggleHatchBtn.Font = Enum.Font.GothamBold
 ToggleHatchBtn.TextSize = 11
-Instance.new("UICorner", ToggleHatchBtn).CornerRadius = UDim.new(0, 5)
-ToggleHatchBtn.LayoutOrder = 5
+Instance.new("UICorner", ToggleHatchBtn).CornerRadius = UDim.new(0, 9)
+ToggleHatchBtn.LayoutOrder = 6
 
 ToggleHatchBtn.MouseButton1Click:Connect(function()
     autoHatchEnabled = not autoHatchEnabled
@@ -1536,7 +1751,7 @@ local BreedDivider = Instance.new("Frame", HatchTab)
 BreedDivider.Size = UDim2.new(1, -20, 0, 1)
 BreedDivider.BackgroundColor3 = C.border
 BreedDivider.BorderSizePixel = 0
-BreedDivider.LayoutOrder = 6
+BreedDivider.LayoutOrder = 7
 
 local BreedHeaderLbl = Instance.new("TextLabel", HatchTab)
 BreedHeaderLbl.Size = UDim2.new(1, -20, 0, 20)
@@ -1546,7 +1761,7 @@ BreedHeaderLbl.TextColor3 = C.text
 BreedHeaderLbl.Font = Enum.Font.GothamBold
 BreedHeaderLbl.TextSize = 12
 BreedHeaderLbl.TextXAlignment = Enum.TextXAlignment.Left
-BreedHeaderLbl.LayoutOrder = 7
+BreedHeaderLbl.LayoutOrder = 8
 
 local BreedStatusLbl = Instance.new("TextLabel", HatchTab)
 BreedStatusLbl.Size = UDim2.new(1, -20, 0, 16)
@@ -1556,7 +1771,24 @@ BreedStatusLbl.TextColor3 = C.sub
 BreedStatusLbl.Font = Enum.Font.Gotham
 BreedStatusLbl.TextSize = 10
 BreedStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
-BreedStatusLbl.LayoutOrder = 8
+BreedStatusLbl.LayoutOrder = 9
+
+function _G.NoxarUI.breedButtonText(kind, open, label, id)
+    -- Use plain ASCII arrows because some Roblox mobile fonts show triangle
+    -- glyphs as boxes. Gender symbols stay intact.
+    local arrow = open and "^" or "v"
+    if kind == "father" then
+        if id then
+            return "♂ Father " .. arrow .. "  " .. tostring(label) .. " (ID " .. tostring(id) .. ")"
+        end
+        return "♂ Father " .. arrow .. "  Select male..."
+    else
+        if id then
+            return "♀ Mother " .. arrow .. "  " .. tostring(label) .. " (ID " .. tostring(id) .. ")"
+        end
+        return "♀ Mother " .. arrow .. "  Select female..."
+    end
+end
 
 -- Father picker button
 local FatherBtn = Instance.new("TextButton", HatchTab)
@@ -1565,13 +1797,11 @@ FatherBtn.BackgroundColor3 = C.card
 FatherBtn.TextColor3 = breedFatherId and C.text or C.sub
 FatherBtn.Font = Enum.Font.Gotham
 FatherBtn.TextSize = 11
-FatherBtn.Text = breedFatherId
-    and ("♂ " .. tostring(breedFatherLabel) .. " (ID " .. tostring(breedFatherId) .. ")")
-    or "♂ Select Father (Male)..."
+FatherBtn.Text = _G.NoxarUI.breedButtonText("father", false, breedFatherLabel, breedFatherId)
 FatherBtn.TextXAlignment = Enum.TextXAlignment.Left
 Instance.new("UIPadding", FatherBtn).PaddingLeft = UDim.new(0, 8)
-Instance.new("UICorner", FatherBtn).CornerRadius = UDim.new(0, 5)
-FatherBtn.LayoutOrder = 9
+Instance.new("UICorner", FatherBtn).CornerRadius = UDim.new(0, 9)
+FatherBtn.LayoutOrder = 10
 
 -- Mother picker button
 local MotherBtn = Instance.new("TextButton", HatchTab)
@@ -1580,13 +1810,11 @@ MotherBtn.BackgroundColor3 = C.card
 MotherBtn.TextColor3 = breedMotherId and C.text or C.sub
 MotherBtn.Font = Enum.Font.Gotham
 MotherBtn.TextSize = 11
-MotherBtn.Text = breedMotherId
-    and ("♀ " .. tostring(breedMotherLabel) .. " (ID " .. tostring(breedMotherId) .. ")")
-    or "♀ Select Mother (Female)..."
+MotherBtn.Text = _G.NoxarUI.breedButtonText("mother", false, breedMotherLabel, breedMotherId)
 MotherBtn.TextXAlignment = Enum.TextXAlignment.Left
 Instance.new("UIPadding", MotherBtn).PaddingLeft = UDim.new(0, 8)
-Instance.new("UICorner", MotherBtn).CornerRadius = UDim.new(0, 5)
-MotherBtn.LayoutOrder = 10
+Instance.new("UICorner", MotherBtn).CornerRadius = UDim.new(0, 9)
+MotherBtn.LayoutOrder = 11
 
 -- Dropdown list frame (shared, repurposed for father/mother based on
 -- which button was pressed last)
@@ -1598,17 +1826,32 @@ BreedListFrame.ScrollBarThickness = 3
 BreedListFrame.ScrollBarImageColor3 = C.accent
 BreedListFrame.Visible = false
 BreedListFrame.ClipsDescendants = true
-BreedListFrame.LayoutOrder = 11
-Instance.new("UICorner", BreedListFrame).CornerRadius = UDim.new(0, 5)
+BreedListFrame.LayoutOrder = 12
+Instance.new("UICorner", BreedListFrame).CornerRadius = UDim.new(0, 9)
+_G.NoxarUI.stroke(BreedListFrame, C.borderSoft, 0.5, 1)
 local BreedListLayout = Instance.new("UIListLayout", BreedListFrame)
 BreedListLayout.Padding = UDim.new(0, 2)
 
 local breedListOpenFor = nil -- "father" or "mother" or nil
 
 local function closeBreedList()
+    -- Important: collapse the list BEFORE restoring LayoutOrder.
+    -- If we move BreedListFrame back under Mother while it is still visible,
+    -- the father list flashes under the Mother selector for a split second.
+    local closingFrom = breedListOpenFor
     breedListOpenFor = nil
-    BreedListFrame.Visible = false
-    BreedListFrame.Size = UDim2.new(1, -20, 0, 0)
+    FatherBtn.Text = _G.NoxarUI.breedButtonText("father", false, breedFatherLabel, breedFatherId)
+    MotherBtn.Text = _G.NoxarUI.breedButtonText("mother", false, breedMotherLabel, breedMotherId)
+    _G.NoxarUI.animateDrop(BreedListFrame, false, 0)
+
+    task.delay(0.18, function()
+        -- Only restore the normal order if another selector was not opened
+        -- while the close animation was running.
+        if breedListOpenFor == nil then
+            MotherBtn.LayoutOrder = 11
+            BreedListFrame.LayoutOrder = 12
+        end
+    end)
 end
 
 local function populateBreedList(kind)
@@ -1620,36 +1863,26 @@ local function populateBreedList(kind)
     local list = (kind == "father") and males or females
 
     if #list == 0 then
-        local emptyLbl = Instance.new("TextButton", BreedListFrame)
-        emptyLbl.Size = UDim2.new(1, 0, 0, 26)
-        emptyLbl.BackgroundTransparency = 1
-        emptyLbl.Text = "No eligible " .. (kind == "father" and "male" or "female") .. " pets found"
-        emptyLbl.TextColor3 = C.sub
-        emptyLbl.Font = Enum.Font.Gotham
-        emptyLbl.TextSize = 10
-        emptyLbl.AutoButtonColor = false
+        _G.NoxarUI.choiceRow(
+            BreedListFrame,
+            "No eligible " .. (kind == "father" and "male" or "female") .. " pets found",
+            "empty",
+            false
+        )
     else
         for _, entry in ipairs(list) do
-            local row = Instance.new("TextButton", BreedListFrame)
-            row.Size = UDim2.new(1, 0, 0, 26)
-            row.BackgroundColor3 = C.card
-            row.TextColor3 = C.text
-            row.Font = Enum.Font.Gotham
-            row.TextSize = 10
-            row.Text = "  " .. entry.name .. "  (Grade " .. tostring(entry.grade) .. ", ID " .. tostring(entry.id) .. ")"
-            row.TextXAlignment = Enum.TextXAlignment.Left
-            Instance.new("UICorner", row).CornerRadius = UDim.new(0, 4)
-
+            local meta = "Grade " .. tostring(entry.grade)
+            local row = _G.NoxarUI.choiceRow(BreedListFrame, entry.name, meta, false)
             row.MouseButton1Click:Connect(function()
                 if kind == "father" then
                     breedFatherId = entry.id
                     breedFatherLabel = entry.name
-                    FatherBtn.Text = "♂ " .. entry.name .. " (ID " .. tostring(entry.id) .. ")"
+                    FatherBtn.Text = _G.NoxarUI.breedButtonText("father", false, entry.name, entry.id)
                     FatherBtn.TextColor3 = C.text
                 else
                     breedMotherId = entry.id
                     breedMotherLabel = entry.name
-                    MotherBtn.Text = "♀ " .. entry.name .. " (ID " .. tostring(entry.id) .. ")"
+                    MotherBtn.Text = _G.NoxarUI.breedButtonText("mother", false, entry.name, entry.id)
                     MotherBtn.TextColor3 = C.text
                 end
                 closeBreedList()
@@ -1658,12 +1891,12 @@ local function populateBreedList(kind)
         end
     end
 
-    -- resize scroll frame to fit up to ~5 rows, then scroll
+    -- Animated dropdown, matching the other selector lists.
     local rowCount = math.max(#list, 1)
     local shownRows = math.min(rowCount, 5)
-    BreedListFrame.Size = UDim2.new(1, -20, 0, shownRows * 28)
-    BreedListFrame.CanvasSize = UDim2.new(0, 0, 0, rowCount * 28)
-    BreedListFrame.Visible = true
+    local targetHeight = shownRows * 38
+    BreedListFrame.CanvasSize = UDim2.new(0, 0, 0, rowCount * 38 + 6)
+    _G.NoxarUI.animateDrop(BreedListFrame, true, targetHeight)
 end
 
 FatherBtn.MouseButton1Click:Connect(function()
@@ -1671,6 +1904,12 @@ FatherBtn.MouseButton1Click:Connect(function()
         closeBreedList()
     else
         breedListOpenFor = "father"
+        -- Put the dropdown directly under the father selector, then push the
+        -- mother selector down. This fixes the list appearing under Mother.
+        BreedListFrame.LayoutOrder = 11
+        MotherBtn.LayoutOrder = 12
+        FatherBtn.Text = _G.NoxarUI.breedButtonText("father", true, breedFatherLabel, breedFatherId)
+        MotherBtn.Text = _G.NoxarUI.breedButtonText("mother", false, breedMotherLabel, breedMotherId)
         populateBreedList("father")
     end
 end)
@@ -1680,6 +1919,10 @@ MotherBtn.MouseButton1Click:Connect(function()
         closeBreedList()
     else
         breedListOpenFor = "mother"
+        MotherBtn.LayoutOrder = 11
+        BreedListFrame.LayoutOrder = 12
+        FatherBtn.Text = _G.NoxarUI.breedButtonText("father", false, breedFatherLabel, breedFatherId)
+        MotherBtn.Text = _G.NoxarUI.breedButtonText("mother", true, breedMotherLabel, breedMotherId)
         populateBreedList("mother")
     end
 end)
@@ -1692,8 +1935,8 @@ BreedBtn.TextColor3 = C.text
 BreedBtn.Font = Enum.Font.GothamBold
 BreedBtn.TextSize = 11
 BreedBtn.Text = "🧬 Start Breeding"
-Instance.new("UICorner", BreedBtn).CornerRadius = UDim.new(0, 5)
-BreedBtn.LayoutOrder = 12
+Instance.new("UICorner", BreedBtn).CornerRadius = UDim.new(0, 9)
+BreedBtn.LayoutOrder = 13
 
 BreedBtn.MouseButton1Click:Connect(function()
     if not breedFatherId or not breedMotherId then
@@ -1728,8 +1971,8 @@ AutoBreedHatchBtn.TextColor3 = C.text
 AutoBreedHatchBtn.Font = Enum.Font.GothamBold
 AutoBreedHatchBtn.TextSize = 11
 AutoBreedHatchBtn.Text = autoBreedHatchEnabled and "● AUTO-COLLECT BRED EGG: ON" or "● AUTO-COLLECT BRED EGG: OFF"
-Instance.new("UICorner", AutoBreedHatchBtn).CornerRadius = UDim.new(0, 5)
-AutoBreedHatchBtn.LayoutOrder = 13
+Instance.new("UICorner", AutoBreedHatchBtn).CornerRadius = UDim.new(0, 9)
+AutoBreedHatchBtn.LayoutOrder = 14
 
 AutoBreedHatchBtn.MouseButton1Click:Connect(function()
     autoBreedHatchEnabled = not autoBreedHatchEnabled
@@ -1754,8 +1997,8 @@ AutoBreedBtn.TextColor3 = C.text
 AutoBreedBtn.Font = Enum.Font.GothamBold
 AutoBreedBtn.TextSize = 11
 AutoBreedBtn.Text = autoBreedEnabled and "● AUTO BREED LOOP: ON" or "● AUTO BREED LOOP: OFF"
-Instance.new("UICorner", AutoBreedBtn).CornerRadius = UDim.new(0, 5)
-AutoBreedBtn.LayoutOrder = 14
+Instance.new("UICorner", AutoBreedBtn).CornerRadius = UDim.new(0, 9)
+AutoBreedBtn.LayoutOrder = 15
 
 AutoBreedBtn.MouseButton1Click:Connect(function()
     if not autoBreedEnabled and (not breedFatherId or not breedMotherId) then
@@ -1888,37 +2131,45 @@ AreaFarmHintLbl.TextSize = 10
 AreaFarmHintLbl.TextWrapped = true
 AreaFarmHintLbl.LayoutOrder = 1
 
+local AreaDropBtn = Instance.new("TextButton", AreaFarmTab)
+AreaDropBtn.Size = UDim2.new(1, -20, 0, 30)
+AreaDropBtn.BackgroundColor3 = C.card2
+AreaDropBtn.Text = "▼  Area teleports"
+AreaDropBtn.LayoutOrder = 2
+_G.NoxarUI.drop(AreaDropBtn)
+
 local ScrollAreaFarm = Instance.new("ScrollingFrame", AreaFarmTab)
-ScrollAreaFarm.Size = UDim2.new(1, -20, 0, 90)
+ScrollAreaFarm.Size = UDim2.new(1, -20, 0, 98)
 ScrollAreaFarm.BackgroundColor3 = C.surface
 ScrollAreaFarm.ScrollBarThickness = 3
 ScrollAreaFarm.ScrollBarImageColor3 = C.accent
 ScrollAreaFarm.BorderSizePixel = 0
-Instance.new("UICorner", ScrollAreaFarm).CornerRadius = UDim.new(0, 5)
-ScrollAreaFarm.LayoutOrder = 2
+Instance.new("UICorner", ScrollAreaFarm).CornerRadius = UDim.new(0, 9)
+ScrollAreaFarm.LayoutOrder = 3
+ScrollAreaFarm.Size = UDim2.new(1, -20, 0, 0)
+ScrollAreaFarm.Visible = false
 local ScrollAreaFarmList = Instance.new("UIListLayout", ScrollAreaFarm)
 ScrollAreaFarmList.Padding = UDim.new(0, 3)
 Instance.new("UIPadding", ScrollAreaFarm).PaddingTop = UDim.new(0, 3)
 
-for _, area in ipairs(SortedAreaFarmAreas) do
-    local areaBtn = Instance.new("TextButton", ScrollAreaFarm)
-    areaBtn.Size = UDim2.new(1, -10, 0, 24)
-    areaBtn.BackgroundColor3 = C.card
-    areaBtn.TextColor3 = C.text
-    areaBtn.Font = Enum.Font.GothamSemibold
-    areaBtn.TextSize = 10
-    areaBtn.Text = "  " .. area.Name
-    areaBtn.TextXAlignment = Enum.TextXAlignment.Left
-    areaBtn.BorderSizePixel = 0
-    Instance.new("UICorner", areaBtn).CornerRadius = UDim.new(0, 4)
+AreaDropBtn.MouseButton1Click:Connect(function()
+    local open = not ScrollAreaFarm.Visible
+    AreaDropBtn.Text = open and "▲  Close area list" or "▼  Area teleports"
+    _G.NoxarUI.animateDrop(ScrollAreaFarm, open, 112)
+end)
 
+for _, area in ipairs(SortedAreaFarmAreas) do
+    local areaBtn = _G.NoxarUI.choiceRow(ScrollAreaFarm, area.Name, "ID " .. tostring(area.ID), false)
     areaBtn.MouseButton1Click:Connect(function()
-        areaBtn.TextColor3 = C.accent
+        local oldBg = areaBtn.BackgroundColor3
+        areaBtn.BackgroundColor3 = Color3.fromRGB(36, 44, 68)
         pcall(function()
             DataPullFunc:InvokeServer("AreaTeleportToRegionChannel", area.ID)
         end)
         task.wait(0.2)
-        areaBtn.TextColor3 = C.text
+        areaBtn.BackgroundColor3 = oldBg
+        AreaDropBtn.Text = "▼  Last TP: " .. area.Name
+        _G.NoxarUI.animateDrop(ScrollAreaFarm, false, 112)
     end)
 end
 ScrollAreaFarm.CanvasSize = UDim2.new(0, 0, 0, ScrollAreaFarmList.AbsoluteContentSize.Y + 6)
@@ -1928,17 +2179,28 @@ local FarmSpotDivider = Instance.new("Frame", AreaFarmTab)
 FarmSpotDivider.Size = UDim2.new(1, -20, 0, 1)
 FarmSpotDivider.BackgroundColor3 = C.border
 FarmSpotDivider.BorderSizePixel = 0
-FarmSpotDivider.LayoutOrder = 3
+FarmSpotDivider.LayoutOrder = 4
 
 local FarmSpotLbl = Instance.new("TextLabel", AreaFarmTab)
 FarmSpotLbl.Size = UDim2.new(1, -20, 0, 16)
 FarmSpotLbl.BackgroundTransparency = 1
-FarmSpotLbl.Text = "🌾 Farming Spot"
+FarmSpotLbl.Text = "Farming Spot"
 FarmSpotLbl.TextColor3 = C.gold
 FarmSpotLbl.Font = Enum.Font.GothamBold
 FarmSpotLbl.TextSize = 11
 FarmSpotLbl.TextXAlignment = Enum.TextXAlignment.Left
-FarmSpotLbl.LayoutOrder = 4
+FarmSpotLbl.LayoutOrder = 5
+
+local FarmSpotInfoLbl = Instance.new("TextLabel", AreaFarmTab)
+FarmSpotInfoLbl.Size = UDim2.new(1, -20, 0, 28)
+FarmSpotInfoLbl.BackgroundTransparency = 1
+FarmSpotInfoLbl.Text = "Boss Loop will return you to this saved spot after each queue finishes, then resume farming if it was running."
+FarmSpotInfoLbl.TextColor3 = C.sub
+FarmSpotInfoLbl.Font = Enum.Font.Gotham
+FarmSpotInfoLbl.TextSize = 9
+FarmSpotInfoLbl.TextWrapped = true
+FarmSpotInfoLbl.TextXAlignment = Enum.TextXAlignment.Left
+FarmSpotInfoLbl.LayoutOrder = 6
 
 local function farmSpotStatusText()
     if farmingSpot then
@@ -1955,12 +2217,12 @@ FarmSpotStatusLbl.TextColor3 = farmingSpot and C.green or C.sub
 FarmSpotStatusLbl.Font = Enum.Font.GothamSemibold
 FarmSpotStatusLbl.TextSize = 10
 FarmSpotStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
-FarmSpotStatusLbl.LayoutOrder = 5
+FarmSpotStatusLbl.LayoutOrder = 7
 
 local FarmSpotRow = Instance.new("Frame", AreaFarmTab)
 FarmSpotRow.Size = UDim2.new(1, -20, 0, 28)
 FarmSpotRow.BackgroundTransparency = 1
-FarmSpotRow.LayoutOrder = 6
+FarmSpotRow.LayoutOrder = 8
 
 local SaveFarmSpotBtn = Instance.new("TextButton", FarmSpotRow)
 SaveFarmSpotBtn.Size = UDim2.new(0.34, -4, 1, 0)
@@ -1971,7 +2233,7 @@ SaveFarmSpotBtn.Font = Enum.Font.GothamBold
 SaveFarmSpotBtn.TextSize = 10
 SaveFarmSpotBtn.Text = "Save"
 SaveFarmSpotBtn.BorderSizePixel = 0
-Instance.new("UICorner", SaveFarmSpotBtn).CornerRadius = UDim.new(0, 5)
+Instance.new("UICorner", SaveFarmSpotBtn).CornerRadius = UDim.new(0, 9)
 
 local TPFarmSpotBtn = Instance.new("TextButton", FarmSpotRow)
 TPFarmSpotBtn.Size = UDim2.new(0.33, -4, 1, 0)
@@ -1982,7 +2244,7 @@ TPFarmSpotBtn.Font = Enum.Font.GothamBold
 TPFarmSpotBtn.TextSize = 10
 TPFarmSpotBtn.Text = "TP"
 TPFarmSpotBtn.BorderSizePixel = 0
-Instance.new("UICorner", TPFarmSpotBtn).CornerRadius = UDim.new(0, 5)
+Instance.new("UICorner", TPFarmSpotBtn).CornerRadius = UDim.new(0, 9)
 
 local ClearFarmSpotBtn = Instance.new("TextButton", FarmSpotRow)
 ClearFarmSpotBtn.Size = UDim2.new(0.33, -4, 1, 0)
@@ -1993,7 +2255,7 @@ ClearFarmSpotBtn.Font = Enum.Font.GothamBold
 ClearFarmSpotBtn.TextSize = 10
 ClearFarmSpotBtn.Text = "Clear"
 ClearFarmSpotBtn.BorderSizePixel = 0
-Instance.new("UICorner", ClearFarmSpotBtn).CornerRadius = UDim.new(0, 5)
+Instance.new("UICorner", ClearFarmSpotBtn).CornerRadius = UDim.new(0, 9)
 
 -- Teleports to a saved AreaFarm spot: fires the area-change remote for
 -- its AreaID, waits, then snaps the character to the exact saved CFrame.
@@ -2019,7 +2281,7 @@ local function teleportToAreaFarmSpot(spot, skipSettle, preSnapWait)
             if hum then
                 for i = 1, 2 do
                     hum:ChangeState(Enum.HumanoidStateType.Jumping)
-                    task.wait(5) -- short gap so the second jump registers as a new jump
+                    task.wait(6) -- 6s gap before the second anti-AFK jump
                 end
             end
         end
@@ -2060,7 +2322,9 @@ TPFarmSpotBtn.MouseButton1Click:Connect(function()
     if farmingSpot then
         FarmSpotStatusLbl.Text = "Teleporting..."
         FarmSpotStatusLbl.TextColor3 = C.sub
-        teleportToAreaFarmSpot(farmingSpot, false, 7)
+        -- Wait 5s for area loading, snap to the exact saved spot, then run
+        -- the anti-AFK jumps in the background so status updates immediately.
+        teleportToAreaFarmSpot(farmingSpot, true, 5)
         FarmSpotStatusLbl.Text = farmSpotStatusText()
         FarmSpotStatusLbl.TextColor3 = C.green
     else
@@ -2113,7 +2377,7 @@ local BossLoopDivider = Instance.new("Frame", AreaFarmTab)
 BossLoopDivider.Size = UDim2.new(1, -20, 0, 1)
 BossLoopDivider.BackgroundColor3 = C.border
 BossLoopDivider.BorderSizePixel = 0
-BossLoopDivider.LayoutOrder = 7
+BossLoopDivider.LayoutOrder = 9
 
 local BossLoopTitleLbl = Instance.new("TextLabel", AreaFarmTab)
 BossLoopTitleLbl.Size = UDim2.new(1, -20, 0, 16)
@@ -2123,7 +2387,7 @@ BossLoopTitleLbl.TextColor3 = C.gold
 BossLoopTitleLbl.Font = Enum.Font.GothamBold
 BossLoopTitleLbl.TextSize = 11
 BossLoopTitleLbl.TextXAlignment = Enum.TextXAlignment.Left
-BossLoopTitleLbl.LayoutOrder = 8
+BossLoopTitleLbl.LayoutOrder = 10
 
 local BossListHintLbl = Instance.new("TextLabel", AreaFarmTab)
 BossListHintLbl.Size = UDim2.new(1, -20, 0, 14)
@@ -2134,45 +2398,60 @@ BossListHintLbl.Font = Enum.Font.Gotham
 BossListHintLbl.TextSize = 9
 BossListHintLbl.TextWrapped = true
 BossListHintLbl.TextXAlignment = Enum.TextXAlignment.Left
-BossListHintLbl.LayoutOrder = 9
+BossListHintLbl.LayoutOrder = 11
+
+function _G.NoxarUI.bossCount(tbl)
+    local n = 0
+    for _, on in pairs(tbl) do if on then n += 1 end end
+    return n
+end
+
+local BossDropBtn = Instance.new("TextButton", AreaFarmTab)
+BossDropBtn.Size = UDim2.new(1, -20, 0, 30)
+BossDropBtn.BackgroundColor3 = C.card2
+BossDropBtn.Text = "▼  Boss checklist  (" .. tostring(_G.NoxarUI.bossCount(selectedBosses)) .. ")"
+BossDropBtn.LayoutOrder = 12
+_G.NoxarUI.drop(BossDropBtn)
 
 local BossListScroll = Instance.new("ScrollingFrame", AreaFarmTab)
-BossListScroll.Size = UDim2.new(1, -20, 0, 130)
+BossListScroll.Size = UDim2.new(1, -20, 0, 126)
 BossListScroll.BackgroundColor3 = C.card
 BossListScroll.BorderSizePixel = 0
 BossListScroll.ScrollBarThickness = 3
 BossListScroll.ScrollBarImageColor3 = C.accent
 BossListScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
 BossListScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-BossListScroll.LayoutOrder = 10
+BossListScroll.LayoutOrder = 13
 Instance.new("UICorner", BossListScroll).CornerRadius = UDim.new(0, 6)
 
+BossListScroll.Size = UDim2.new(1, -20, 0, 0)
+BossListScroll.Visible = false
 local BossListLayout = Instance.new("UIListLayout", BossListScroll)
 BossListLayout.SortOrder = Enum.SortOrder.LayoutOrder
 BossListLayout.Padding = UDim.new(0, 3)
 Instance.new("UIPadding", BossListScroll).PaddingTop = UDim.new(0, 4)
 
+BossDropBtn.MouseButton1Click:Connect(function()
+    local open = not BossListScroll.Visible
+    BossDropBtn.Text = open and "▲  Close boss checklist" or ("▼  Boss checklist  (" .. tostring(_G.NoxarUI.bossCount(selectedBosses)) .. ")")
+    _G.NoxarUI.animateDrop(BossListScroll, open, 150)
+end)
+
 for i, boss in ipairs(BOSS_LIST) do
-    local row = Instance.new("TextButton", BossListScroll)
-    row.Size = UDim2.new(1, -8, 0, 24)
-    row.Position = UDim2.new(0, 4, 0, 0)
-    row.BackgroundColor3 = selectedBosses[boss.name] and C.green or C.red
-    row.BorderSizePixel = 0
-    row.AutoButtonColor = false
-    row.Font = Enum.Font.Gotham
-    row.TextSize = 10
-    row.TextColor3 = C.text
-    row.TextXAlignment = Enum.TextXAlignment.Left
-    local tierSuffix = (boss.tier == "Ultra") and "  [Ultra]" or ""
-    row.Text = (selectedBosses[boss.name] and "   ●  " or "   ○  ") .. boss.name .. tierSuffix .. "  —  " .. boss.area
+    local tierText = (boss.tier == "Ultra") and "Ultra" or "Boss"
+    local selected = selectedBosses[boss.name] and true or false
+    local row, _, pill, bar = _G.NoxarUI.choiceRow(BossListScroll, boss.name, selected and "Selected" or tierText, selected)
     row.LayoutOrder = i
-    Instance.new("UICorner", row).CornerRadius = UDim.new(0, 4)
 
     row.MouseButton1Click:Connect(function()
         local nowOn = not selectedBosses[boss.name]
         selectedBosses[boss.name] = nowOn or nil
-        row.BackgroundColor3 = nowOn and C.green or C.red
-        row.Text = (nowOn and "   ●  " or "   ○  ") .. boss.name .. tierSuffix .. "  —  " .. boss.area
+        _G.NoxarUI.updateChoiceRow(row, pill, bar, nowOn, "Selected", tierText)
+        if BossListScroll.Visible then
+            BossDropBtn.Text = "▲  Close boss checklist"
+        else
+            BossDropBtn.Text = "▼  Boss checklist  (" .. tostring(_G.NoxarUI.bossCount(selectedBosses)) .. ")"
+        end
         saveConfig()
     end)
 end
@@ -2185,7 +2464,7 @@ BossLoopLiveStatusLbl.TextColor3 = C.sub
 BossLoopLiveStatusLbl.Font = Enum.Font.Gotham
 BossLoopLiveStatusLbl.TextSize = 10
 BossLoopLiveStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
-BossLoopLiveStatusLbl.LayoutOrder = 11
+BossLoopLiveStatusLbl.LayoutOrder = 14
 
 local ToggleBossLoopBtn = Instance.new("TextButton", AreaFarmTab)
 ToggleBossLoopBtn.Size = UDim2.new(1, -20, 0, 30)
@@ -2195,8 +2474,8 @@ ToggleBossLoopBtn.Font = Enum.Font.GothamBold
 ToggleBossLoopBtn.TextSize = 11
 ToggleBossLoopBtn.Text = bossLoopEnabled and "● BOSS LOOP: ON" or "● BOSS LOOP: OFF"
 ToggleBossLoopBtn.BorderSizePixel = 0
-Instance.new("UICorner", ToggleBossLoopBtn).CornerRadius = UDim.new(0, 5)
-ToggleBossLoopBtn.LayoutOrder = 12
+Instance.new("UICorner", ToggleBossLoopBtn).CornerRadius = UDim.new(0, 9)
+ToggleBossLoopBtn.LayoutOrder = 15
 
 ToggleBossLoopBtn.MouseButton1Click:Connect(function()
     bossLoopEnabled = not bossLoopEnabled
@@ -2412,7 +2691,9 @@ spawnTracked("bossLoop", function()
             if farmingSpot then
                 BossLoopLiveStatusLbl.Text = "Status: Queue empty — returning to Farming Spot..."
                 BossLoopLiveStatusLbl.TextColor3 = C.sub
-                teleportToAreaFarmSpot(farmingSpot, false, 7)
+                -- Wait 5s for area loading, snap back to the exact Farming Spot, then
+                -- anti-AFK jumps continue in the background so farming resumes sooner.
+                teleportToAreaFarmSpot(farmingSpot, true, 5)
             end
             if wasFarmingBeforeBossFight then
                 toggleFarming(true) -- cleanly restart Auto-Farm (spawns a fresh farmLoop thread, updates its button)
@@ -2431,44 +2712,49 @@ end)
 -- ==========================================
 TabFarmBtn.MouseButton1Click:Connect(function()
     FarmTab.Visible = true; ClaimTab.Visible = false; ServerTab.Visible = false; HatchTab.Visible = false; AreaFarmTab.Visible = false
-    TabFarmBtn.TextColor3 = C.text; TabClaimBtn.TextColor3 = C.sub; TabServerBtn.TextColor3 = C.sub; TabHatchBtn.TextColor3 = C.sub; TabAreaFarmBtn.TextColor3 = C.sub
-    TS:Create(TabIndicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new(0, 0, 1, -2)}):Play()
+    _G.NoxarUI.nav(TabFarmBtn, true); _G.NoxarUI.nav(TabAreaFarmBtn, false); _G.NoxarUI.nav(TabHatchBtn, false); _G.NoxarUI.nav(TabClaimBtn, false); _G.NoxarUI.nav(TabServerBtn, false)
+    TS:Create(TabIndicator, TweenInfo.new(0.18, Enum.EasingStyle.Quad), {Position = UDim2.new(0, 0, 0, 10)}):Play()
     closeBreedList()
 end)
 
-TabClaimBtn.MouseButton1Click:Connect(function()
-    FarmTab.Visible = false; ClaimTab.Visible = true; ServerTab.Visible = false; HatchTab.Visible = false; AreaFarmTab.Visible = false
-    TabClaimBtn.TextColor3 = C.text; TabFarmBtn.TextColor3 = C.sub; TabServerBtn.TextColor3 = C.sub; TabHatchBtn.TextColor3 = C.sub; TabAreaFarmBtn.TextColor3 = C.sub
-    TS:Create(TabIndicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new(0.2, 0, 1, -2)}):Play()
-    closeBreedList()
-end)
-
-TabServerBtn.MouseButton1Click:Connect(function()
-    FarmTab.Visible = false; ClaimTab.Visible = false; ServerTab.Visible = true; HatchTab.Visible = false; AreaFarmTab.Visible = false
-    TabServerBtn.TextColor3 = C.text; TabFarmBtn.TextColor3 = C.sub; TabClaimBtn.TextColor3 = C.sub; TabHatchBtn.TextColor3 = C.sub; TabAreaFarmBtn.TextColor3 = C.sub
-    TS:Create(TabIndicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new(0.4, 0, 1, -2)}):Play()
+TabAreaFarmBtn.MouseButton1Click:Connect(function()
+    FarmTab.Visible = false; ClaimTab.Visible = false; ServerTab.Visible = false; HatchTab.Visible = false; AreaFarmTab.Visible = true
+    _G.NoxarUI.nav(TabFarmBtn, false); _G.NoxarUI.nav(TabAreaFarmBtn, true); _G.NoxarUI.nav(TabHatchBtn, false); _G.NoxarUI.nav(TabClaimBtn, false); _G.NoxarUI.nav(TabServerBtn, false)
+    TS:Create(TabIndicator, TweenInfo.new(0.18, Enum.EasingStyle.Quad), {Position = UDim2.new(0, 0, 0, 52)}):Play()
     closeBreedList()
 end)
 
 TabHatchBtn.MouseButton1Click:Connect(function()
     FarmTab.Visible = false; ClaimTab.Visible = false; ServerTab.Visible = false; HatchTab.Visible = true; AreaFarmTab.Visible = false
-    TabHatchBtn.TextColor3 = C.text; TabFarmBtn.TextColor3 = C.sub; TabClaimBtn.TextColor3 = C.sub; TabServerBtn.TextColor3 = C.sub; TabAreaFarmBtn.TextColor3 = C.sub
-    TS:Create(TabIndicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new(0.6, 0, 1, -2)}):Play()
+    _G.NoxarUI.nav(TabFarmBtn, false); _G.NoxarUI.nav(TabAreaFarmBtn, false); _G.NoxarUI.nav(TabHatchBtn, true); _G.NoxarUI.nav(TabClaimBtn, false); _G.NoxarUI.nav(TabServerBtn, false)
+    TS:Create(TabIndicator, TweenInfo.new(0.18, Enum.EasingStyle.Quad), {Position = UDim2.new(0, 0, 0, 94)}):Play()
 end)
 
-TabAreaFarmBtn.MouseButton1Click:Connect(function()
-    FarmTab.Visible = false; ClaimTab.Visible = false; ServerTab.Visible = false; HatchTab.Visible = false; AreaFarmTab.Visible = true
-    TabAreaFarmBtn.TextColor3 = C.text; TabFarmBtn.TextColor3 = C.sub; TabClaimBtn.TextColor3 = C.sub; TabServerBtn.TextColor3 = C.sub; TabHatchBtn.TextColor3 = C.sub
-    TS:Create(TabIndicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new(0.8, 0, 1, -2)}):Play()
+TabClaimBtn.MouseButton1Click:Connect(function()
+    FarmTab.Visible = false; ClaimTab.Visible = true; ServerTab.Visible = false; HatchTab.Visible = false; AreaFarmTab.Visible = false
+    _G.NoxarUI.nav(TabFarmBtn, false); _G.NoxarUI.nav(TabAreaFarmBtn, false); _G.NoxarUI.nav(TabHatchBtn, false); _G.NoxarUI.nav(TabClaimBtn, true); _G.NoxarUI.nav(TabServerBtn, false)
+    TS:Create(TabIndicator, TweenInfo.new(0.18, Enum.EasingStyle.Quad), {Position = UDim2.new(0, 0, 0, 136)}):Play()
+    closeBreedList()
+end)
+
+TabServerBtn.MouseButton1Click:Connect(function()
+    FarmTab.Visible = false; ClaimTab.Visible = false; ServerTab.Visible = true; HatchTab.Visible = false; AreaFarmTab.Visible = false
+    _G.NoxarUI.nav(TabFarmBtn, false); _G.NoxarUI.nav(TabAreaFarmBtn, false); _G.NoxarUI.nav(TabHatchBtn, false); _G.NoxarUI.nav(TabClaimBtn, false); _G.NoxarUI.nav(TabServerBtn, true)
+    TS:Create(TabIndicator, TweenInfo.new(0.18, Enum.EasingStyle.Quad), {Position = UDim2.new(0, 0, 0, 178)}):Play()
     closeBreedList()
 end)
 
 MinBtn.MouseButton1Click:Connect(function()
     isMinimized = not isMinimized
-    TS:Create(Main, TweenInfo.new(0.25, Enum.EasingStyle.Cubic), {Size = isMinimized and miniSize or normalSize}):Play()
-    MinBtn.Text = isMinimized and "▢" or "—"
+    -- Minimized mode now keeps the SAME width as the open panel and only
+    -- collapses the height to the titlebar. This prevents the close button
+    -- from shifting inward and being accidentally tapped.
+    TS:Create(Main, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = isMinimized and miniSize or normalSize}):Play()
+    MinBtn.Text = isMinimized and "+" or "—"
     TabBar.Visible = not isMinimized
     ContentArea.Visible = not isMinimized
+    HeaderBottomFix.Visible = not isMinimized
+    TitleLbl.Text = "Noxar Fluent Pro"
 end)
 
 CloseBtn.MouseButton1Click:Connect(function()
