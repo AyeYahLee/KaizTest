@@ -116,6 +116,7 @@ local C = {
 local normalSize = UDim2.new(0, 386, 0, 326)
 local miniSize = UDim2.new(0, 386, 0, 42)
 local isMinimized = false
+local uiScaleValue = 1 -- saved manual UI size, adjustable in Settings
 
 -- Core Farm/Claim States (Defaults)
 local ATTACK_DELAY = 0.05
@@ -328,6 +329,7 @@ local function saveConfig()
             rejoinMins = rejoinMinutes,
             positions = savedPositions,
             antiAfk = antiAfkEnabled,
+            uiScale = uiScaleValue,
             autoHatch = autoHatchEnabled,
             eggId = selectedEggId,
             eggName = selectedEggName,
@@ -362,6 +364,7 @@ local function loadConfig()
             if data.rejoinMins ~= nil then rejoinMinutes = data.rejoinMins end
             if data.positions ~= nil then savedPositions = data.positions end
             if data.antiAfk ~= nil then antiAfkEnabled = data.antiAfk end 
+            if data.uiScale ~= nil then uiScaleValue = math.clamp(tonumber(data.uiScale) or 1, 0.75, 1.20) end
             if data.autoHatch ~= nil then autoHatchEnabled = data.autoHatch end
             if data.eggId ~= nil then selectedEggId = data.eggId end
             if data.eggName ~= nil then selectedEggName = data.eggName end
@@ -787,58 +790,6 @@ function _G.NoxarUI.choiceRow(parent, title, meta, active)
     return row, name, pill, bar
 end
 
-function _G.NoxarUI.toggleRow(parent, title, subtitle, on)
-    local row = Instance.new("TextButton", parent)
-    row.Size = UDim2.new(1, -8, 0, 40)
-    row.BackgroundColor3 = Color3.fromRGB(17, 21, 32)
-    row.BorderSizePixel = 0
-    row.AutoButtonColor = false
-    row.Text = ""
-    _G.NoxarUI.corner(row, 10)
-    _G.NoxarUI.stroke(row, on and C.accent or C.borderSoft, on and 0.3 or 0.7, 1)
-
-    local name = Instance.new("TextLabel", row)
-    name.Size = UDim2.new(1, -92, 0, 20)
-    name.Position = UDim2.new(0, 12, 0, 5)
-    name.BackgroundTransparency = 1
-    name.Text = title
-    name.TextColor3 = C.text
-    name.Font = Enum.Font.GothamSemibold
-    name.TextSize = 11
-    name.TextXAlignment = Enum.TextXAlignment.Left
-
-    local sub = Instance.new("TextLabel", row)
-    sub.Size = UDim2.new(1, -92, 0, 14)
-    sub.Position = UDim2.new(0, 12, 0, 23)
-    sub.BackgroundTransparency = 1
-    sub.Text = subtitle
-    sub.TextColor3 = C.sub
-    sub.Font = Enum.Font.Gotham
-    sub.TextSize = 8
-    sub.TextXAlignment = Enum.TextXAlignment.Left
-
-    local sw = Instance.new("Frame", row)
-    sw.Size = UDim2.new(0, 42, 0, 22)
-    sw.Position = UDim2.new(1, -54, 0.5, -11)
-    sw.BackgroundColor3 = on and C.green or Color3.fromRGB(47, 54, 75)
-    sw.BorderSizePixel = 0
-    _G.NoxarUI.corner(sw, 12)
-
-    local knob = Instance.new("Frame", sw)
-    knob.Size = UDim2.new(0, 16, 0, 16)
-    knob.Position = on and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8)
-    knob.BackgroundColor3 = C.text
-    knob.BorderSizePixel = 0
-    _G.NoxarUI.corner(knob, 10)
-
-    return row, sw, knob
-end
-
-function _G.NoxarUI.setSwitch(sw, knob, on)
-    sw.BackgroundColor3 = on and C.green or Color3.fromRGB(47, 54, 75)
-    TS:Create(knob, TweenInfo.new(0.15, Enum.EasingStyle.Quad), {Position = on and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8)}):Play()
-end
-
 function _G.NoxarUI.updateChoiceRow(row, pill, bar, active, activeText, inactiveText)
     if not row then return end
     row.BackgroundColor3 = active and Color3.fromRGB(36, 44, 68) or Color3.fromRGB(17, 21, 32)
@@ -877,32 +828,49 @@ _G.NoxarUI.corner(Main, 14)
 _G.NoxarUI.stroke(Main, C.border, 0.18, 1)
 _G.NoxarUI.grad(Main, Color3.fromRGB(9, 11, 18), Color3.fromRGB(13, 16, 25), 90)
 
--- Responsive scaling for different mobile/tablet screen sizes.
--- Keeps the same design proportions, but shrinks the whole panel on smaller
--- screens so it doesn't cover too much or get cut off.
+-- Manual UI scale. Auto-resize was removed because it made the panel jump on
+-- some devices/minimize states. The Settings tab controls this value and it is
+-- saved in NoxarSave.json.
 _G.NoxarUI.MainScale = Instance.new("UIScale", Main)
-function _G.NoxarUI.applyResponsiveScale()
-    local cam = workspace.CurrentCamera
-    local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
+function _G.NoxarUI.applyUIScale(centerMode)
+    uiScaleValue = math.clamp(tonumber(uiScaleValue) or 1, 0.75, 1.20)
 
-    -- 390x330 was tuned around mobile landscape. Scale down on smaller
-    -- screens, but avoid making the controls unreadably tiny.
-    local scale = math.min(vp.X / 1450, vp.Y / 720)
-    scale = math.clamp(scale, 0.72, 1)
-    _G.NoxarUI.MainScale.Scale = scale
-
-    -- Always position from the FULL open panel size. If we use miniSize here,
-    -- minimizing recenters the tiny topbar and makes it jump down/middle.
-    -- This keeps the minimized topbar exactly where the open titlebar was.
-    Main.Position = UDim2.new(0.5, -math.floor((normalSize.X.Offset * scale) / 2), 0.42, -math.floor((normalSize.Y.Offset * scale) / 2))
+    if centerMode == "keep" and Main and Main.Parent then
+        -- Preserve the panel's CURRENT visual center while changing scale.
+        -- This makes + / - resizing grow/shrink from the middle instead of
+        -- looking like it slides sideways from the top-left.
+        local oldCenter = Main.AbsolutePosition + (Main.AbsoluteSize / 2)
+        _G.NoxarUI.MainScale.Scale = uiScaleValue
+        task.defer(function()
+            if Main and Main.Parent then
+                local newSize = Main.AbsoluteSize
+                Main.Position = UDim2.fromOffset(
+                    math.floor(oldCenter.X - newSize.X / 2),
+                    math.floor(oldCenter.Y - newSize.Y / 2)
+                )
+            end
+        end)
+    else
+        -- Initial load/rejoin: center the scaled panel at the usual starting
+        -- spot using the full open panel size.
+        _G.NoxarUI.MainScale.Scale = uiScaleValue
+        Main.Position = UDim2.new(
+            0.5,
+            -math.floor((normalSize.X.Offset * uiScaleValue) / 2),
+            0.42,
+            -math.floor((normalSize.Y.Offset * uiScaleValue) / 2)
+        )
+    end
 end
-
-_G.NoxarUI.applyResponsiveScale()
-if workspace.CurrentCamera then
-    connectTracked("responsiveScale", workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"), function()
-        _G.NoxarUI.applyResponsiveScale()
-    end)
+function _G.NoxarUI.setManualScale(value)
+    uiScaleValue = math.clamp(tonumber(value) or uiScaleValue or 1, 0.75, 1.20)
+    _G.NoxarUI.applyUIScale("keep")
+    if _G.NoxarUIScaleControls and _G.NoxarUIScaleControls.Box then
+        _G.NoxarUIScaleControls.Box.Text = string.format("%.2f", uiScaleValue)
+    end
+    saveConfig()
 end
+_G.NoxarUI.applyUIScale()
 
 -- Header
 local TitleBar = Instance.new("Frame", Main)
@@ -978,7 +946,7 @@ _G.NoxarUI.nav(TabClaimBtn, false)
 local TabServerBtn = Instance.new("TextButton", TabBar)
 TabServerBtn.Size = UDim2.new(1, -12, 0, 36)
 TabServerBtn.Position = UDim2.new(0, 7, 0, 178)
-TabServerBtn.Text = "  Server"
+TabServerBtn.Text = "  Settings"
 _G.NoxarUI.nav(TabServerBtn, false)
 
 local TabHatchBtn = Instance.new("TextButton", TabBar)
@@ -1232,8 +1200,8 @@ local FarmStatus = Instance.new("TextLabel", FarmTab)
 FarmStatus.Size = UDim2.new(1, -20, 0, 16)
 FarmStatus.BackgroundTransparency = 1
 FarmStatus.Text = "Status: Idle"
-FarmStatus.TextColor3 = C.sub
-FarmStatus.Font = Enum.Font.Gotham
+FarmStatus.TextColor3 = Color3.fromRGB(205, 215, 245)
+FarmStatus.Font = Enum.Font.GothamSemibold
 FarmStatus.TextSize = 10
 FarmStatus.LayoutOrder = 6
 
@@ -1302,8 +1270,8 @@ local ClaimStatus = Instance.new("TextLabel", ClaimTab)
 ClaimStatus.Size = UDim2.new(1, -20, 0, 22)
 ClaimStatus.BackgroundColor3 = C.surface
 ClaimStatus.Text = "Status: Idle"
-ClaimStatus.TextColor3 = C.text
-ClaimStatus.Font = Enum.Font.Gotham
+ClaimStatus.TextColor3 = Color3.fromRGB(215, 225, 255)
+ClaimStatus.Font = Enum.Font.GothamSemibold
 ClaimStatus.TextSize = 11
 Instance.new("UICorner", ClaimStatus).CornerRadius = UDim.new(0, 9)
 ClaimStatus.LayoutOrder = 1
@@ -1379,7 +1347,7 @@ ClaimNowBtn.MouseButton1Click:Connect(function()
 end)
 
 -- ==========================================
--- 7. SERVER TAB GENERATION
+-- 7. SETTINGS TAB GENERATION
 -- ==========================================
 local UIListServer = Instance.new("UIListLayout", ServerTab)
 UIListServer.Padding = UDim.new(0, 6)
@@ -1412,7 +1380,80 @@ AntiAfkBtn.MouseButton1Click:Connect(function()
     saveConfig()
 end)
 
--- Section 2: Auto Rejoin
+-- Section 2: UI Scale
+_G.NoxarUIScaleControls = {}
+_G.NoxarUIScaleControls.Label = Instance.new("TextLabel", ServerTab)
+_G.NoxarUIScaleControls.Label.Size = UDim2.new(1, -20, 0, 14)
+_G.NoxarUIScaleControls.Label.BackgroundTransparency = 1
+_G.NoxarUIScaleControls.Label.Text = "UI Size"
+_G.NoxarUIScaleControls.Label.TextColor3 = C.accent
+_G.NoxarUIScaleControls.Label.Font = Enum.Font.GothamBold
+_G.NoxarUIScaleControls.Label.TextSize = 11
+_G.NoxarUIScaleControls.Label.TextXAlignment = Enum.TextXAlignment.Left
+_G.NoxarUIScaleControls.Label.LayoutOrder = 2
+
+_G.NoxarUIScaleControls.Row = Instance.new("Frame", ServerTab)
+_G.NoxarUIScaleControls.Row.Size = UDim2.new(1, -20, 0, 30)
+_G.NoxarUIScaleControls.Row.BackgroundColor3 = C.surface
+_G.NoxarUIScaleControls.Row.BorderSizePixel = 0
+_G.NoxarUIScaleControls.Row.LayoutOrder = 3
+Instance.new("UICorner", _G.NoxarUIScaleControls.Row).CornerRadius = UDim.new(0, 9)
+
+_G.NoxarUIScaleControls.Minus = Instance.new("TextButton", _G.NoxarUIScaleControls.Row)
+_G.NoxarUIScaleControls.Minus.Size = UDim2.new(0, 36, 0, 22)
+_G.NoxarUIScaleControls.Minus.Position = UDim2.new(0, 8, 0.5, -11)
+_G.NoxarUIScaleControls.Minus.BackgroundColor3 = C.card
+_G.NoxarUIScaleControls.Minus.TextColor3 = C.text
+_G.NoxarUIScaleControls.Minus.Text = "−"
+_G.NoxarUIScaleControls.Minus.Font = Enum.Font.GothamBold
+_G.NoxarUIScaleControls.Minus.TextSize = 13
+Instance.new("UICorner", _G.NoxarUIScaleControls.Minus).CornerRadius = UDim.new(0, 7)
+
+_G.NoxarUIScaleControls.Box = Instance.new("TextBox", _G.NoxarUIScaleControls.Row)
+_G.NoxarUIScaleControls.Box.Size = UDim2.new(0, 58, 0, 22)
+_G.NoxarUIScaleControls.Box.Position = UDim2.new(0, 50, 0.5, -11)
+_G.NoxarUIScaleControls.Box.BackgroundColor3 = C.card
+_G.NoxarUIScaleControls.Box.TextColor3 = C.text
+_G.NoxarUIScaleControls.Box.Text = string.format("%.2f", uiScaleValue)
+_G.NoxarUIScaleControls.Box.Font = Enum.Font.GothamBold
+_G.NoxarUIScaleControls.Box.TextSize = 10
+_G.NoxarUIScaleControls.Box.ClearTextOnFocus = false
+Instance.new("UICorner", _G.NoxarUIScaleControls.Box).CornerRadius = UDim.new(0, 7)
+
+_G.NoxarUIScaleControls.Plus = Instance.new("TextButton", _G.NoxarUIScaleControls.Row)
+_G.NoxarUIScaleControls.Plus.Size = UDim2.new(0, 36, 0, 22)
+_G.NoxarUIScaleControls.Plus.Position = UDim2.new(0, 114, 0.5, -11)
+_G.NoxarUIScaleControls.Plus.BackgroundColor3 = C.card
+_G.NoxarUIScaleControls.Plus.TextColor3 = C.text
+_G.NoxarUIScaleControls.Plus.Text = "+"
+_G.NoxarUIScaleControls.Plus.Font = Enum.Font.GothamBold
+_G.NoxarUIScaleControls.Plus.TextSize = 13
+Instance.new("UICorner", _G.NoxarUIScaleControls.Plus).CornerRadius = UDim.new(0, 7)
+
+_G.NoxarUIScaleControls.Reset = Instance.new("TextButton", _G.NoxarUIScaleControls.Row)
+_G.NoxarUIScaleControls.Reset.Size = UDim2.new(0, 58, 0, 22)
+_G.NoxarUIScaleControls.Reset.Position = UDim2.new(1, -66, 0.5, -11)
+_G.NoxarUIScaleControls.Reset.BackgroundColor3 = C.accent
+_G.NoxarUIScaleControls.Reset.TextColor3 = C.text
+_G.NoxarUIScaleControls.Reset.Text = "Reset"
+_G.NoxarUIScaleControls.Reset.Font = Enum.Font.GothamBold
+_G.NoxarUIScaleControls.Reset.TextSize = 10
+Instance.new("UICorner", _G.NoxarUIScaleControls.Reset).CornerRadius = UDim.new(0, 7)
+
+_G.NoxarUIScaleControls.Minus.MouseButton1Click:Connect(function()
+    _G.NoxarUI.setManualScale(uiScaleValue - 0.05)
+end)
+_G.NoxarUIScaleControls.Plus.MouseButton1Click:Connect(function()
+    _G.NoxarUI.setManualScale(uiScaleValue + 0.05)
+end)
+_G.NoxarUIScaleControls.Reset.MouseButton1Click:Connect(function()
+    _G.NoxarUI.setManualScale(1)
+end)
+_G.NoxarUIScaleControls.Box.FocusLost:Connect(function()
+    _G.NoxarUI.setManualScale(tonumber(_G.NoxarUIScaleControls.Box.Text) or uiScaleValue)
+end)
+
+-- Section 3: Auto Rejoin
 local RejoinLbl = Instance.new("TextLabel", ServerTab)
 RejoinLbl.Size = UDim2.new(1, -20, 0, 14)
 RejoinLbl.BackgroundTransparency = 1
@@ -1421,13 +1462,13 @@ RejoinLbl.TextColor3 = C.accent
 RejoinLbl.Font = Enum.Font.GothamBold
 RejoinLbl.TextSize = 11
 RejoinLbl.TextXAlignment = Enum.TextXAlignment.Left
-RejoinLbl.LayoutOrder = 2
+RejoinLbl.LayoutOrder = 4
 
 local RejoinRow = Instance.new("Frame", ServerTab)
 RejoinRow.Size = UDim2.new(1, -20, 0, 26)
 RejoinRow.BackgroundColor3 = C.surface
 RejoinRow.BorderSizePixel = 0
-RejoinRow.LayoutOrder = 3
+RejoinRow.LayoutOrder = 5
 Instance.new("UICorner", RejoinRow).CornerRadius = UDim.new(0, 9)
 
 local RejoinBox = Instance.new("TextBox", RejoinRow)
@@ -1464,11 +1505,11 @@ local RejoinStatusLbl = Instance.new("TextLabel", ServerTab)
 RejoinStatusLbl.Size = UDim2.new(1, -20, 0, 14)
 RejoinStatusLbl.BackgroundTransparency = 1
 RejoinStatusLbl.Text = rejoinTimerEnabled and "Timer running..." or "Disabled"
-RejoinStatusLbl.TextColor3 = C.sub
-RejoinStatusLbl.Font = Enum.Font.Gotham
+RejoinStatusLbl.TextColor3 = Color3.fromRGB(200, 210, 240)
+RejoinStatusLbl.Font = Enum.Font.GothamSemibold
 RejoinStatusLbl.TextSize = 10
 RejoinStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
-RejoinStatusLbl.LayoutOrder = 4
+RejoinStatusLbl.LayoutOrder = 6
 
 local function setRejoin(state)
     rejoinTimerEnabled = state
@@ -1526,7 +1567,7 @@ PosLbl.TextColor3 = C.accent
 PosLbl.Font = Enum.Font.GothamBold
 PosLbl.TextSize = 11
 PosLbl.TextXAlignment = Enum.TextXAlignment.Left
-PosLbl.LayoutOrder = 5
+PosLbl.LayoutOrder = 7
 
 local SavePosBtn = Instance.new("TextButton", ServerTab)
 SavePosBtn.Size = UDim2.new(1, -20, 0, 26)
@@ -1537,7 +1578,7 @@ SavePosBtn.Font = Enum.Font.GothamBold
 SavePosBtn.TextSize = 11
 Instance.new("UICorner", SavePosBtn).CornerRadius = UDim.new(0, 9)
 Instance.new("UIStroke", SavePosBtn).Color = C.border
-SavePosBtn.LayoutOrder = 6
+SavePosBtn.LayoutOrder = 8
 
 local ScrollPos = Instance.new("ScrollingFrame", ServerTab)
 ScrollPos.Size = UDim2.new(1, -20, 0, 96) 
@@ -1546,7 +1587,7 @@ ScrollPos.ScrollBarThickness = 3
 ScrollPos.ScrollBarImageColor3 = C.accent
 ScrollPos.BorderSizePixel = 0
 Instance.new("UICorner", ScrollPos).CornerRadius = UDim.new(0, 9)
-ScrollPos.LayoutOrder = 7
+ScrollPos.LayoutOrder = 9
 local ScrollPosList = Instance.new("UIListLayout", ScrollPos)
 ScrollPosList.Padding = UDim.new(0, 4)
 Instance.new("UIPadding", ScrollPos).PaddingTop = UDim.new(0, 4)
@@ -1644,10 +1685,10 @@ Instance.new("UIPadding", HatchTab).PaddingTop = UDim.new(0, 8)
 
 local HatchStatusLbl = Instance.new("TextLabel", HatchTab)
 HatchStatusLbl.Size = UDim2.new(1, -20, 0, 22)
-HatchStatusLbl.BackgroundColor3 = C.surface
+HatchStatusLbl.BackgroundColor3 = Color3.fromRGB(20, 25, 39)
 HatchStatusLbl.Text = autoHatchEnabled and "Status: Active" or "Status: Idle"
-HatchStatusLbl.TextColor3 = C.text
-HatchStatusLbl.Font = Enum.Font.Gotham
+HatchStatusLbl.TextColor3 = Color3.fromRGB(220, 232, 255)
+HatchStatusLbl.Font = Enum.Font.GothamSemibold
 HatchStatusLbl.TextSize = 11
 Instance.new("UICorner", HatchStatusLbl).CornerRadius = UDim.new(0, 9)
 HatchStatusLbl.LayoutOrder = 1
@@ -1794,8 +1835,8 @@ local BreedStatusLbl = Instance.new("TextLabel", HatchTab)
 BreedStatusLbl.Size = UDim2.new(1, -20, 0, 16)
 BreedStatusLbl.BackgroundTransparency = 1
 BreedStatusLbl.Text = "Slot 1: Empty"
-BreedStatusLbl.TextColor3 = C.sub
-BreedStatusLbl.Font = Enum.Font.Gotham
+BreedStatusLbl.TextColor3 = Color3.fromRGB(200, 210, 240)
+BreedStatusLbl.Font = Enum.Font.GothamSemibold
 BreedStatusLbl.TextSize = 10
 BreedStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
 BreedStatusLbl.LayoutOrder = 9
@@ -1865,7 +1906,6 @@ local function closeBreedList()
     -- Important: collapse the list BEFORE restoring LayoutOrder.
     -- If we move BreedListFrame back under Mother while it is still visible,
     -- the father list flashes under the Mother selector for a split second.
-    local closingFrom = breedListOpenFor
     breedListOpenFor = nil
     FatherBtn.Text = _G.NoxarUI.breedButtonText("father", false, breedFatherLabel, breedFatherId)
     MotherBtn.Text = _G.NoxarUI.breedButtonText("mother", false, breedMotherLabel, breedMotherId)
@@ -2149,13 +2189,10 @@ Instance.new("UIPadding", AreaFarmTab).PaddingTop = UDim.new(0, 8)
 Instance.new("UIPadding", AreaFarmTab).PaddingBottom = UDim.new(0, 8)
 
 local AreaFarmHintLbl = Instance.new("TextLabel", AreaFarmTab)
-AreaFarmHintLbl.Size = UDim2.new(1, -20, 0, 40)
+AreaFarmHintLbl.Size = UDim2.new(1, -20, 0, 0)
 AreaFarmHintLbl.BackgroundTransparency = 1
-AreaFarmHintLbl.Text = "Area buttons below are quick-teleport shortcuts. Just walk to your spot and hit Save — area is detected automatically."
-AreaFarmHintLbl.TextColor3 = C.sub
-AreaFarmHintLbl.Font = Enum.Font.Gotham
-AreaFarmHintLbl.TextSize = 10
-AreaFarmHintLbl.TextWrapped = true
+AreaFarmHintLbl.Text = ""
+AreaFarmHintLbl.Visible = false
 AreaFarmHintLbl.LayoutOrder = 1
 
 local AreaDropBtn = Instance.new("TextButton", AreaFarmTab)
@@ -2213,8 +2250,8 @@ FarmSpotLbl.Size = UDim2.new(1, -20, 0, 16)
 FarmSpotLbl.BackgroundTransparency = 1
 FarmSpotLbl.Text = "Farming Spot"
 FarmSpotLbl.TextColor3 = C.gold
-FarmSpotLbl.Font = Enum.Font.GothamBold
-FarmSpotLbl.TextSize = 11
+FarmSpotLbl.Font = Enum.Font.GothamBlack
+FarmSpotLbl.TextSize = 12
 FarmSpotLbl.TextXAlignment = Enum.TextXAlignment.Left
 FarmSpotLbl.LayoutOrder = 5
 
@@ -2222,7 +2259,7 @@ local FarmSpotInfoLbl = Instance.new("TextLabel", AreaFarmTab)
 FarmSpotInfoLbl.Size = UDim2.new(1, -20, 0, 28)
 FarmSpotInfoLbl.BackgroundTransparency = 1
 FarmSpotInfoLbl.Text = "Boss Loop will return you to this saved spot after each queue finishes, then resume farming if it was running."
-FarmSpotInfoLbl.TextColor3 = C.sub
+FarmSpotInfoLbl.TextColor3 = Color3.fromRGB(180, 190, 220)
 FarmSpotInfoLbl.Font = Enum.Font.Gotham
 FarmSpotInfoLbl.TextSize = 9
 FarmSpotInfoLbl.TextWrapped = true
@@ -2348,7 +2385,7 @@ end)
 TPFarmSpotBtn.MouseButton1Click:Connect(function()
     if farmingSpot then
         FarmSpotStatusLbl.Text = "Teleporting..."
-        FarmSpotStatusLbl.TextColor3 = C.sub
+        FarmSpotStatusLbl.TextColor3 = Color3.fromRGB(205, 215, 245)
         -- Wait 5s for area loading, snap to the exact saved spot, then run
         -- the anti-AFK jumps in the background so status updates immediately.
         teleportToAreaFarmSpot(farmingSpot, true, 5)
@@ -2363,7 +2400,7 @@ end)
 ClearFarmSpotBtn.MouseButton1Click:Connect(function()
     farmingSpot = nil
     FarmSpotStatusLbl.Text = farmSpotStatusText()
-    FarmSpotStatusLbl.TextColor3 = C.sub
+    FarmSpotStatusLbl.TextColor3 = Color3.fromRGB(205, 215, 245)
     saveConfig()
 end)
 
@@ -2411,18 +2448,18 @@ BossLoopTitleLbl.Size = UDim2.new(1, -20, 0, 16)
 BossLoopTitleLbl.BackgroundTransparency = 1
 BossLoopTitleLbl.Text = "💀 Boss Loop"
 BossLoopTitleLbl.TextColor3 = C.gold
-BossLoopTitleLbl.Font = Enum.Font.GothamBold
-BossLoopTitleLbl.TextSize = 11
+BossLoopTitleLbl.Font = Enum.Font.GothamBlack
+BossLoopTitleLbl.TextSize = 12
 BossLoopTitleLbl.TextXAlignment = Enum.TextXAlignment.Left
 BossLoopTitleLbl.LayoutOrder = 10
 
 local BossListHintLbl = Instance.new("TextLabel", AreaFarmTab)
 BossListHintLbl.Size = UDim2.new(1, -20, 0, 14)
 BossListHintLbl.BackgroundTransparency = 1
-BossListHintLbl.Text = "Select regular/Ultra spawns (event-driven):"
-BossListHintLbl.TextColor3 = C.sub
+BossListHintLbl.Text = "Select Boss/Special Mons to automate"
+BossListHintLbl.TextColor3 = Color3.fromRGB(180, 190, 220)
 BossListHintLbl.Font = Enum.Font.Gotham
-BossListHintLbl.TextSize = 9
+BossListHintLbl.TextSize = 10
 BossListHintLbl.TextWrapped = true
 BossListHintLbl.TextXAlignment = Enum.TextXAlignment.Left
 BossListHintLbl.LayoutOrder = 11
@@ -2465,7 +2502,7 @@ BossDropBtn.MouseButton1Click:Connect(function()
 end)
 
 for i, boss in ipairs(BOSS_LIST) do
-    local tierText = (boss.tier == "Ultra") and "Ultra" or "Boss"
+    local tierText = (boss.tier == "Ultra") and "Special" or "Boss"
     local selected = selectedBosses[boss.name] and true or false
     local row, _, pill, bar = _G.NoxarUI.choiceRow(BossListScroll, boss.name, selected and "Selected" or tierText, selected)
     row.LayoutOrder = i
@@ -2487,8 +2524,8 @@ local BossLoopLiveStatusLbl = Instance.new("TextLabel", AreaFarmTab)
 BossLoopLiveStatusLbl.Size = UDim2.new(1, -20, 0, 16)
 BossLoopLiveStatusLbl.BackgroundTransparency = 1
 BossLoopLiveStatusLbl.Text = "Status: " .. bossLoopStatus
-BossLoopLiveStatusLbl.TextColor3 = C.sub
-BossLoopLiveStatusLbl.Font = Enum.Font.Gotham
+BossLoopLiveStatusLbl.TextColor3 = Color3.fromRGB(205, 215, 245)
+BossLoopLiveStatusLbl.Font = Enum.Font.GothamSemibold
 BossLoopLiveStatusLbl.TextSize = 10
 BossLoopLiveStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
 BossLoopLiveStatusLbl.LayoutOrder = 14
@@ -2516,12 +2553,12 @@ ToggleBossLoopBtn.MouseButton1Click:Connect(function()
         ToggleBossLoopBtn.BackgroundColor3 = C.green
         ToggleBossLoopBtn.Text = "● BOSS LOOP: ON"
         BossLoopLiveStatusLbl.Text = "Status: Waiting for a boss spawn..."
-        BossLoopLiveStatusLbl.TextColor3 = C.sub
+        BossLoopLiveStatusLbl.TextColor3 = Color3.fromRGB(205, 215, 245)
     else
         ToggleBossLoopBtn.BackgroundColor3 = C.red
         ToggleBossLoopBtn.Text = "● BOSS LOOP: OFF"
         BossLoopLiveStatusLbl.Text = "Status: Disabled"
-        BossLoopLiveStatusLbl.TextColor3 = C.sub
+        BossLoopLiveStatusLbl.TextColor3 = Color3.fromRGB(205, 215, 245)
         table.clear(bossQueue)
     end
     saveConfig()
@@ -2717,7 +2754,7 @@ spawnTracked("bossLoop", function()
         elseif not currentBossFight and #bossQueue == 0 and not returnedToFarmSpot then
             if farmingSpot then
                 BossLoopLiveStatusLbl.Text = "Status: Queue empty — returning to Farming Spot..."
-                BossLoopLiveStatusLbl.TextColor3 = C.sub
+                BossLoopLiveStatusLbl.TextColor3 = Color3.fromRGB(205, 215, 245)
                 -- Wait 5s for area loading, snap back to the exact Farming Spot, then
                 -- anti-AFK jumps continue in the background so farming resumes sooner.
                 teleportToAreaFarmSpot(farmingSpot, true, 5)
@@ -2727,7 +2764,7 @@ spawnTracked("bossLoop", function()
                 wasFarmingBeforeBossFight = false
             end
             BossLoopLiveStatusLbl.Text = "Status: Waiting for a boss spawn..."
-            BossLoopLiveStatusLbl.TextColor3 = C.sub
+            BossLoopLiveStatusLbl.TextColor3 = Color3.fromRGB(205, 215, 245)
             returnedToFarmSpot = true
         end
     end
@@ -2804,23 +2841,32 @@ CloseBtn.MouseButton1Click:Connect(function()
 
     cancelAllTrackedThreads()
     disconnectAllTrackedConnections()
+
+    -- Clear UI globals that hold direct Instance references. Helper functions
+    -- can stay cached on _G.NoxarUI, but instance refs should not keep old GUI
+    -- objects alive after closing.
+    _G.NoxarUIScaleControls = nil
+    if _G.NoxarUI then
+        _G.NoxarUI.MainScale = nil
+    end
+
     sg:Destroy()
 end)
 
 -- Dragging Engine
 local dragging, dragStart, startPos
-TitleBar.InputBegan:Connect(function(input)
+connectTracked("dragInputBegan", TitleBar.InputBegan, function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         dragging = true; dragStart = input.Position; startPos = Main.Position
     end
 end)
-UIS.InputChanged:Connect(function(input)
+connectTracked("dragInputChanged", UIS.InputChanged, function(input)
     if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
         local delta = input.Position - dragStart
         Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
     end
 end)
-UIS.InputEnded:Connect(function(input)
+connectTracked("dragInputEnded", UIS.InputEnded, function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         dragging = false
     end
@@ -2968,7 +3014,7 @@ spawnTracked("breedingWatcher", function()
             -- "just collected" and "rejoined with slot already empty".
             if autoBreedEnabled and breedFatherId and breedMotherId and PetBreedSystem then
                 BreedStatusLbl.Text = "Slot 1: Empty — auto-breeding again..."
-                BreedStatusLbl.TextColor3 = C.sub
+                BreedStatusLbl.TextColor3 = Color3.fromRGB(200, 210, 240)
                 local ok = pcall(function()
                     PetBreedSystem.ClientCreateBreeding(breedFatherId, breedMotherId)
                 end)
@@ -2978,7 +3024,7 @@ spawnTracked("breedingWatcher", function()
                 end
             else
                 BreedStatusLbl.Text = "Slot 1: Empty — pick two pets and breed"
-                BreedStatusLbl.TextColor3 = C.sub
+                BreedStatusLbl.TextColor3 = Color3.fromRGB(200, 210, 240)
             end
         else
             local serverTime = nil
@@ -2995,7 +3041,7 @@ spawnTracked("breedingWatcher", function()
                 local m = math.floor((remaining % 3600) / 60)
                 local s = math.floor(remaining % 60)
                 BreedStatusLbl.Text = string.format("Slot 1: Breeding... %02d:%02d:%02d left", h, m, s)
-                BreedStatusLbl.TextColor3 = C.sub
+                BreedStatusLbl.TextColor3 = Color3.fromRGB(200, 210, 240)
             else
                 BreedStatusLbl.Text = "Slot 1: Egg ready to hatch!"
                 BreedStatusLbl.TextColor3 = C.green
