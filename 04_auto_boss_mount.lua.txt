@@ -519,6 +519,15 @@ function waitForMonstersToSettle(maxWait)
     return false -- hit the timeout instead of settling
 end
 
+function isSpecialBossName(bossName)
+    for _, boss in ipairs(BOSS_LIST) do
+        if boss.name == bossName then
+            return boss.tier == "Ultra"
+        end
+    end
+    return false
+end
+
 -- Fights a specific boss instance until it dies. Teleports onto it once
 -- (same one-shot style as the saved-farm-spot TP button) and then just
 -- watches for it to disappear from ClientMonsters -- damage is expected
@@ -526,17 +535,23 @@ end
 -- this script clicking anything. "Still present in ClientMonsters" is
 -- the same death check used everywhere else in this file. Bails out
 -- early (returns false) if bossLoopEnabled goes false mid-fight.
-function fightBossUntilDead(monster)
+function fightBossUntilDead(monster, isSpecial, bossName)
     local root = monster:FindFirstChild("Root")
     if root then
         glueToTarget(root) -- one-time snap onto the boss, not a repeating lock
-        task.wait(0.2) -- let snap apply before unmounting for the actual fight
+        task.wait(0.4) -- let snap apply before unmounting for the actual fight
         _G.NoxarSetBossMount(false)
     end
+
+    local fightStartedAt = os.clock()
 
     while bossLoopEnabled do
         if not clientMonsters:FindFirstChild(monster.Name) then
             return true -- boss is dead
+        end
+        if isSpecial and os.clock() - fightStartedAt >= 6 then
+            BossLoopLiveStatusLbl.Text = "Status: " .. tostring(bossName or "Special") .. " timed out after 6s — continuing..."
+            return true -- special/ultra timeout guard so the loop never gets stuck here
         end
         task.wait(0.5) -- just polling for death now, no need to run at ATTACK_DELAY speed
     end
@@ -595,9 +610,10 @@ function runBossFight(entry)
         return
     end
 
+    local isSpecial = isSpecialBossName(entry.name)
     BossLoopLiveStatusLbl.Text = "Status: Fighting " .. entry.name .. "..."
     BossLoopLiveStatusLbl.TextColor3 = C.gold
-    local won = fightBossUntilDead(monster)
+    local won = fightBossUntilDead(monster, isSpecial, entry.name)
 
     if won then
         _G.NoxarSetBossMount(true) -- remount after kill so next travel/return is mounted
