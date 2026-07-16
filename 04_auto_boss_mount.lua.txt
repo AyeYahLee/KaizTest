@@ -606,15 +606,33 @@ end
 -- the same death check used everywhere else in this file. Bails out
 -- early (returns false) if bossLoopEnabled goes false mid-fight.
 function fightBossUntilDead(monster, isSpecial, bossName)
-    local root = monster:FindFirstChild("Root")
+    -- Wait briefly for Root or PrimaryPart to load into workspace
+    local root = monster:FindFirstChild("Root") or monster.PrimaryPart
+    if not root then
+        local startRootWait = os.clock()
+        while os.clock() - startRootWait < 2 do
+            root = monster:FindFirstChild("Root") or monster.PrimaryPart
+            if root then break end
+            task.wait(0.1)
+        end
+    end
+
     local fightStartedAt = os.clock()
     local lastSnapAt = fightStartedAt
 
     if root then
-        glueToTarget(root) -- one-time snap onto the boss, not a repeating lock
-        task.wait(0.4) -- let snap apply before unmounting for the actual fight
+        BossLoopLiveStatusLbl.Text = "Status: Snapping onto " .. tostring(bossName or "boss") .. "..."
+        BossLoopLiveStatusLbl.TextColor3 = C.gold
+
+        _G.NoxarSetBossMount(true)
+        task.wait(0.1)
+        glueToTarget(root)
+        task.wait(0.1)
         _G.NoxarSetBossMount(false)
     end
+
+    BossLoopLiveStatusLbl.Text = "Status: Fighting " .. tostring(bossName or "boss") .. "..."
+    BossLoopLiveStatusLbl.TextColor3 = C.gold
 
     while bossLoopEnabled do
         if wasBossDeathNotified(bossName, fightStartedAt) then
@@ -632,6 +650,7 @@ function fightBossUntilDead(monster, isSpecial, bossName)
             BossLoopLiveStatusLbl.Text = "Status: Re-snapping to " .. tostring(bossName or "boss") .. "..."
             monster = resnapToCurrentBoss(bossName, monster) or monster
             lastSnapAt = os.clock()
+            BossLoopLiveStatusLbl.Text = "Status: Fighting " .. tostring(bossName or "boss") .. "..."
         end
 
         if isSpecial and os.clock() - fightStartedAt >= 9 then
@@ -745,8 +764,6 @@ function runBossFight(entry)
     end
 
     local isSpecial = isSpecialBossName(entry.name)
-    BossLoopLiveStatusLbl.Text = "Status: Fighting " .. entry.name .. "..."
-    BossLoopLiveStatusLbl.TextColor3 = C.gold
     local won = fightBossUntilDead(monster, isSpecial, entry.name)
 
     if won then
