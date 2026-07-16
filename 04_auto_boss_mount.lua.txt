@@ -144,11 +144,12 @@ for _, area in ipairs(SortedAreaFarmAreas) do
     end)
 end
 
-local computedAreaHeight = ScrollAreaFarmList.AbsoluteContentSize.Y + 6
-if computedAreaHeight < 200 then
-    computedAreaHeight = #SortedAreaFarmAreas * 37 + 6
-end
-ScrollAreaFarm.CanvasSize = UDim2.new(0, 0, 0, computedAreaHeight)
+-- UIScale-proof canvas height calculation (unscales AbsoluteContentSize if uiScaleValue < 1.0)
+local currentScale = tonumber(uiScaleValue) or 1
+if currentScale <= 0 then currentScale = 1 end
+local unscaledAbsHeight = (ScrollAreaFarmList.AbsoluteContentSize.Y / currentScale) + 10
+local unscaledCountHeight = #SortedAreaFarmAreas * 37 + 10
+ScrollAreaFarm.CanvasSize = UDim2.new(0, 0, 0, math.max(unscaledAbsHeight, unscaledCountHeight))
 
 -- ── Farming Spot ─────────────────────────────────────────────
 FarmSpotDivider = Instance.new("Frame", AreaFarmTab)
@@ -904,5 +905,3 @@ spawnTracked("bossLoop", function()
         end
     end
 end)
-
-
