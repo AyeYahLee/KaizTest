@@ -589,8 +589,10 @@ function resnapToCurrentBoss(bossName, fallbackMonster)
     if not monster then return fallbackMonster end
     local root = monster:FindFirstChild("Root") or monster.PrimaryPart
     if root then
+        _G.NoxarSetBossMount(true)
+        task.wait(0.1)
         glueToTarget(root)
-        task.wait(0.4)
+        task.wait(0.1)
         _G.NoxarSetBossMount(false)
     end
     return monster
@@ -857,5 +859,3 @@ spawnTracked("bossLoop", function()
         end
     end
 end)
-
-
