@@ -91,7 +91,10 @@ local RunService = game:GetService("RunService")
 local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
 local LP = Players.LocalPlayer
-local PathTool = require(game:GetService("ReplicatedStorage").CommonLibrary.Tool.PathTool)
+local PathTool
+pcall(function()
+    PathTool = require(game:GetService("ReplicatedStorage").CommonLibrary.Tool.PathTool)
+end)
 
 -- ==========================================
 -- 1. CONFIGURATION & COMPACT MOBILE STATE
@@ -1420,7 +1423,20 @@ ShopInfoLbl.TextWrapped = true
 ShopInfoLbl.TextXAlignment = Enum.TextXAlignment.Left
 ShopInfoLbl.LayoutOrder = 2
 
-local function createShopButton(order, title, callback)
+local function safeOpenView(viewName, ...)
+    local args = table.pack(...)
+    pcall(function()
+        local pt = PathTool or _G.PathTool
+        local vm = pt and pt.ViewManager
+        local openView = vm and vm.OpenView
+        if type(openView) == "function" then
+            openView(viewName, table.unpack(args, 1, args.n))
+        end
+    end)
+end
+
+local function createShopButton(order, title, viewName, ...)
+    local args = table.pack(...)
     local btn = Instance.new("TextButton", ClaimTab)
     btn.Size = UDim2.new(1, -20, 0, 34)
     btn.BackgroundColor3 = C.card
@@ -1433,29 +1449,17 @@ local function createShopButton(order, title, callback)
     Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 9)
     _G.NoxarUI.stroke(btn, C.borderSoft, 0.55, 1)
     btn.MouseButton1Click:Connect(function()
-        pcall(callback)
+        safeOpenView(viewName, table.unpack(args, 1, args.n))
     end)
     return btn
 end
 
-createShopButton(3, "Tower Shop", function()
-    PathTool.ViewManager.OpenView("TowerShopView")
-end)
-createShopButton(4, "Pet Gear Shop", function()
-    PathTool.ViewManager.OpenView("PetGearRollView", "Shop")
-end)
-createShopButton(5, "Pet Center", function()
-    PathTool.ViewManager.OpenView("PetEvolveView")
-end)
-createShopButton(6, "Pet Evolution", function()
-    PathTool.ViewManager.OpenView("PetTransformView")
-end)
-createShopButton(7, "Abyss Shop", function()
-    PathTool.ViewManager.OpenView("AbyssShopView")
-end)
-createShopButton(8, "Crafting Workshop", function()
-    PathTool.ViewManager.OpenView("SyntheticView")
-end)
+createShopButton(3, "Tower Shop", "TowerShopView")
+createShopButton(4, "Pet Gear Shop", "PetGearRollView", "Shop")
+createShopButton(5, "Pet Center", "PetEvolveView")
+createShopButton(6, "Pet Evolution", "PetTransformView")
+createShopButton(7, "Abyss Shop", "AbyssShopView")
+createShopButton(8, "Crafting Workshop", "SyntheticView")
 
 -- ==========================================
 -- 7. SETTINGS TAB GENERATION
