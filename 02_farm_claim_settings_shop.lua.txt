@@ -42,6 +42,7 @@ ScrollFarm.BackgroundColor3 = C.surface
 ScrollFarm.ScrollBarThickness = 3
 ScrollFarm.ScrollBarImageColor3 = C.accent
 ScrollFarm.BorderSizePixel = 0
+ScrollFarm.AutomaticCanvasSize = Enum.AutomaticSize.Y
 Instance.new("UICorner", ScrollFarm).CornerRadius = UDim.new(0, 9)
 ScrollFarm.LayoutOrder = 4
 ScrollFarm.Size = UDim2.new(1, -20, 0, 0)
@@ -85,7 +86,24 @@ function populateList(types)
             saveConfig()
         end)
     end
-    ScrollFarm.CanvasSize = UDim2.new(0, 0, 0, ScrollList.AbsoluteContentSize.Y + 8)
+    local currentScale = tonumber(uiScaleValue) or 1
+if currentScale <= 0 then currentScale = 1 end
+local buttonCount = 0
+for _, c in ipairs(ScrollFarm:GetChildren()) do
+    if c:IsA("TextButton") then buttonCount = buttonCount + 1 end
+end
+local unscaledAbsHeight = (ScrollList.AbsoluteContentSize.Y / currentScale) + 10
+local unscaledCountHeight = buttonCount * 37 + 10
+ScrollFarm.CanvasSize = UDim2.new(0, 0, 0, math.max(unscaledAbsHeight, unscaledCountHeight))
+    local currentScale = tonumber(uiScaleValue) or 1
+if currentScale <= 0 then currentScale = 1 end
+local buttonCount = 0
+for _, c in ipairs(ScrollFarm:GetChildren()) do
+    if c:IsA("TextButton") then buttonCount = buttonCount + 1 end
+end
+local unscaledAbsHeight = (ScrollList.AbsoluteContentSize.Y / currentScale) + 10
+local unscaledCountHeight = buttonCount * 37 + 10
+ScrollFarm.CanvasSize = UDim2.new(0, 0, 0, math.max(unscaledAbsHeight, unscaledCountHeight))
 end
 
 ScanBtn.MouseButton1Click:Connect(function()
@@ -730,7 +748,9 @@ function refreshPositionsList()
             refreshPositionsList() 
         end)
     end
-    ScrollPos.CanvasSize = UDim2.new(0, 0, 0, ScrollPosList.AbsoluteContentSize.Y + 8)
+    local currentScale = tonumber(uiScaleValue) or 1
+    if currentScale <= 0 then currentScale = 1 end
+    ScrollPos.CanvasSize = UDim2.new(0, 0, 0, (ScrollPosList.AbsoluteContentSize.Y / currentScale) + 10)
 end
 
 SavePosBtn.MouseButton1Click:Connect(function()
@@ -750,4 +770,3 @@ if rejoinTimerEnabled then
     rejoinDeadline = tick() + rejoinMinutes * 60
 end
 refreshPositionsList()
-
