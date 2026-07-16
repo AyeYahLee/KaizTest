@@ -239,7 +239,23 @@ function teleportToAreaFarmSpot(spot, skipSettle, preSnapWait)
     task.wait(preSnapWait or 2)
     local r = getRoot()
     if r then
-        r.CFrame = CFrame.new(spot.x, spot.y, spot.z)
+        local targetCFrame = CFrame.new(spot.x, spot.y, spot.z)
+
+        -- Exact-position failsafe: sometimes the area teleport finishes but the
+        -- game nudges/flings the character near the saved spot instead of on it.
+        -- Re-snap a few times until we're close enough to the saved CFrame.
+        for attempt = 1, 3 do
+            r = getRoot()
+            if not r then break end
+            r.CFrame = targetCFrame
+            r.AssemblyLinearVelocity = Vector3.zero
+            r.AssemblyAngularVelocity = Vector3.zero
+            task.wait(0.35)
+            r = getRoot()
+            if r and (r.Position - targetCFrame.Position).Magnitude <= 10 then
+                break
+            end
+        end
 
         -- Wait 5s after arriving, then jump twice (anti-AFK). When
         -- skipSettle is true (boss loop), this runs in the background
@@ -528,6 +544,31 @@ function isSpecialBossName(bossName)
     return false
 end
 
+_G.NoxarBossDeathNotified = _G.NoxarBossDeathNotified or {}
+
+function markBossDeathNotified(bossName)
+    if bossName then
+        _G.NoxarBossDeathNotified[bossName] = os.clock()
+    end
+end
+
+function wasBossDeathNotified(bossName, sinceTime)
+    local t = bossName and _G.NoxarBossDeathNotified and _G.NoxarBossDeathNotified[bossName]
+    return t ~= nil and (not sinceTime or t >= sinceTime)
+end
+
+function resnapToCurrentBoss(bossName, fallbackMonster)
+    local monster = findBossByName(bossName) or fallbackMonster
+    if not monster then return fallbackMonster end
+    local root = monster:FindFirstChild("Root") or monster.PrimaryPart
+    if root then
+        glueToTarget(root)
+        task.wait(0.4)
+        _G.NoxarSetBossMount(false)
+    end
+    return monster
+end
+
 -- Fights a specific boss instance until it dies. Teleports onto it once
 -- (same one-shot style as the saved-farm-spot TP button) and then just
 -- watches for it to disappear from ClientMonsters -- damage is expected
@@ -537,22 +578,38 @@ end
 -- early (returns false) if bossLoopEnabled goes false mid-fight.
 function fightBossUntilDead(monster, isSpecial, bossName)
     local root = monster:FindFirstChild("Root")
+    local fightStartedAt = os.clock()
+    local lastSnapAt = fightStartedAt
+
     if root then
         glueToTarget(root) -- one-time snap onto the boss, not a repeating lock
         task.wait(0.4) -- let snap apply before unmounting for the actual fight
         _G.NoxarSetBossMount(false)
     end
 
-    local fightStartedAt = os.clock()
-
     while bossLoopEnabled do
-        if not clientMonsters:FindFirstChild(monster.Name) then
-            return true -- boss is dead
+        if wasBossDeathNotified(bossName, fightStartedAt) then
+            return true -- server kill notification confirmed it
         end
+
+        if not clientMonsters:FindFirstChild(monster.Name) then
+            return true -- boss is dead/disappeared from ClientMonsters
+        end
+
+        -- Teleport/glitch failsafe: if we have been "fighting" the same target
+        -- for 5s with no MonsterDead notification, snap directly back onto the
+        -- live boss model again. This does NOT area-teleport, only direct snap.
+        if os.clock() - lastSnapAt >= 5 then
+            BossLoopLiveStatusLbl.Text = "Status: Re-snapping to " .. tostring(bossName or "boss") .. "..."
+            monster = resnapToCurrentBoss(bossName, monster) or monster
+            lastSnapAt = os.clock()
+        end
+
         if isSpecial and os.clock() - fightStartedAt >= 6 then
             BossLoopLiveStatusLbl.Text = "Status: " .. tostring(bossName or "Special") .. " timed out after 6s — continuing..."
             return true -- special/ultra timeout guard so the loop never gets stuck here
         end
+
         task.wait(0.5) -- just polling for death now, no need to run at ATTACK_DELAY speed
     end
 
@@ -563,6 +620,9 @@ end
 -- it by name, teleport onto it, fight until dead.
 function runBossFight(entry)
     currentBossFight = entry
+    if _G.NoxarBossDeathNotified then
+        _G.NoxarBossDeathNotified[entry.name] = nil
+    end
     _G.NoxarSetBossMount(true) -- mount while traveling between boss/special areas
     BossLoopLiveStatusLbl.Text = "Status: " .. entry.name .. " @ " .. entry.area .. " — traveling..."
     BossLoopLiveStatusLbl.TextColor3 = C.gold
@@ -638,6 +698,17 @@ end
 
 connectTracked("notificationEvent", NotificationEvent.OnClientEvent, function(...)
     local args = table.pack(...) -- table.pack, not ipairs -- some slots are nil and ipairs would silently stop early
+
+    -- Death notifications use ServerMessage/MonsterDead and include the dead
+    -- monster name at args[4][1]. Track them so active fights can end instantly.
+    if args[1] == "ServerMessage" and args[2] == "MonsterDead" then
+        local payload = args[4]
+        if type(payload) == "table" then
+            markBossDeathNotified(payload[1])
+        end
+        return
+    end
+
     if not bossLoopEnabled then return end
     if args[1] ~= "ViewBubble" then return end
 
