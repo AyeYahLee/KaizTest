@@ -115,7 +115,6 @@ ScrollAreaFarm.BackgroundColor3 = C.surface
 ScrollAreaFarm.ScrollBarThickness = 3
 ScrollAreaFarm.ScrollBarImageColor3 = C.accent
 ScrollAreaFarm.BorderSizePixel = 0
-ScrollAreaFarm.AutomaticCanvasSize = Enum.AutomaticSize.Y
 Instance.new("UICorner", ScrollAreaFarm).CornerRadius = UDim.new(0, 9)
 ScrollAreaFarm.LayoutOrder = 3
 ScrollAreaFarm.Size = UDim2.new(1, -20, 0, 0)
@@ -124,18 +123,9 @@ ScrollAreaFarmList = Instance.new("UIListLayout", ScrollAreaFarm)
 ScrollAreaFarmList.Padding = UDim.new(0, 3)
 Instance.new("UIPadding", ScrollAreaFarm).PaddingTop = UDim.new(0, 3)
 
-ScrollAreaFarmList:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-    ScrollAreaFarm.CanvasSize = UDim2.new(0, 0, 0, ScrollAreaFarmList.AbsoluteContentSize.Y + 12)
-end)
-
 AreaDropBtn.MouseButton1Click:Connect(function()
     local open = not ScrollAreaFarm.Visible
     AreaDropBtn.Text = open and "▲  Close area list" or "▼  Area teleports"
-    if open then
-        task.defer(function()
-            ScrollAreaFarm.CanvasSize = UDim2.new(0, 0, 0, ScrollAreaFarmList.AbsoluteContentSize.Y + 12)
-        end)
-    end
     _G.NoxarUI.animateDrop(ScrollAreaFarm, open, 112)
 end)
 
@@ -153,7 +143,12 @@ for _, area in ipairs(SortedAreaFarmAreas) do
         _G.NoxarUI.animateDrop(ScrollAreaFarm, false, 112)
     end)
 end
-ScrollAreaFarm.CanvasSize = UDim2.new(0, 0, 0, ScrollAreaFarmList.AbsoluteContentSize.Y + 12)
+
+local computedAreaHeight = ScrollAreaFarmList.AbsoluteContentSize.Y + 6
+if computedAreaHeight < 200 then
+    computedAreaHeight = #SortedAreaFarmAreas * 37 + 6
+end
+ScrollAreaFarm.CanvasSize = UDim2.new(0, 0, 0, computedAreaHeight)
 
 -- ── Farming Spot ─────────────────────────────────────────────
 FarmSpotDivider = Instance.new("Frame", AreaFarmTab)
