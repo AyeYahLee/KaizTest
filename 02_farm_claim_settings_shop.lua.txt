@@ -5,7 +5,9 @@ UIListFarm = Instance.new("UIListLayout", FarmTab)
 UIListFarm.Padding = UDim.new(0, 5)
 UIListFarm.HorizontalAlignment = Enum.HorizontalAlignment.Center
 UIListFarm.SortOrder = Enum.SortOrder.LayoutOrder
-Instance.new("UIPadding", FarmTab).PaddingTop = UDim.new(0, 5)
+FarmTabPadding = Instance.new("UIPadding", FarmTab)
+FarmTabPadding.PaddingTop = UDim.new(0, 5)
+FarmTabPadding.PaddingBottom = UDim.new(0, 26)
 
 TargetLbl = Instance.new("TextLabel", FarmTab)
 TargetLbl.Size = UDim2.new(1, -20, 0, 16)
@@ -241,10 +243,12 @@ end
 -- 6. SHOPS TAB + AUTO CLAIM CONTROLS
 -- ==========================================
 UIListClaim = Instance.new("UIListLayout", ClaimTab)
-UIListClaim.Padding = UDim.new(0, 8)
+UIListClaim.Padding = UDim.new(0, 6)
 UIListClaim.HorizontalAlignment = Enum.HorizontalAlignment.Center
 UIListClaim.SortOrder = Enum.SortOrder.LayoutOrder
-Instance.new("UIPadding", ClaimTab).PaddingTop = UDim.new(0, 8)
+ClaimTabPadding = Instance.new("UIPadding", ClaimTab)
+ClaimTabPadding.PaddingTop = UDim.new(0, 6)
+ClaimTabPadding.PaddingBottom = UDim.new(0, 26)
 
 -- Auto Claim controls are transferred into the Auto tab below Boss Loop.
 AutoClaimDivider = Instance.new("Frame", AreaFarmTab)
@@ -354,12 +358,12 @@ ShopTitleLbl.TextXAlignment = Enum.TextXAlignment.Left
 ShopTitleLbl.LayoutOrder = 1
 
 ShopInfoLbl = Instance.new("TextLabel", ClaimTab)
-ShopInfoLbl.Size = UDim2.new(1, -20, 0, 28)
+ShopInfoLbl.Size = UDim2.new(1, -20, 0, 18)
 ShopInfoLbl.BackgroundTransparency = 1
-ShopInfoLbl.Text = "Open shop, pet, and crafting screens directly."
+ShopInfoLbl.Text = "Open shop, pet, and crafting screens."
 ShopInfoLbl.TextColor3 = Color3.fromRGB(180, 190, 220)
 ShopInfoLbl.Font = Enum.Font.Gotham
-ShopInfoLbl.TextSize = 9
+ShopInfoLbl.TextSize = 8
 ShopInfoLbl.TextWrapped = true
 ShopInfoLbl.TextXAlignment = Enum.TextXAlignment.Left
 ShopInfoLbl.LayoutOrder = 2
@@ -394,7 +398,7 @@ end
 
 function createShopButton(order, title, viewName, arg1)
     local btn = Instance.new("TextButton", ClaimTab)
-    btn.Size = UDim2.new(1, -20, 0, 34)
+    btn.Size = UDim2.new(1, -20, 0, 30)
     btn.BackgroundColor3 = C.card
     btn.TextColor3 = C.text
     btn.Text = title
@@ -424,7 +428,9 @@ UIListServer = Instance.new("UIListLayout", ServerTab)
 UIListServer.Padding = UDim.new(0, 6)
 UIListServer.HorizontalAlignment = Enum.HorizontalAlignment.Center
 UIListServer.SortOrder = Enum.SortOrder.LayoutOrder
-Instance.new("UIPadding", ServerTab).PaddingTop = UDim.new(0, 6)
+ServerTabPadding = Instance.new("UIPadding", ServerTab)
+ServerTabPadding.PaddingTop = UDim.new(0, 6)
+ServerTabPadding.PaddingBottom = UDim.new(0, 26)
 
 -- Section 1: Anti-AFK Toggle
 AntiAfkBtn = Instance.new("TextButton", ServerTab)
