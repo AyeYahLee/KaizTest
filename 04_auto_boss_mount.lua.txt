@@ -515,16 +515,19 @@ end
 -- Waits for ClientMonsters' child count to stop changing (settled) or a
 -- max timeout -- avoids scanning before the new area has actually
 -- streamed its monsters in.
-function waitForMonstersToSettle(maxWait)
+function waitForMonstersToSettle(maxWait, bossName)
     local start = os.clock()
     local lastCount = -1
     local stableSince = nil
     while os.clock() - start < maxWait do
+        if bossName and wasBossDeathNotified(bossName) then
+            return false, true -- second return value indicates died/killed
+        end
         local count = #clientMonsters:GetChildren()
         if count == lastCount then
             stableSince = stableSince or os.clock()
             if os.clock() - stableSince >= 1 then
-                return true -- stable for a full second, good enough
+                return true, false
             end
         else
             stableSince = nil
@@ -532,23 +535,60 @@ function waitForMonstersToSettle(maxWait)
         lastCount = count
         task.wait(0.25)
     end
-    return false -- hit the timeout instead of settling
+    return false, false
+end
+
+SPECIAL_BOSS_SET = {}
+for _, boss in ipairs(BOSS_LIST) do
+    if boss.tier == "Ultra" then
+        SPECIAL_BOSS_SET[boss.name] = true
+    end
 end
 
 function isSpecialBossName(bossName)
-    for _, boss in ipairs(BOSS_LIST) do
-        if boss.name == bossName then
-            return boss.tier == "Ultra"
-        end
-    end
-    return false
+    return SPECIAL_BOSS_SET[bossName] == true
 end
 
 _G.NoxarBossDeathNotified = _G.NoxarBossDeathNotified or {}
 
+local function notifyBossKilled(bossName)
+    pcall(function()
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = "💀 Boss Slain / Died",
+            Text = tostring(bossName) .. " was killed by someone!",
+            Duration = 4
+        })
+    end)
+end
+
 function markBossDeathNotified(bossName)
-    if bossName then
-        _G.NoxarBossDeathNotified[bossName] = os.clock()
+    if not bossName then return end
+    local deadName = (type(bossName) == "table" and bossName[1]) or tostring(bossName)
+    _G.NoxarBossDeathNotified[deadName] = os.clock()
+
+    -- 1. Send in-game pop-up notification
+    notifyBossKilled(deadName)
+
+    -- 2. Immediately purge from bossQueue so it won't queue or waste time on it
+    local removedCount = 0
+    if bossQueue then
+        for i = #bossQueue, 1, -1 do
+            if bossQueue[i] and bossQueue[i].name == deadName then
+                table.remove(bossQueue, i)
+                removedCount = removedCount + 1
+            end
+        end
+    end
+
+    -- 3. Live status notification update
+    if bossLoopEnabled and BossLoopLiveStatusLbl then
+        if currentBossFight and currentBossFight.name == deadName then
+            BossLoopLiveStatusLbl.Text = "Status: 💀 " .. deadName .. " killed by someone! Aborting..."
+            BossLoopLiveStatusLbl.TextColor3 = C.red
+        elseif removedCount > 0 then
+            BossLoopLiveStatusLbl.Text = "Status: 💀 " .. deadName .. " killed — removed from queue (" .. #bossQueue .. " left)"
+            BossLoopLiveStatusLbl.TextColor3 = C.red
+        end
     end
 end
 
@@ -620,9 +660,16 @@ end
 -- it by name, teleport onto it, fight until dead.
 function runBossFight(entry)
     currentBossFight = entry
-    if _G.NoxarBossDeathNotified then
-        _G.NoxarBossDeathNotified[entry.name] = nil
+
+    -- Check if this boss was already killed while waiting in the queue
+    if wasBossDeathNotified(entry.name) then
+        BossLoopLiveStatusLbl.Text = "Status: 💀 " .. entry.name .. " was killed — skipping!"
+        BossLoopLiveStatusLbl.TextColor3 = C.red
+        task.wait(1)
+        currentBossFight = nil
+        return
     end
+
     _G.NoxarSetBossMount(true) -- mount while traveling between boss/special areas
     BossLoopLiveStatusLbl.Text = "Status: " .. entry.name .. " @ " .. entry.area .. " — traveling..."
     BossLoopLiveStatusLbl.TextColor3 = C.gold
@@ -638,12 +685,34 @@ function runBossFight(entry)
     pcall(function()
         DataPullFunc:InvokeServer("AreaTeleportToRegionChannel", areaId)
     end)
-    task.wait(2)
-    if not bossLoopEnabled then currentBossFight = nil; return end
+
+    -- Travel delay with immediate death detection
+    for _ = 1, 8 do
+        task.wait(0.25)
+        if not bossLoopEnabled or wasBossDeathNotified(entry.name) then break end
+    end
+
+    if not bossLoopEnabled or wasBossDeathNotified(entry.name) then
+        if wasBossDeathNotified(entry.name) then
+            BossLoopLiveStatusLbl.Text = "Status: 💀 " .. entry.name .. " killed during travel — skipping!"
+            BossLoopLiveStatusLbl.TextColor3 = C.red
+            task.wait(1)
+        end
+        currentBossFight = nil
+        return
+    end
 
     BossLoopLiveStatusLbl.Text = "Status: Waiting for monsters to load in " .. entry.area .. "..."
-    waitForMonstersToSettle(6)
-    if not bossLoopEnabled then currentBossFight = nil; return end
+    local settled, died = waitForMonstersToSettle(6, entry.name)
+    if not bossLoopEnabled or died or wasBossDeathNotified(entry.name) then
+        if died or wasBossDeathNotified(entry.name) then
+            BossLoopLiveStatusLbl.Text = "Status: 💀 " .. entry.name .. " killed while loading — skipping!"
+            BossLoopLiveStatusLbl.TextColor3 = C.red
+            task.wait(1)
+        end
+        currentBossFight = nil
+        return
+    end
 
     BossLoopLiveStatusLbl.Text = "Status: Searching for " .. entry.name .. "..."
     local monster = nil
@@ -651,6 +720,14 @@ function runBossFight(entry)
     local maxFindWait = 15
 
     while bossLoopEnabled and os.clock() - searchStartedAt < maxFindWait do
+        if wasBossDeathNotified(entry.name) then
+            BossLoopLiveStatusLbl.Text = "Status: 💀 " .. entry.name .. " killed while searching — skipping!"
+            BossLoopLiveStatusLbl.TextColor3 = C.red
+            task.wait(1)
+            currentBossFight = nil
+            return
+        end
+
         monster = findBossByName(entry.name)
         if monster then
             break -- found early, do not wait the rest of the timeout
@@ -658,10 +735,18 @@ function runBossFight(entry)
 
         local remaining = math.max(0, maxFindWait - (os.clock() - searchStartedAt))
         BossLoopLiveStatusLbl.Text = "Status: Searching for " .. entry.name .. "... " .. string.format("%.0f", remaining) .. "s"
-        task.wait(0.5)
+        task.wait(0.25)
     end
 
     if not bossLoopEnabled then currentBossFight = nil; return end
+
+    if wasBossDeathNotified(entry.name) then
+        BossLoopLiveStatusLbl.Text = "Status: 💀 " .. entry.name .. " killed — skipping!"
+        BossLoopLiveStatusLbl.TextColor3 = C.red
+        task.wait(1)
+        currentBossFight = nil
+        return
+    end
 
     if not monster then
         BossLoopLiveStatusLbl.Text = "Status: ❌ " .. entry.name .. " not found after 15s search"
@@ -677,7 +762,7 @@ function runBossFight(entry)
 
     if won then
         _G.NoxarSetBossMount(true) -- remount after kill so next travel/return is mounted
-        BossLoopLiveStatusLbl.Text = "Status: " .. entry.name .. " defeated! Waiting 2s..."
+        BossLoopLiveStatusLbl.Text = "Status: " .. entry.name .. " defeated/dead! Waiting 2s..."
         task.wait(2)
     end
 
@@ -724,6 +809,11 @@ connectTracked("notificationEvent", NotificationEvent.OnClientEvent, function(..
     local bossName = payload.Name
     local areaName = payload.DescParams and payload.DescParams[2]
     if not bossName or not areaName then return end
+
+    -- Clear stale death notification on a fresh spawn so future fights can queue properly
+    if _G.NoxarBossDeathNotified then
+        _G.NoxarBossDeathNotified[bossName] = nil
+    end
 
     if not selectedBosses[bossName] then return end -- not one you've opted in to
     if isAlreadyTracked(bossName) then return end
@@ -780,3 +870,5 @@ spawnTracked("bossLoop", function()
         end
     end
 end)
+
+
