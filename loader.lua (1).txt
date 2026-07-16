@@ -1,0 +1,63 @@
+-- ==========================================
+-- NOXAR MODULAR LOADER - PRIVATE ENV / DELTA SAFE
+-- ==========================================
+-- Upload this whole folder to the same raw URL path.
+-- Set BASE_URL to the raw folder URL ending with a slash.
+-- This loader runs every module in one private environment table, so module
+-- variables are shared with each other but do not pollute normal globals.
+
+local BASE_URL = (getgenv and getgenv().NoxarBaseURL) or _G.NoxarBaseURL or "PASTE_RAW_BASE_URL_HERE/"
+if BASE_URL == "PASTE_RAW_BASE_URL_HERE/" then
+    warn("[Noxar] Missing BASE_URL. Set getgenv().NoxarBaseURL or edit BASE_URL.")
+    return
+end
+
+local files = {
+    "00_boot_core.lua.txt",
+    "01_ui_shell.lua.txt",
+    "02_farm_claim_settings_shop.lua.txt",
+    "03_hatch_breeding.lua.txt",
+    "04_auto_boss_mount.lua.txt",
+    "05_runtime.lua.txt",
+}
+
+local baseEnv = (getgenv and getgenv()) or _G
+local env = rawget(baseEnv, "__NoxarPrivateEnv")
+if not env then
+    env = {
+        _G = _G,
+        shared = shared,
+        script = script,
+    }
+    setmetatable(env, { __index = baseEnv })
+    rawset(baseEnv, "__NoxarPrivateEnv", env)
+end
+
+for _, fileName in ipairs(files) do
+    local url = BASE_URL .. fileName
+    local okDownload, source = pcall(function()
+        return game:HttpGet(url)
+    end)
+    if not okDownload or type(source) ~= "string" or source == "" then
+        warn("[Noxar] Download failed:", fileName, tostring(source))
+        return
+    end
+
+    local fn, compileErr = loadstring(source)
+    if not fn then
+        warn("[Noxar] Compile failed:", fileName, tostring(compileErr))
+        return
+    end
+
+    if type(setfenv) == "function" then
+        setfenv(fn, env)
+    else
+        warn("[Noxar] setfenv unavailable; private environment cannot be applied on this executor.")
+    end
+
+    local okRun, runErr = pcall(fn)
+    if not okRun then
+        warn("[Noxar] Runtime error:", fileName, tostring(runErr))
+        return
+    end
+end

@@ -1,0 +1,731 @@
+-- ==========================================
+-- 0. GAME ID SECURITY CHECK
+-- ==========================================
+TARGET_PLACE_ID = 98664161516921 -- ⚠️ REPLACE THIS WITH YOUR GAME'S PLACE ID
+
+if game.PlaceId ~= TARGET_PLACE_ID then
+    warn("[Noxar Panel] Execution blocked: Incorrect Game/Place ID. Current ID: " .. tostring(game.PlaceId))
+    return
+end
+
+-- ==========================================
+-- 0.5 BACKGROUND THREAD REGISTRY
+-- ==========================================
+-- Every infinite task.spawn loop in this script is registered here so it
+-- can be cancelled in one place. This fixes two problems:
+--   1) Re-running the script (common while testing) used to stack a brand
+--      new copy of every loop on top of the old ones, since nothing ever
+--      cancelled the previous instance's threads.
+--   2) The panel's Close (X) button used to just destroy the GUI without
+--      stopping any of these loops, so they kept polling/firing forever
+--      in the background even with no UI left to see them.
+-- _G.NoxarPanelThreads persists across script re-executions (unlike a
+-- local table), so on load we cancel whatever the previous run left
+-- running, then start fresh.
+if _G.NoxarPanelThreads then
+    for _, thread in pairs(_G.NoxarPanelThreads) do
+        if type(task.cancel) == "function" then pcall(task.cancel, thread) end
+    end
+end
+_G.NoxarPanelThreads = {}
+
+-- spawnTracked(name, fn): same as task.spawn(fn), but stores the thread
+-- under `name` in the registry so it can be looked up and cancelled later
+-- (by CloseBtn, or by the next script re-execution above).
+function spawnTracked(name, fn)
+    if _G.NoxarPanelThreads[name] then
+        if type(task.cancel) == "function" then pcall(task.cancel, _G.NoxarPanelThreads[name]) end
+    end
+    local thread = task.spawn(fn)
+    _G.NoxarPanelThreads[name] = thread
+    return thread
+end
+
+function cancelAllTrackedThreads()
+    for _, thread in pairs(_G.NoxarPanelThreads) do
+        if type(task.cancel) == "function" then pcall(task.cancel, thread) end
+    end
+    _G.NoxarPanelThreads = {}
+end
+
+-- _G.NoxarPanelConnections is the same idea as _G.NoxarPanelThreads above,
+-- but for event connections instead of threads. This matters because a
+-- few listeners here connect to persistent objects that outlive the
+-- script (NotificationEvent is a RemoteEvent, promptOverlay is a CoreGui
+-- object, RunService.Heartbeat is a service) -- a plain local connection
+-- variable can't be reached by a fresh script re-execution, so without
+-- this registry every re-run stacked a brand new listener on top of any
+-- still-alive one from the previous run.
+if _G.NoxarPanelConnections then
+    for _, conn in pairs(_G.NoxarPanelConnections) do
+        pcall(function() conn:Disconnect() end)
+    end
+end
+_G.NoxarPanelConnections = {}
+
+-- connectTracked(name, signal, fn): same as signal:Connect(fn), but
+-- stores the connection under `name` in the registry so it can be
+-- disconnected later (by CloseBtn, or by the next script re-execution
+-- above).
+function connectTracked(name, signal, fn)
+    if _G.NoxarPanelConnections[name] then
+        pcall(function() _G.NoxarPanelConnections[name]:Disconnect() end)
+    end
+    local conn = signal:Connect(fn)
+    _G.NoxarPanelConnections[name] = conn
+    return conn
+end
+
+function disconnectAllTrackedConnections()
+    for _, conn in pairs(_G.NoxarPanelConnections) do
+        pcall(function() conn:Disconnect() end)
+    end
+    _G.NoxarPanelConnections = {}
+end
+
+Players = game:GetService("Players")
+RS = game:GetService("ReplicatedStorage")
+UIS = game:GetService("UserInputService")
+TS = game:GetService("TweenService")
+RunService = game:GetService("RunService")
+HttpService = game:GetService("HttpService")
+TeleportService = game:GetService("TeleportService")
+LP = Players.LocalPlayer
+PathTool = nil -- lazy-loaded only when a Shop button is pressed, to avoid console errors on execute
+
+-- Small compatibility layer for executor/Luau differences.
+if type(table.pack) ~= "function" then
+    function table.pack(...)
+        return { n = select("#", ...), ... }
+    end
+end
+if type(table.unpack) ~= "function" and type(unpack) == "function" then
+    table.unpack = unpack
+end
+if type(math.clamp) ~= "function" then
+    function math.clamp(x, a, b)
+        x = tonumber(x) or a
+        if x < a then return a end
+        if x > b then return b end
+        return x
+    end
+end
+
+-- ==========================================
+-- 1. CONFIGURATION & COMPACT MOBILE STATE
+-- ==========================================
+C = {
+    -- Fluent Pro theme: clean, muted, executor-library inspired
+    bg         = Color3.fromRGB(9, 11, 18),
+    surface    = Color3.fromRGB(15, 18, 28),
+    card       = Color3.fromRGB(23, 27, 40),
+    card2      = Color3.fromRGB(30, 35, 52),
+    border     = Color3.fromRGB(55, 64, 92),
+    borderSoft = Color3.fromRGB(38, 45, 66),
+    accent     = Color3.fromRGB(108, 99, 255),
+    accent2    = Color3.fromRGB(70, 185, 255),
+    green      = Color3.fromRGB(46, 204, 113),
+    red        = Color3.fromRGB(235, 82, 108),
+    text       = Color3.fromRGB(242, 245, 252),
+    sub        = Color3.fromRGB(145, 155, 180),
+    gold       = Color3.fromRGB(255, 198, 75)
+}
+
+-- Fluent Pro layout: compact for mobile landscape, with real sidebar tabs.
+normalSize = UDim2.new(0, 386, 0, 326)
+miniSize = UDim2.new(0, 386, 0, 42)
+isMinimized = false
+uiScaleValue = 1 -- saved manual UI size, adjustable in Settings
+
+-- Core Farm/Claim States (Defaults)
+ATTACK_DELAY = 0.05
+EQUIP_DELAY = 0.5
+HOVER_HEIGHT = 11
+
+running = false
+runId = 0
+selectedMonster = nil
+monstersEquipped = false
+currentTarget = nil
+nameCache = {}
+autoClaimEnabled = true
+antiAfkEnabled = true 
+autoHatchEnabled = false
+selectedEggId = 10
+selectedEggName = "Sprout Egg"
+
+-- Server States
+rejoinTimerEnabled = false
+rejoinMinutes = 60
+rejoinDeadline = nil
+savedPositions = {} 
+
+-- AreaFarm States (completely separate from savedPositions above)
+-- farmingSpot shape: {areaId = number, areaName = string, x = number, y = number, z = number} or nil if unset
+farmingSpot = nil
+bossLoopEnabled = false
+bossLoopStatus = "Idle"
+-- selectedBosses: bossName -> true, which bosses from BOSS_LIST (defined
+-- further down, near the event-driven boss loop) the user has opted in
+-- to auto-farm. bossQueue: FIFO array of {name=, area=} for selected
+-- bosses that have spawned and are waiting their turn. currentBossFight:
+-- {name=, area=} of whichever boss is actively being fought right now,
+-- or nil if idle -- also doubles as the "don't interrupt a fight in
+-- progress" guard.
+selectedBosses = {}
+bossQueue = {}
+currentBossFight = nil
+wasFarmingBeforeBossFight = false -- lets the boss loop cleanly pause/resume the regular Auto-Farm toggle instead of fighting over glue/equip with it
+
+DataPullFunc = RS:WaitForChild("CommonLibrary"):WaitForChild("Tool"):WaitForChild("RemoteManager"):WaitForChild("Funcs"):WaitForChild("DataPullFunc")
+NotificationEvent = RS:WaitForChild("CommonLibrary"):WaitForChild("Tool"):WaitForChild("RemoteManager"):WaitForChild("Events"):WaitForChild("NotificationEvent")
+clientMonsters = workspace:WaitForChild("ClientMonsters")
+
+-- Boss Loop mount helper. Uses the exact remote from your MountTest:
+-- DataPullFunc:InvokeServer("PetSwitchRideStatusChannel", true/false)
+_G.NoxarBossMountState = false
+function _G.NoxarSetBossMount(state, force)
+    state = state and true or false
+    if not force and _G.NoxarBossMountState == state then
+        return true
+    end
+    _G.NoxarBossMountState = state
+    local ok = pcall(function()
+        DataPullFunc:InvokeServer("PetSwitchRideStatusChannel", state)
+    end)
+    return ok
+end
+
+-- Direct access to the game's own hatch logic (more reliable than raw
+-- remote calls — this is the actual client function the Hatch button uses).
+EggSystem = nil
+do
+    local ok, mod = pcall(function()
+        return require(RS.CommonLogic.Egg.EggSystem)
+    end)
+    if ok then EggSystem = mod end
+end
+
+-- Direct access to the game's own breeding logic — PetBreedSystem is a
+-- real ModuleScript at ReplicatedStorage.CommonLogic.Pet.PetBreedSystem.
+-- ClientCreateBreeding(fatherId, motherId) and ClientHatching() are the
+-- exact functions the in-game Breed/Hatch buttons call.
+PetBreedSystem = nil
+do
+    local ok, mod = pcall(function()
+        return require(RS.CommonLogic.Pet.PetBreedSystem)
+    end)
+    if ok then PetBreedSystem = mod end
+end
+
+-- CfgPetBreed holds BreedTime / ParentGradeMin — real ModuleScript,
+-- confirmed at ReplicatedStorage.CommonConfig.Pet.CfgPetBreed
+CfgPetBreed = nil
+do
+    local ok, mod = pcall(function()
+        return require(RS.CommonConfig.Pet.CfgPetBreed)
+    end)
+    if ok then CfgPetBreed = mod end
+end
+
+-- Male/Female gender constants — pet:GetGender() returns one of these.
+-- Falls back to the game's typical 1/2 enum-as-number convention if the
+-- constants module path below doesn't resolve.
+PetGenderType = {Male = 1, Female = 2}
+do
+    local ok, mod = pcall(function()
+        return require(RS.CommonConfig.Constants)
+    end)
+    if ok and mod and mod.PetGenderType then
+        PetGenderType = mod.PetGenderType
+    end
+end
+
+-- Selected pet IDs for breeding (father = male, mother = female)
+breedFatherId = nil
+breedFatherLabel = nil
+breedMotherId = nil
+breedMotherLabel = nil
+autoBreedHatchEnabled = false -- auto-fires ClientHatching() when the timer completes
+autoBreedEnabled = false      -- auto-fires ClientCreateBreeding() again after each collect, looping forever
+
+groundRayParams = RaycastParams.new()
+groundRayParams.FilterType = Enum.RaycastFilterType.Exclude
+rayDirection = Vector3.new(0, -200, 0)
+
+-- ==========================================
+-- 1.2 EGG DATA DICTIONARY
+-- ==========================================
+EggDatabase = {
+    {id = 1, name = "Pyroclasm Egg"}, {id = 2, name = "WaterEgg"}, {id = 3, name = "GrassEgg"}, {id = 4, name = "SwampEgg"},
+    {id = 5, name = "FireEgg"}, {id = 6, name = "Pyroclasm Egg"}, {id = 7, name = "Strange Egg"}, {id = 8, name = "Ice Egg"},
+    {id = 9, name = "Glacier Egg"}, {id = 10, name = "Sprout Egg"}, {id = 11, name = "Turkey Egg"}, {id = 12, name = "Abuse Egg"},
+    {id = 13, name = "Blossom Egg"}, {id = 14, name = "Rosette Egg"}, {id = 15, name = "ShadeKnight's Egg"}, {id = 16, name = "Xmas Egg"},
+    {id = 17, name = "NewYear Egg"}, {id = 18, name = "Sand Egg"}, {id = 19, name = "Gildron's Egg"}, {id = 20, name = "Boss Egg"},
+    {id = 21, name = "Rift Egg"}, {id = 22, name = "Coral Egg"}, {id = 23, name = "Elite Egg"}, {id = 24, name = "TideVex's Egg"},
+    {id = 25, name = "Unihorn Egg"}, {id = 26, name = "Crimson Core Egg"}, {id = 27, name = "Valentine Egg"}, {id = 28, name = "Giant Tree Egg"},
+    {id = 29, name = "Twilight Giant Tree Egg"}, {id = 30, name = "Frostwyrm's Egg"}, {id = 31, name = "Sunforge Egg"}, {id = 32, name = "Ancient Egg"},
+    {id = 33, name = "Dracospike's Egg"}, {id = 34, name = "Dino Egg"}, {id = 35, name = "Shiny DustWing Egg"}, {id = 36, name = "Dina Egg"},
+    {id = 37, name = "Gold-Mane Greatbeak Egg"}, {id = 38, name = "Amethyst Clawmaw"}, {id = 39, name = "Crimson Scythe Egg"},
+    {id = 40, name = "AbyssalDrake's Egg"}, {id = 41, name = "Primothorn's Egg"}, {id = 42, name = "Frostiel 's Egg"},
+    {id = 43, name = "Easter Golden Ear Sweetie Egg"}, {id = 44, name = "Void Purple Egg"}, {id = 45, name = "Berrybun's Egg"},
+    {id = 46, name = "Goldhorn Scarab Egg"}, {id = 47, name = "Thunderclaw's Egg"}, {id = 48, name = "Crystalfae's Egg"},
+    {id = 49, name = "Dreamwing Egg"}, {id = 50, name = "Magma Tortoise's Egg"}, {id = 51, name = "Steamforge's Egg"},
+    {id = 52, name = "Thunder Rune Egg"}, {id = 53, name = "Bubbly Red Blaze Egg"}, {id = 54, name = "Rexie's Egg"},
+    {id = 55, name = "Lampyr's Egg"}, {id = 56, name = "Blood Crystal Prison Egg"}, {id = 57, name = "Titanium Blue Shield Egg"},
+    {id = 58, name = "Shadow Cube Egg"}, {id = 59, name = "Soulguard's Egg"}, {id = 60, name = "Jokaire's Egg"}, {id = 61, name = "Bone Dust Egg"},
+    {id = 62, name = "Neon Ofrenda Egg"}, {id = 63, name = "Void Egg"}, {id = 64, name = "Scareaper's Egg"}, {id = 65, name = "Shadow Rotthorn Egg"},
+    {id = 66, name = "Shadow Sealed Core Egg"}, {id = 67, name = "Runegolem's Egg"}, {id = 68, name = "Rune Warden Egg"}, {id = 69, name = "Jade Crab Egg"},
+    {id = 70, name = "Beatopus's Egg"}, {id = 71, name = "Flash Chest Egg"}, {id = 72, name = "Golden Winged Sacred Egg"},
+    {id = 271, name = "Valentine's King Egg"}, {id = 140000, name = "Rosette Egg"}, {id = 211, name = "Rift EggII"},
+    {id = 50000, name = "FireEgg"}, {id = 80000, name = "Ice Egg"}
+}
+
+-- ==========================================
+-- 1.6 PET BREEDING — BAG SCANNING
+-- ==========================================
+-- Uses the game's own GamePlayer.pet:IterBagItem() iterator (found via
+-- decompiled PetBagView) rather than guessing at inventory structure.
+-- Filters exactly the same way the in-game breed-parent picker does:
+-- not a child pet, Grade >= ParentGradeMin, template not CantBreed,
+-- and split by gender (Male -> father list, Female -> mother list).
+function getGamePlayer()
+    local ok, gp = pcall(function()
+        local CPM = require(RS.CommonLibrary.Player.ClientPlayerManager)
+        return CPM.GetGamePlayer()
+    end)
+    if ok then return gp end
+    return nil
+end
+
+-- Returns two arrays: { {id=.., name=.., grade=..}, ... } for males and females
+function scanBreedablePets()
+    local males, females = {}, {}
+    local gp = getGamePlayer()
+    if not gp or not gp.pet or not gp.pet.IterBagItem then
+        return males, females
+    end
+
+    local ParentGradeMin = CfgPetBreed and CfgPetBreed.ParentGradeMin or nil
+
+    local MaleType, FemaleType = PetGenderType.Male, PetGenderType.Female
+
+    local ok = pcall(function()
+        gp.pet:IterBagItem(function(item)
+            if item:IsChildPet() then return end
+            local tmpl = item:GetTmpl()
+            if tmpl and tmpl.CantBreed then return end
+            local grade = item:GetGrade()
+            if ParentGradeMin and grade < ParentGradeMin then return end
+
+            local entry = {
+                id = item:GetId(),
+                name = (tmpl and tmpl.Name) or ("Pet #" .. tostring(item:GetId())),
+                grade = grade,
+            }
+
+            local gender = item:GetGender()
+            if MaleType ~= nil and gender == MaleType then
+                table.insert(males, entry)
+            elseif FemaleType ~= nil and gender == FemaleType then
+                table.insert(females, entry)
+            end
+        end)
+    end)
+
+    return males, females
+end
+
+-- Checks whether breeding slot 1 currently has an active/completed
+-- breed in progress, using the same GetBreeding() call the in-game
+-- AreaPetBreedShower uses to render the info GUI above the egg.
+function getBreedingSlotInfo()
+    local gp = getGamePlayer()
+    if not gp or not gp.pet or not gp.pet.GetBreeding then return nil end
+    local ok, info = pcall(function() return gp.pet:GetBreeding(1) end)
+    if ok then return info end
+    return nil
+end
+
+BreedTimeSeconds = (CfgPetBreed and CfgPetBreed.BreedTime) or 14400 -- fallback if module didn't resolve
+
+
+configFileName = "NoxarSave.json"
+
+function saveConfig()
+    if writefile then
+        local data = { 
+            target = selectedMonster,
+            attackDelay = ATTACK_DELAY,
+            equipDelay = EQUIP_DELAY,
+            isFarming = running,
+            rejoinEnabled = rejoinTimerEnabled,
+            rejoinMins = rejoinMinutes,
+            positions = savedPositions,
+            antiAfk = antiAfkEnabled,
+            uiScale = uiScaleValue,
+            autoHatch = autoHatchEnabled,
+            eggId = selectedEggId,
+            eggName = selectedEggName,
+            -- AreaFarm data, kept as separate keys from `positions` above
+            areaFarmingSpot = farmingSpot,
+            areaBossLoopEnabled = bossLoopEnabled,
+            selectedBosses = selectedBosses,
+            -- Pet breeding: selected parents + auto toggles, so a rejoin
+            -- can resume the breed -> hatch -> breed loop automatically
+            breedFatherId = breedFatherId,
+            breedFatherLabel = breedFatherLabel,
+            breedMotherId = breedMotherId,
+            breedMotherLabel = breedMotherLabel,
+            autoBreedHatchEnabled = autoBreedHatchEnabled,
+            autoBreedEnabled = autoBreedEnabled
+        }
+        pcall(function()
+            writefile(configFileName, HttpService:JSONEncode(data))
+        end)
+    end
+end
+
+function loadConfig()
+    if isfile and isfile(configFileName) and readfile then
+        pcall(function()
+            local data = HttpService:JSONDecode(readfile(configFileName))
+            if data.target ~= nil then selectedMonster = data.target end
+            if data.attackDelay ~= nil then ATTACK_DELAY = data.attackDelay end
+            if data.equipDelay ~= nil then EQUIP_DELAY = data.equipDelay end
+            if data.isFarming ~= nil then running = data.isFarming end
+            if data.rejoinEnabled ~= nil then rejoinTimerEnabled = data.rejoinEnabled end
+            if data.rejoinMins ~= nil then rejoinMinutes = data.rejoinMins end
+            if data.positions ~= nil then savedPositions = data.positions end
+            if data.antiAfk ~= nil then antiAfkEnabled = data.antiAfk end 
+            if data.uiScale ~= nil then uiScaleValue = math.clamp(tonumber(data.uiScale) or 1, 0.75, 1.20) end
+            if data.autoHatch ~= nil then autoHatchEnabled = data.autoHatch end
+            if data.eggId ~= nil then selectedEggId = data.eggId end
+            if data.eggName ~= nil then selectedEggName = data.eggName end
+            -- AreaFarm data, kept separate from `positions` above
+            if data.areaFarmingSpot ~= nil then farmingSpot = data.areaFarmingSpot end
+            if data.areaBossLoopEnabled ~= nil then bossLoopEnabled = data.areaBossLoopEnabled end
+            if data.selectedBosses ~= nil then selectedBosses = data.selectedBosses end
+            -- Pet breeding restore
+            if data.breedFatherId ~= nil then breedFatherId = data.breedFatherId end
+            if data.breedFatherLabel ~= nil then breedFatherLabel = data.breedFatherLabel end
+            if data.breedMotherId ~= nil then breedMotherId = data.breedMotherId end
+            if data.breedMotherLabel ~= nil then breedMotherLabel = data.breedMotherLabel end
+            if data.autoBreedHatchEnabled ~= nil then autoBreedHatchEnabled = data.autoBreedHatchEnabled end
+            if data.autoBreedEnabled ~= nil then autoBreedEnabled = data.autoBreedEnabled end
+        end)
+    end
+end
+
+-- Load everything before building the UI
+loadConfig()
+
+-- ==========================================
+-- 2. CORE LOGIC (FARMING, CLAIM, & HATCH)
+-- ==========================================
+function equipBest()
+    if not monstersEquipped then
+        pcall(function() DataPullFunc:InvokeServer("PetEquipBestChannel") end)
+        monstersEquipped = true
+    end
+end
+
+function unequipAll()
+    if monstersEquipped then
+        pcall(function() DataPullFunc:InvokeServer("PetUnEquipAllChannel") end)
+        monstersEquipped = false
+    end
+end
+
+function getRoot()
+    local char = LP.Character
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+-- unlockTarget: disconnects the persistent farm-lock connection (see
+-- lockOntoTarget below). Tracked via connectTracked, so a stale lock
+-- from a previous script re-execution also gets cleaned up automatically
+-- at the top of the file, same as every other tracked connection here.
+function unlockTarget()
+    if _G.NoxarPanelConnections["farmLock"] then
+        pcall(function() _G.NoxarPanelConnections["farmLock"]:Disconnect() end)
+        _G.NoxarPanelConnections["farmLock"] = nil
+    end
+end
+
+-- lockOntoTarget: this is the original continuous glue behavior --
+-- a RunService.Heartbeat connection that re-locks the player's CFrame
+-- onto the target every single frame, which is what makes regular
+-- Auto-Farm feel smooth/instant instead of snapping in discrete steps.
+-- Used only by the regular farm loop (startFarming), which calls this
+-- once per acquired target and unlockTarget() when it's done with it --
+-- NOT called repeatedly per attack tick, since the Heartbeat connection
+-- itself is what keeps it locked every frame in between.
+function lockOntoTarget(targetRoot)
+    unlockTarget()
+    if not targetRoot or not targetRoot.Parent then return end
+
+    local initialPos = targetRoot.Position
+    local _, monsterYRotation, _ = targetRoot.CFrame:ToOrientation()
+
+    groundRayParams.FilterDescendantsInstances = {
+        LP.Character,
+        targetRoot.Parent,
+        clientMonsters
+    }
+
+    local rayOrigin = Vector3.new(initialPos.X, initialPos.Y + 5, initialPos.Z)
+    local raycastResult = workspace:Raycast(rayOrigin, rayDirection, groundRayParams)
+    local groundY = raycastResult and raycastResult.Position.Y or (initialPos.Y - 4)
+
+    local lockedCFrame = CFrame.new(initialPos.X, groundY + HOVER_HEIGHT, initialPos.Z) * CFrame.fromOrientation(0, monsterYRotation, 0)
+
+    connectTracked("farmLock", RunService.Heartbeat, function()
+        local r = getRoot()
+        if r and targetRoot and targetRoot.Parent then
+            r.CFrame = lockedCFrame
+            r.AssemblyLinearVelocity = Vector3.zero
+            r.AssemblyAngularVelocity = Vector3.zero
+        else
+            unlockTarget()
+        end
+    end)
+end
+
+-- glueToTarget: teleports the player on top of the target once (a
+-- "snap TP"), instead of holding a persistent connection. This is used
+-- only by the boss fight (fightBossUntilDead), which snaps once when
+-- the fight starts and then relies on your in-game auto-attack -- it
+-- doesn't need continuous re-locking the way regular farming does.
+function glueToTarget(targetRoot)
+    if not targetRoot or not targetRoot.Parent then return end
+    local r = getRoot()
+    if not r then return end
+
+    local pos = targetRoot.Position
+    local _, monsterYRotation, _ = targetRoot.CFrame:ToOrientation()
+
+    groundRayParams.FilterDescendantsInstances = {
+        LP.Character,
+        targetRoot.Parent,
+        clientMonsters
+    }
+
+    local rayOrigin = Vector3.new(pos.X, pos.Y + 5, pos.Z)
+    local raycastResult = workspace:Raycast(rayOrigin, rayDirection, groundRayParams)
+    local groundY = raycastResult and raycastResult.Position.Y or (pos.Y - 4)
+
+    r.CFrame = CFrame.new(pos.X, groundY + HOVER_HEIGHT, pos.Z) * CFrame.fromOrientation(0, monsterYRotation, 0)
+    r.AssemblyLinearVelocity = Vector3.zero
+    r.AssemblyAngularVelocity = Vector3.zero
+end
+
+function buildNameCache()
+    table.clear(nameCache) 
+    if not clientMonsters then return end
+
+    local selfGui = workspace:FindFirstChild("SelfGUI")
+    if not selfGui then return end
+
+    for _, gui in ipairs(selfGui:GetChildren()) do
+        if not gui:IsA("BillboardGui") then continue end
+        local adornee = gui.Adornee
+        if not adornee then continue end
+        local candidates = { adornee.Parent and adornee.Parent.Parent, adornee.Parent }
+        for _, monster in ipairs(candidates) do
+            if monster and monster.Parent == clientMonsters then
+                local labName = gui:FindFirstChild("LabName", true)
+                local labLv = gui:FindFirstChild("LabLv", true)
+                if labName and labName:IsA("TextLabel") and labName.Text ~= "" then
+                    nameCache[monster.Name] = { name = labName.Text, level = labLv and labLv.Text or "" }
+                end
+                break
+            end
+        end
+    end
+end
+
+function scanMonsterTypes()
+    buildNameCache()
+    local seen = {}
+    local types = {}
+
+    for _, m in ipairs(clientMonsters:GetChildren()) do
+        local info = nameCache[m.Name]
+        local displayName = info and info.name or m.Name
+        local root = m:FindFirstChild("Root")
+        local pos = root and root:IsA("BasePart") and root.Position or (m.PrimaryPart and m.PrimaryPart.Position)
+        
+        if not seen[displayName] then
+            seen[displayName] = true
+            table.insert(types, {displayName = displayName, level = info and info.level or "", count = 1, pos = pos})
+        else
+            for _, t in ipairs(types) do
+                if t.displayName == displayName then t.count += 1; break end
+            end
+        end
+    end
+    table.sort(types, function(a,b) return a.displayName < b.displayName end)
+    return types
+end
+
+function getTargetMonsters()
+    local monsters = {}
+    for _, m in ipairs(clientMonsters:GetChildren()) do
+        local info = nameCache[m.Name]
+        local displayName = info and info.name or m.Name
+        if selectedMonster and not displayName:lower():find(selectedMonster:lower(), 1, true) then
+            continue
+        end
+        local root = m:FindFirstChild("Root")
+        local pos = root and root:IsA("BasePart") and root.Position or (m.PrimaryPart and m.PrimaryPart.Position)
+        if pos then table.insert(monsters, {model = m, pos = pos, root = root}) end
+    end
+    return monsters
+end
+
+function startFarming(statusLbl)
+    local myId = runId
+    local killed = 0
+
+    while running and runId == myId do
+        buildNameCache()
+        local monsters = getTargetMonsters()
+
+        if #monsters == 0 then
+            currentTarget = nil
+            unlockTarget()
+            unequipAll()
+            statusLbl.Text = "Status: Waiting for spawns..."
+            task.wait(0.5)
+            continue
+        end
+
+        local target = monsters[1]
+        currentTarget = target.model
+
+        if target.root then
+            lockOntoTarget(target.root)
+        end
+        
+        unequipAll()
+        task.wait(EQUIP_DELAY)
+        
+        if not running or runId ~= myId then break end
+        
+        if clientMonsters:FindFirstChild(target.model.Name) then
+            equipBest()
+        else
+            continue
+        end
+
+        while running and runId == myId do
+            if not clientMonsters:FindFirstChild(target.model.Name) then
+                killed += 1
+                unlockTarget()
+                unequipAll()
+                currentTarget = nil
+                statusLbl.Text = "Status: Killed " .. killed .. " (" .. (selectedMonster or "All") .. ")"
+                break
+            end
+            
+            local root = target.model:FindFirstChild("Root")
+            local cd = root and root:FindFirstChildOfClass("ClickDetector")
+            if cd then pcall(function() fireclickdetector(cd) end) end
+            
+            task.wait(ATTACK_DELAY)
+        end
+    end
+    
+    currentTarget = nil
+    unlockTarget()
+    unequipAll()
+    statusLbl.Text = "Status: Stopped. Killed: " .. killed
+end
+
+ClaimStatus = nil
+LastClaimLbl = nil
+function claimRemote(channelName, ...)
+    local args = table.pack(...)
+    pcall(function()
+        DataPullFunc:InvokeServer(channelName, table.unpack(args, 1, args.n))
+    end)
+    task.wait(0.1)
+end
+
+function claimEverything()
+    if not autoClaimEnabled then
+        return false
+    end
+
+    if ClaimStatus then
+        ClaimStatus.Text = "Status: Claiming..."
+    end
+
+
+    -- Daily tasks
+    for _, id in ipairs({101, 102, 103, 104, 105}) do
+        claimRemote("TaskClaimRewardChannel", id)
+    end
+
+    -- Weekly tasks
+    for _, id in ipairs({201, 202, 203, 204, 205}) do
+        claimRemote("TaskClaimRewardChannel", id)
+    end
+
+    -- Tower rewards
+    claimRemote("TowerTakeDailyRewardAllChannel")
+
+    -- Daily chest/reward claims
+    claimRemote("ChestRewardTakeDailyChestChannel", 1)
+    claimRemote("ChestRewardTakeDailyRewardChannel", 1)
+
+    if ClaimStatus then
+        ClaimStatus.Text = "Status: Done!"
+    end
+    if LastClaimLbl then
+        LastClaimLbl.Text = "Last claim: " .. os.date("%H:%M:%S")
+    end
+
+    return true
+end
+
+-- ==========================================
+-- 3. SERVER & ANTI-AFK MECHANICS 
+-- ==========================================
+VirtualUser = game:GetService("VirtualUser")
+connectTracked("antiAfkWatcher", LP.Idled, function()
+    if antiAfkEnabled then
+        VirtualUser:Button2Down(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
+        task.wait(1)
+        VirtualUser:Button2Up(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
+    end
+end)
+
+function rejoinSameServer()
+    local placeId = game.PlaceId
+    local ok, joinData = pcall(function() return LP:GetJoinData() end)
+    local code = ok and joinData and joinData.PrivateServerAccessCode
+
+    if code and code ~= "" then
+        task.wait(3) 
+        pcall(function()
+            TeleportService:TeleportToPrivateServer(placeId, code, {LP})
+        end)
+    else
+        task.wait(2)
+        pcall(function() TeleportService:Teleport(placeId, LP) end)
+    end
+end
+
+CoreGui = game:GetService("CoreGui")
+promptOverlay = CoreGui:FindFirstChild("RobloxPromptGui")
+    and CoreGui.RobloxPromptGui:FindFirstChild("promptOverlay")
+if promptOverlay then
+    connectTracked("promptErrorWatcher", promptOverlay.ChildAdded, function(child)
+        if child.Name == "ErrorPrompt" then
+            rejoinSameServer()
+        end
+    end)
+end
+
