@@ -5,7 +5,7 @@
 --   1) replace REMOTE_URL below, or
 --   2) set getgenv().NoxarRemoteURL before running this loader.
 
-local REMOTE_URL = (getgenv and getgenv().NoxarRemoteURL) or _G.NoxarRemoteURL or "PASTE_RAW_FULL_SCRIPT_URL_HERE"
+local REMOTE_URL = (getgenv and getgenv().NoxarRemoteURL) or _G.NoxarRemoteURL or "https://raw.githubusercontent.com/AyeYahLee/KaizTest/refs/heads/main/camTest"
 
 if REMOTE_URL == "https://raw.githubusercontent.com/AyeYahLee/KaizTest/refs/heads/main/camTest" then
     warn("[Noxar] Missing remote URL. Upload NoxarRemoteFull_FluentPro_Current.lua.txt and paste the raw link into REMOTE_URL.")
