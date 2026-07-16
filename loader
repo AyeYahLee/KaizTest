@@ -24,7 +24,7 @@ end
 -- running, then start fresh.
 if _G.NoxarPanelThreads then
     for _, thread in pairs(_G.NoxarPanelThreads) do
-        pcall(task.cancel, thread)
+        if type(task.cancel) == "function" then pcall(task.cancel, thread) end
     end
 end
 _G.NoxarPanelThreads = {}
@@ -34,7 +34,7 @@ _G.NoxarPanelThreads = {}
 -- (by CloseBtn, or by the next script re-execution above).
 local function spawnTracked(name, fn)
     if _G.NoxarPanelThreads[name] then
-        pcall(task.cancel, _G.NoxarPanelThreads[name])
+        if type(task.cancel) == "function" then pcall(task.cancel, _G.NoxarPanelThreads[name]) end
     end
     local thread = task.spawn(fn)
     _G.NoxarPanelThreads[name] = thread
@@ -43,7 +43,7 @@ end
 
 local function cancelAllTrackedThreads()
     for _, thread in pairs(_G.NoxarPanelThreads) do
-        pcall(task.cancel, thread)
+        if type(task.cancel) == "function" then pcall(task.cancel, thread) end
     end
     _G.NoxarPanelThreads = {}
 end
@@ -92,6 +92,38 @@ local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
 local LP = Players.LocalPlayer
 local PathTool = nil -- lazy-loaded only when a Shop button is pressed, to avoid console errors on execute
+
+-- Executor/Luau compatibility guards. Some executors/environments miss
+-- table.pack/table.unpack/math.clamp; calling a missing one causes the exact
+-- "attempt to call a nil value" console spam. Define safe fallbacks once.
+if type(table.pack) ~= "function" then
+    function table.pack(...)
+        return { n = select("#", ...), ... }
+    end
+end
+
+if type(table.unpack) ~= "function" then
+    if type(unpack) == "function" then
+        table.unpack = unpack
+    else
+        function table.unpack(t, i, j)
+            i = i or 1
+            j = j or #t
+            if i <= j then
+                return t[i], table.unpack(t, i + 1, j)
+            end
+        end
+    end
+end
+
+if type(math.clamp) ~= "function" then
+    function math.clamp(x, minValue, maxValue)
+        x = tonumber(x) or minValue
+        if x < minValue then return minValue end
+        if x > maxValue then return maxValue end
+        return x
+    end
+end
 
 -- ==========================================
 -- 1. CONFIGURATION & COMPACT MOBILE STATE
