@@ -624,31 +624,51 @@ local function startFarming(statusLbl)
     statusLbl.Text = "Status: Stopped. Killed: " .. killed
 end
 
-local function claimAll()
-    local ok1 = pcall(function() DataPullFunc:InvokeServer("TowerTakeDailyRewardAllChannel") end)
-    local ok2 = pcall(function() DataPullFunc:InvokeServer("ChestRewardTakeDailyChestChannel", 1) end)
-    local ok3 = pcall(function() DataPullFunc:InvokeServer("ChestRewardTakeDailyRewardChannel", 1) end)
-    
-    for _, id in ipairs({101, 102, 103, 104, 105, 201, 202, 203, 204, 205}) do
-        pcall(function() DataPullFunc:InvokeServer("TaskClaimRewardChannel", id) end)
-        task.wait(0.05)
+local ClaimStatus
+local LastClaimLbl
+local function claimRemote(channelName, ...)
+    local args = table.pack(...)
+    pcall(function()
+        DataPullFunc:InvokeServer(channelName, table.unpack(args, 1, args.n))
+    end)
+    task.wait(0.1)
+end
+
+local function claimEverything()
+    if not autoClaimEnabled then
+        return false
     end
-    return ok1 and ok2 and ok3
-end
 
-local function getSecondsUntilReset()
-    local t = os.date("!*t")
-    local now = t.hour * 3600 + t.min * 60 + t.sec
-    local diff = 86400 - now
-    if diff <= 30 then diff = diff + 86400 end
-    return diff
-end
+    if ClaimStatus then
+        ClaimStatus.Text = "Status: Claiming..."
+    end
 
-local function formatTime(s)
-    local h = math.floor(s / 3600)
-    local m = math.floor((s % 3600) / 60)
-    local sec = math.floor(s % 60)
-    return string.format("%02d:%02d:%02d", h, m, sec)
+
+    -- Daily tasks
+    for _, id in ipairs({101, 102, 103, 104, 105}) do
+        claimRemote("TaskClaimRewardChannel", id)
+    end
+
+    -- Weekly tasks
+    for _, id in ipairs({201, 202, 203, 204, 205}) do
+        claimRemote("TaskClaimRewardChannel", id)
+    end
+
+    -- Tower rewards
+    claimRemote("TowerTakeDailyRewardAllChannel")
+
+    -- Daily chest/reward claims
+    claimRemote("ChestRewardTakeDailyChestChannel", 1)
+    claimRemote("ChestRewardTakeDailyRewardChannel", 1)
+
+    if ClaimStatus then
+        ClaimStatus.Text = "Status: Done!"
+    end
+    if LastClaimLbl then
+        LastClaimLbl.Text = "Last claim: " .. os.date("%H:%M:%S")
+    end
+
+    return true
 end
 
 -- ==========================================
@@ -1281,7 +1301,7 @@ UIListClaim.HorizontalAlignment = Enum.HorizontalAlignment.Center
 UIListClaim.SortOrder = Enum.SortOrder.LayoutOrder
 Instance.new("UIPadding", ClaimTab).PaddingTop = UDim.new(0, 8)
 
-local ClaimStatus = Instance.new("TextLabel", ClaimTab)
+ClaimStatus = Instance.new("TextLabel", ClaimTab)
 ClaimStatus.Size = UDim2.new(1, -20, 0, 22)
 ClaimStatus.BackgroundColor3 = C.surface
 ClaimStatus.Text = "Status: Idle"
@@ -1291,23 +1311,28 @@ ClaimStatus.TextSize = 11
 Instance.new("UICorner", ClaimStatus).CornerRadius = UDim.new(0, 9)
 ClaimStatus.LayoutOrder = 1
 
-local ClaimTimer = Instance.new("TextLabel", ClaimTab)
-ClaimTimer.Size = UDim2.new(1, -20, 0, 22)
-ClaimTimer.BackgroundTransparency = 1
-ClaimTimer.Text = "Next Reset: --:--:--"
-ClaimTimer.TextColor3 = C.accent
-ClaimTimer.Font = Enum.Font.GothamBold
-ClaimTimer.TextSize = 14
-ClaimTimer.LayoutOrder = 2
-
-local LastClaimLbl = Instance.new("TextLabel", ClaimTab)
+LastClaimLbl = Instance.new("TextLabel", ClaimTab)
 LastClaimLbl.Size = UDim2.new(1, -20, 0, 16)
 LastClaimLbl.BackgroundTransparency = 1
-LastClaimLbl.Text = "Last Claim: Never"
+LastClaimLbl.Text = "Last claim: Never"
 LastClaimLbl.TextColor3 = C.sub
 LastClaimLbl.Font = Enum.Font.Gotham
 LastClaimLbl.TextSize = 10
-LastClaimLbl.LayoutOrder = 3
+LastClaimLbl.LayoutOrder = 2
+
+local ClaimInfoLbl = Instance.new("TextLabel", ClaimTab)
+ClaimInfoLbl.Size = UDim2.new(1, -20, 0, 44)
+ClaimInfoLbl.BackgroundTransparency = 1
+ClaimInfoLbl.BorderSizePixel = 0
+ClaimInfoLbl.Text = "Claims every: Daily & Weekly Tasks, Daily Chest,\nDaily Reward, and Spire Daily Rewards"
+ClaimInfoLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+ClaimInfoLbl.TextStrokeTransparency = 1
+ClaimInfoLbl.Font = Enum.Font.GothamBold
+ClaimInfoLbl.TextSize = 11
+ClaimInfoLbl.TextWrapped = true
+ClaimInfoLbl.TextXAlignment = Enum.TextXAlignment.Center
+ClaimInfoLbl.TextYAlignment = Enum.TextYAlignment.Center
+ClaimInfoLbl.LayoutOrder = 6
 
 local ToggleClaimBtn = Instance.new("TextButton", ClaimTab)
 ToggleClaimBtn.Size = UDim2.new(1, -20, 0, 32)
@@ -1347,17 +1372,11 @@ ToggleClaimBtn.MouseButton1Click:Connect(function()
 end)
 
 ClaimNowBtn.MouseButton1Click:Connect(function()
-    ClaimNowBtn.Text = "Invoking Server..."
-    local ok = claimAll()
-    if ok then
-        ClaimStatus.Text = "Status: Success!"
-        LastClaimLbl.Text = "Last Claim: " .. os.date("%H:%M:%S")
-        ClaimNowBtn.Text = "✓ Processed"
-    else
-        ClaimStatus.Text = "Status: Partial Failure"
-        ClaimNowBtn.Text = "✕ Failed"
-    end
-    task.wait(1.5)
+    if not autoClaimEnabled then return end
+    ClaimNowBtn.Text = "Claiming..."
+    claimEverything()
+    ClaimNowBtn.Text = "Done"
+    task.wait(1)
     ClaimNowBtn.Text = "Manual Claim"
 end)
 
@@ -2273,7 +2292,7 @@ FarmSpotLbl.LayoutOrder = 5
 local FarmSpotInfoLbl = Instance.new("TextLabel", AreaFarmTab)
 FarmSpotInfoLbl.Size = UDim2.new(1, -20, 0, 28)
 FarmSpotInfoLbl.BackgroundTransparency = 1
-FarmSpotInfoLbl.Text = "Boss Loop will return you to this saved spot after each queue finishes, then resume farming if it was running."
+FarmSpotInfoLbl.Text = "Saved position to return to after all bosses are defeated"
 FarmSpotInfoLbl.TextColor3 = Color3.fromRGB(180, 190, 220)
 FarmSpotInfoLbl.Font = Enum.Font.Gotham
 FarmSpotInfoLbl.TextSize = 9
@@ -2928,34 +2947,9 @@ task.spawn(function()
     ScanBtn.Text = "🔍 Rescan (" .. #types .. " Found)"
 end)
 
-spawnTracked("claimTimerDisplay", function()
-    while task.wait(1) do
-        local secs = getSecondsUntilReset()
-        ClaimTimer.Text = "Next Reset: " .. formatTime(secs)
-    end
-end)
-
 spawnTracked("autoClaimLoop", function()
     task.wait(3)
-    if autoClaimEnabled then
-        local ok = claimAll()
-        if ok then
-            ClaimStatus.Text = "Status: Handled Launch Claim!"
-            LastClaimLbl.Text = "Last Claim: " .. os.date("%H:%M:%S")
-        end
-    end
-    while true do
-        local secs = getSecondsUntilReset()
-        task.wait(secs + 15) 
-        if autoClaimEnabled then
-            ClaimStatus.Text = "Status: Checking reset payouts..."
-            local ok = claimAll()
-            if ok then
-                ClaimStatus.Text = "Status: Cycle Completed!"
-                LastClaimLbl.Text = "Last Claim: " .. os.date("%H:%M:%S")
-            end
-        end
-    end
+    claimEverything()
 end)
 
 -- Background Auto Hatch Executor
