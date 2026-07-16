@@ -56,11 +56,14 @@ ScrollHatch.BackgroundColor3 = C.surface
 ScrollHatch.ScrollBarThickness = 3
 ScrollHatch.ScrollBarImageColor3 = C.accent
 ScrollHatch.BorderSizePixel = 0
+ScrollHatch.AutomaticCanvasSize = Enum.AutomaticSize.Y
 Instance.new("UICorner", ScrollHatch).CornerRadius = UDim.new(0, 9)
 ScrollHatch.LayoutOrder = 5
 ScrollHatchList = Instance.new("UIListLayout", ScrollHatch)
 ScrollHatchList.Padding = UDim.new(0, 3)
 Instance.new("UIPadding", ScrollHatch).PaddingTop = UDim.new(0, 3)
+
+
 
 EggSearchBox.Visible = false
 ScrollHatch.Size = UDim2.new(1, -20, 0, 0)
@@ -69,11 +72,18 @@ ScrollHatch.Visible = false
 eggButtons = {} -- {btn = TextButton, searchName = "lowercase egg name"}
 
 function refreshEggListCanvas()
-    -- Recompute canvas size after buttons are shown/hidden by the filter,
-    -- since UIListLayout only accounts for visible children automatically
-    -- on its own AbsoluteContentSize, but we nudge it a frame late to be safe.
     task.defer(function()
-        ScrollHatch.CanvasSize = UDim2.new(0, 0, 0, ScrollHatchList.AbsoluteContentSize.Y + 8)
+        local currentScale = tonumber(uiScaleValue) or 1
+        if currentScale <= 0 then currentScale = 1 end
+        local visibleCount = 0
+        for _, entry in ipairs(eggButtons) do
+            if entry.btn and entry.btn.Visible then
+                visibleCount = visibleCount + 1
+            end
+        end
+        local unscaledAbsHeight = (ScrollHatchList.AbsoluteContentSize.Y / currentScale) + 10
+        local unscaledCountHeight = visibleCount * 37 + 10
+        ScrollHatch.CanvasSize = UDim2.new(0, 0, 0, math.max(unscaledAbsHeight, unscaledCountHeight))
     end)
 end
 
@@ -93,6 +103,7 @@ EggDropBtn.MouseButton1Click:Connect(function()
     local show = not ScrollHatch.Visible
     EggSearchBox.Visible = show
     EggDropBtn.Text = show and "▲  Close egg list" or ("▼  " .. selectedEggName .. "  |  ID " .. tostring(selectedEggId))
+    refreshEggListCanvas()
     _G.NoxarUI.animateDrop(ScrollHatch, show, 142)
 end)
 
@@ -110,7 +121,7 @@ for _, egg in ipairs(EggDatabase) do
 
     table.insert(eggButtons, {btn = btn, searchName = egg.name:lower()})
 end
-ScrollHatch.CanvasSize = UDim2.new(0, 0, 0, ScrollHatchList.AbsoluteContentSize.Y + 8)
+refreshEggListCanvas()
 
 ToggleHatchBtn = Instance.new("TextButton", HatchTab)
 ToggleHatchBtn.Size = UDim2.new(1, -20, 0, 32)
@@ -431,3 +442,5 @@ AutoBreedBtn.MouseButton1Click:Connect(function()
     saveConfig()
 end)
 
+
+refreshEggListCanvas()
