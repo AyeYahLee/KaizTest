@@ -551,25 +551,12 @@ end
 
 _G.NoxarBossDeathNotified = _G.NoxarBossDeathNotified or {}
 
-local function notifyBossKilled(bossName)
-    pcall(function()
-        game:GetService("StarterGui"):SetCore("SendNotification", {
-            Title = "💀 Boss Slain / Died",
-            Text = tostring(bossName) .. " was killed by someone!",
-            Duration = 4
-        })
-    end)
-end
-
 function markBossDeathNotified(bossName)
     if not bossName then return end
     local deadName = (type(bossName) == "table" and bossName[1]) or tostring(bossName)
     _G.NoxarBossDeathNotified[deadName] = os.clock()
 
-    -- 1. Send in-game pop-up notification
-    notifyBossKilled(deadName)
-
-    -- 2. Immediately purge from bossQueue so it won't queue or waste time on it
+    -- Purge from bossQueue immediately so it won't queue or waste time on it
     local removedCount = 0
     if bossQueue then
         for i = #bossQueue, 1, -1 do
@@ -580,13 +567,13 @@ function markBossDeathNotified(bossName)
         end
     end
 
-    -- 3. Live status notification update
+    -- Live UI status update
     if bossLoopEnabled and BossLoopLiveStatusLbl then
         if currentBossFight and currentBossFight.name == deadName then
-            BossLoopLiveStatusLbl.Text = "Status: 💀 " .. deadName .. " killed by someone! Aborting..."
+            BossLoopLiveStatusLbl.Text = "Status: 💀 " .. deadName .. " died — aborting..."
             BossLoopLiveStatusLbl.TextColor3 = C.red
         elseif removedCount > 0 then
-            BossLoopLiveStatusLbl.Text = "Status: 💀 " .. deadName .. " killed — removed from queue (" .. #bossQueue .. " left)"
+            BossLoopLiveStatusLbl.Text = "Status: 💀 " .. deadName .. " died — removed from queue (" .. #bossQueue .. " left)"
             BossLoopLiveStatusLbl.TextColor3 = C.red
         end
     end
