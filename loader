@@ -91,10 +91,7 @@ local RunService = game:GetService("RunService")
 local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
 local LP = Players.LocalPlayer
-local PathTool
-pcall(function()
-    PathTool = require(game:GetService("ReplicatedStorage").CommonLibrary.Tool.PathTool)
-end)
+local PathTool = nil -- lazy-loaded only when a Shop button is pressed, to avoid console errors on execute
 
 -- ==========================================
 -- 1. CONFIGURATION & COMPACT MOBILE STATE
@@ -1423,6 +1420,34 @@ ShopInfoLbl.TextWrapped = true
 ShopInfoLbl.TextXAlignment = Enum.TextXAlignment.Left
 ShopInfoLbl.LayoutOrder = 2
 
+local function getPathToolSafe()
+    if PathTool then return PathTool end
+    if _G.PathTool then
+        PathTool = _G.PathTool
+        return PathTool
+    end
+    pcall(function()
+        PathTool = require(game:GetService("ReplicatedStorage").CommonLibrary.Tool.PathTool)
+    end)
+    return PathTool
+end
+
+local function openViewSafe(viewName, arg1)
+    -- Fully guarded: no nil function calls, no startup require, no console spam
+    -- unless the game's own opened view prints something internally.
+    pcall(function()
+        local pt = getPathToolSafe()
+        local vm = pt and pt.ViewManager
+        local openView = vm and vm.OpenView
+        if type(openView) ~= "function" then return end
+        if arg1 ~= nil then
+            openView(viewName, arg1)
+        else
+            openView(viewName)
+        end
+    end)
+end
+
 local function createShopButton(order, title, viewName, arg1)
     local btn = Instance.new("TextButton", ClaimTab)
     btn.Size = UDim2.new(1, -20, 0, 34)
@@ -1436,18 +1461,7 @@ local function createShopButton(order, title, viewName, arg1)
     Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 9)
     _G.NoxarUI.stroke(btn, C.borderSoft, 0.55, 1)
     btn.MouseButton1Click:Connect(function()
-        pcall(function()
-            local pt = PathTool or _G.PathTool
-            local vm = pt and pt.ViewManager
-            local openView = vm and vm.OpenView
-            if type(openView) == "function" then
-                if arg1 ~= nil then
-                    openView(viewName, arg1)
-                else
-                    openView(viewName)
-                end
-            end
-        end)
+        openViewSafe(viewName, arg1)
     end)
     return btn
 end
