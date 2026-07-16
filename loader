@@ -1423,20 +1423,7 @@ ShopInfoLbl.TextWrapped = true
 ShopInfoLbl.TextXAlignment = Enum.TextXAlignment.Left
 ShopInfoLbl.LayoutOrder = 2
 
-local function safeOpenView(viewName, ...)
-    local args = table.pack(...)
-    pcall(function()
-        local pt = PathTool or _G.PathTool
-        local vm = pt and pt.ViewManager
-        local openView = vm and vm.OpenView
-        if type(openView) == "function" then
-            openView(viewName, table.unpack(args, 1, args.n))
-        end
-    end)
-end
-
-local function createShopButton(order, title, viewName, ...)
-    local args = table.pack(...)
+local function createShopButton(order, title, viewName, arg1)
     local btn = Instance.new("TextButton", ClaimTab)
     btn.Size = UDim2.new(1, -20, 0, 34)
     btn.BackgroundColor3 = C.card
@@ -1449,7 +1436,18 @@ local function createShopButton(order, title, viewName, ...)
     Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 9)
     _G.NoxarUI.stroke(btn, C.borderSoft, 0.55, 1)
     btn.MouseButton1Click:Connect(function()
-        safeOpenView(viewName, table.unpack(args, 1, args.n))
+        pcall(function()
+            local pt = PathTool or _G.PathTool
+            local vm = pt and pt.ViewManager
+            local openView = vm and vm.OpenView
+            if type(openView) == "function" then
+                if arg1 ~= nil then
+                    openView(viewName, arg1)
+                else
+                    openView(viewName)
+                end
+            end
+        end)
     end)
     return btn
 end
