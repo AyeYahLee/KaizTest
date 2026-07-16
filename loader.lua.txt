@@ -6,7 +6,7 @@
 -- This loader runs every module in one private environment table, so module
 -- variables are shared with each other but do not pollute normal globals.
 
-local BASE_URL = (getgenv and getgenv().NoxarBaseURL) or _G.NoxarBaseURL or "PASTE_RAW_BASE_URL_HERE/"
+local BASE_URL = (getgenv and getgenv().NoxarBaseURL) or _G.NoxarBaseURL or "https://raw.githubusercontent.com/AyeYahLee/KaizTest/main//"
 if BASE_URL == "PASTE_RAW_BASE_URL_HERE/" then
     warn("[Noxar] Missing BASE_URL. Set getgenv().NoxarBaseURL or edit BASE_URL.")
     return
