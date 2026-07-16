@@ -93,38 +93,6 @@ local TeleportService = game:GetService("TeleportService")
 local LP = Players.LocalPlayer
 local PathTool = nil -- lazy-loaded only when a Shop button is pressed, to avoid console errors on execute
 
--- Executor/Luau compatibility guards. Some executors/environments miss
--- table.pack/table.unpack/math.clamp; calling a missing one causes the exact
--- "attempt to call a nil value" console spam. Define safe fallbacks once.
-if type(table.pack) ~= "function" then
-    function table.pack(...)
-        return { n = select("#", ...), ... }
-    end
-end
-
-if type(table.unpack) ~= "function" then
-    if type(unpack) == "function" then
-        table.unpack = unpack
-    else
-        function table.unpack(t, i, j)
-            i = i or 1
-            j = j or #t
-            if i <= j then
-                return t[i], table.unpack(t, i + 1, j)
-            end
-        end
-    end
-end
-
-if type(math.clamp) ~= "function" then
-    function math.clamp(x, minValue, maxValue)
-        x = tonumber(x) or minValue
-        if x < minValue then return minValue end
-        if x > maxValue then return maxValue end
-        return x
-    end
-end
-
 -- ==========================================
 -- 1. CONFIGURATION & COMPACT MOBILE STATE
 -- ==========================================
@@ -2877,9 +2845,11 @@ end
 -- or is the one currently being fought, so a duplicate notification (or
 -- the same boss spawning again while one's already queued) doesn't pile
 -- up multiple entries for it.
-local function isAlreadyTracked(bossName)
-    if currentBossFight and currentBossFight.name == bossName then return true end
-    for _, q in ipairs(bossQueue) do
+-- Stored on _G to avoid Delta's 200 local-register compile limit near this section.
+_G.NoxarBossHelpers = _G.NoxarBossHelpers or {}
+function _G.NoxarBossHelpers.isAlreadyTracked(bossName, currentBossFightRef, bossQueueRef)
+    if currentBossFightRef and currentBossFightRef.name == bossName then return true end
+    for _, q in ipairs(bossQueueRef) do
         if q.name == bossName then return true end
     end
     return false
@@ -2904,7 +2874,7 @@ connectTracked("notificationEvent", NotificationEvent.OnClientEvent, function(..
     if not bossName or not areaName then return end
 
     if not selectedBosses[bossName] then return end -- not one you've opted in to
-    if isAlreadyTracked(bossName) then return end
+    if _G.NoxarBossHelpers.isAlreadyTracked(bossName, currentBossFight, bossQueue) then return end
 
     table.insert(bossQueue, { name = bossName, area = areaName })
     if not currentBossFight then
@@ -3038,6 +3008,9 @@ CloseBtn.MouseButton1Click:Connect(function()
     _G.NoxarUIScaleControls = nil
     _G.NoxarBossMountState = nil
     _G.NoxarSetBossMount = nil
+    if _G.NoxarBossHelpers then
+        _G.NoxarBossHelpers.isAlreadyTracked = nil
+    end
     if _G.NoxarUI then
         _G.NoxarUI.MainScale = nil
     end
