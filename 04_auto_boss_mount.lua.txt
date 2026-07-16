@@ -309,11 +309,12 @@ TPFarmSpotBtn.MouseButton1Click:Connect(function()
     if farmingSpot then
         FarmSpotStatusLbl.Text = "Teleporting..."
         FarmSpotStatusLbl.TextColor3 = Color3.fromRGB(205, 215, 245)
-        -- Wait 5s for area loading, snap to the exact saved spot, then run
-        -- the anti-AFK jumps in the background so status updates immediately.
-        teleportToAreaFarmSpot(farmingSpot, true, 5)
-        FarmSpotStatusLbl.Text = farmSpotStatusText()
-        FarmSpotStatusLbl.TextColor3 = C.green
+        -- Run teleport asynchronously so the UI stays 100% responsive
+        task.spawn(function()
+            teleportToAreaFarmSpot(farmingSpot, true, 5)
+            FarmSpotStatusLbl.Text = farmSpotStatusText()
+            FarmSpotStatusLbl.TextColor3 = C.green
+        end)
     else
         FarmSpotStatusLbl.Text = "No Farming Spot saved!"
         FarmSpotStatusLbl.TextColor3 = C.red
@@ -325,6 +326,28 @@ ClearFarmSpotBtn.MouseButton1Click:Connect(function()
     FarmSpotStatusLbl.Text = farmSpotStatusText()
     FarmSpotStatusLbl.TextColor3 = Color3.fromRGB(205, 215, 245)
     saveConfig()
+end)
+
+-- Startup Check: Runs ONCE on script load. If a Farming Spot is saved
+-- and player is not already at that spot, teleports to saved spot automatically.
+task.spawn(function()
+    task.wait(1.5)
+    if farmingSpot then
+        local r = getRoot()
+        if r then
+            local currentAreaName, currentAreaId = detectCurrentArea()
+            local savedPos = Vector3.new(farmingSpot.x, farmingSpot.y, farmingSpot.z)
+            local dist = (r.Position - savedPos).Magnitude
+
+            if currentAreaId ~= farmingSpot.areaId or dist > 20 then
+                FarmSpotStatusLbl.Text = "Startup TP to saved spot..."
+                FarmSpotStatusLbl.TextColor3 = Color3.fromRGB(205, 215, 245)
+                teleportToAreaFarmSpot(farmingSpot, true, 5)
+                FarmSpotStatusLbl.Text = farmSpotStatusText()
+                FarmSpotStatusLbl.TextColor3 = C.green
+            end
+        end
+    end
 end)
 
 -- ── Boss Loop (event-driven) ────────────────────────────────
