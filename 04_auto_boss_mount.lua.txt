@@ -535,26 +535,6 @@ function waitForMonstersToSettle(maxWait)
     return false -- hit the timeout instead of settling
 end
 
-function isInExpectedBossArea(expectedAreaId, expectedAreaName)
-    local detectedName, detectedId = detectCurrentArea()
-    return detectedId == expectedAreaId or detectedName == expectedAreaName
-end
-
-function waitForAreaArrival(expectedAreaId, expectedAreaName, maxWait)
-    local start = os.clock()
-    while bossLoopEnabled and os.clock() - start < maxWait do
-        -- Continue the moment the current area is confirmed. maxWait is only a
-        -- failsafe timeout, not a forced wait.
-        if isInExpectedBossArea(expectedAreaId, expectedAreaName) then
-            return true
-        end
-        local remaining = math.max(0, maxWait - (os.clock() - start))
-        BossLoopLiveStatusLbl.Text = "Status: Traveling to " .. tostring(expectedAreaName) .. "... " .. string.format("%.0f", remaining) .. "s"
-        task.wait(0.25)
-    end
-    return false
-end
-
 function isSpecialBossName(bossName)
     for _, boss in ipairs(BOSS_LIST) do
         if boss.name == bossName then
@@ -640,6 +620,9 @@ end
 -- it by name, teleport onto it, fight until dead.
 function runBossFight(entry)
     currentBossFight = entry
+    if _G.NoxarBossDeathNotified then
+        _G.NoxarBossDeathNotified[entry.name] = nil
+    end
     _G.NoxarSetBossMount(true) -- mount while traveling between boss/special areas
     BossLoopLiveStatusLbl.Text = "Status: " .. entry.name .. " @ " .. entry.area .. " — traveling..."
     BossLoopLiveStatusLbl.TextColor3 = C.gold
@@ -652,30 +635,11 @@ function runBossFight(entry)
         return
     end
 
-    local arrived = false
-    for attempt = 1, 2 do
-        BossLoopLiveStatusLbl.Text = "Status: " .. entry.name .. " @ " .. entry.area .. " — traveling" .. (attempt > 1 and " (retry)" or "") .. "..."
-        pcall(function()
-            DataPullFunc:InvokeServer("AreaTeleportToRegionChannel", areaId)
-        end)
-
-        -- No fixed delay here: waitForAreaArrival continues immediately once
-        -- detectCurrentArea confirms the target area. The 8s value is only a
-        -- safety timeout if the area teleport fails/glitches.
-        arrived = waitForAreaArrival(areaId, entry.area, 8)
-        if arrived then break end
-    end
-
+    pcall(function()
+        DataPullFunc:InvokeServer("AreaTeleportToRegionChannel", areaId)
+    end)
+    task.wait(2)
     if not bossLoopEnabled then currentBossFight = nil; return end
-
-    if not arrived then
-        BossLoopLiveStatusLbl.Text = "Status: Could not reach " .. entry.area .. " — retrying " .. entry.name .. "..."
-        BossLoopLiveStatusLbl.TextColor3 = C.red
-        table.insert(bossQueue, 1, entry)
-        currentBossFight = nil
-        task.wait(2)
-        return
-    end
 
     BossLoopLiveStatusLbl.Text = "Status: Waiting for monsters to load in " .. entry.area .. "..."
     waitForMonstersToSettle(6)
@@ -687,20 +651,6 @@ function runBossFight(entry)
     local maxFindWait = 15
 
     while bossLoopEnabled and os.clock() - searchStartedAt < maxFindWait do
-        if not isInExpectedBossArea(areaId, entry.area) then
-            BossLoopLiveStatusLbl.Text = "Status: Not in " .. entry.area .. " yet — retrying " .. entry.name .. "..."
-            table.insert(bossQueue, 1, entry)
-            currentBossFight = nil
-            task.wait(1)
-            return
-        end
-
-        if wasBossDeathNotified(entry.name, searchStartedAt) then
-            BossLoopLiveStatusLbl.Text = "Status: " .. entry.name .. " was already killed — continuing..."
-            currentBossFight = nil
-            return
-        end
-
         monster = findBossByName(entry.name)
         if monster then
             break -- found early, do not wait the rest of the timeout
@@ -778,9 +728,6 @@ connectTracked("notificationEvent", NotificationEvent.OnClientEvent, function(..
     if not selectedBosses[bossName] then return end -- not one you've opted in to
     if isAlreadyTracked(bossName) then return end
 
-    if _G.NoxarBossDeathNotified then
-        _G.NoxarBossDeathNotified[bossName] = nil -- fresh spawn; ignore stale death from an older spawn
-    end
     table.insert(bossQueue, { name = bossName, area = areaName })
     if not currentBossFight then
         BossLoopLiveStatusLbl.Text = "Status: " .. bossName .. " spawned @ " .. areaName .. " — queued (" .. #bossQueue .. ")"
@@ -833,5 +780,3 @@ spawnTracked("bossLoop", function()
         end
     end
 end)
-
-
