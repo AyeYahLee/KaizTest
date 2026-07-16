@@ -88,11 +88,12 @@ function detectCurrentArea()
 end
 
 UIListAreaFarm = Instance.new("UIListLayout", AreaFarmTab)
-UIListAreaFarm.Padding = UDim.new(0, 8)
+UIListAreaFarm.Padding = UDim.new(0, 6)
 UIListAreaFarm.HorizontalAlignment = Enum.HorizontalAlignment.Center
 UIListAreaFarm.SortOrder = Enum.SortOrder.LayoutOrder
-Instance.new("UIPadding", AreaFarmTab).PaddingTop = UDim.new(0, 8)
-Instance.new("UIPadding", AreaFarmTab).PaddingBottom = UDim.new(0, 8)
+AreaFarmTabPadding = Instance.new("UIPadding", AreaFarmTab)
+AreaFarmTabPadding.PaddingTop = UDim.new(0, 6)
+AreaFarmTabPadding.PaddingBottom = UDim.new(0, 34)
 
 AreaFarmHintLbl = Instance.new("TextLabel", AreaFarmTab)
 AreaFarmHintLbl.Size = UDim2.new(1, -20, 0, 0)
