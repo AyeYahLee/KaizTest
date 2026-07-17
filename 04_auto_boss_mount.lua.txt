@@ -243,8 +243,7 @@ function teleportToAreaFarmSpot(spot, skipSettle, maxWait)
         DataPullFunc:InvokeServer("AreaTeleportToRegionChannel", spot.areaId)
     end)
 
-    -- Smart Area Load Wait: Polls every 0.1s up to maxWait (5s max cap).
-    -- Proceeds IMMEDIATELY the instant the character arrives in the target area!
+    -- Wait up to maxWait (5s) for character to arrive in target area zone
     local startWait = os.clock()
     local timeCap = maxWait or 5
     while os.clock() - startWait < timeCap do
@@ -252,13 +251,16 @@ function teleportToAreaFarmSpot(spot, skipSettle, maxWait)
         if r then
             local _, currentAreaId = detectCurrentArea()
             if currentAreaId == spot.areaId then
-                break -- Arrived in target zone early! Proceed instantly!
+                break
             end
         end
         task.wait(0.1)
     end
 
-    -- Safety check for character Root
+    -- Allow 1.5s for game server channel spawn sequence to finish placing character on entrance bridge
+    task.wait(1.5)
+
+    -- Ensure character Root exists
     local r = getRoot()
     if not r then
         local startRootWait = os.clock()
@@ -272,25 +274,21 @@ function teleportToAreaFarmSpot(spot, skipSettle, maxWait)
     if r then
         local targetCFrame = CFrame.new(spot.x, spot.y, spot.z)
 
-        -- Exact-position failsafe: retries up to 10 times until position is 100% confirmed.
-        -- Breaks out instantly on attempt 1 as soon as distance is <= 10 studs.
+        -- Exact-position re-snap after server spawn completes
         for attempt = 1, 10 do
             r = getRoot()
             if not r then break end
             r.CFrame = targetCFrame
             r.AssemblyLinearVelocity = Vector3.zero
             r.AssemblyAngularVelocity = Vector3.zero
-            task.wait(0.2)
+            task.wait(0.3)
             r = getRoot()
             if r and (r.Position - targetCFrame.Position).Magnitude <= 10 then
                 break
             end
         end
 
-        -- Wait 5s after arriving, then jump twice (anti-AFK). When
-        -- skipSettle is true (boss loop), this runs in the background
-        -- instead of blocking the caller, so boss detection can start
-        -- immediately after the CFrame snap instead of ~6s later.
+        -- Wait 5s after arriving, then jump twice (anti-AFK).
         local function settle()
             task.wait(5)
             local char = LP.Character
@@ -298,7 +296,7 @@ function teleportToAreaFarmSpot(spot, skipSettle, maxWait)
             if hum then
                 for i = 1, 2 do
                     hum:ChangeState(Enum.HumanoidStateType.Jumping)
-                    task.wait(6) -- 6s gap before the second anti-AFK jump
+                    task.wait(6)
                 end
             end
         end
@@ -931,3 +929,5 @@ spawnTracked("bossLoop", function()
         end
     end
 end)
+
+
