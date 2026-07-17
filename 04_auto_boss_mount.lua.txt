@@ -277,14 +277,14 @@ function teleportToAreaFarmSpot(spot, skipSettle, maxWait)
     if r then
         local targetCFrame = CFrame.new(spot.x, spot.y, spot.z)
 
-        -- Exact-position re-snap after server spawn completes
-        for attempt = 1, 10 do
+        -- Exact-position re-snap after server spawn completes (5 retries with 3.0s delay)
+        for attempt = 1, 5 do
             r = getRoot()
             if not r then break end
             r.CFrame = targetCFrame
             r.AssemblyLinearVelocity = Vector3.zero
             r.AssemblyAngularVelocity = Vector3.zero
-            task.wait(0.3)
+            task.wait(3.0)
             r = getRoot()
             if r and (r.Position - targetCFrame.Position).Magnitude <= 10 then
                 break
@@ -932,5 +932,3 @@ spawnTracked("bossLoop", function()
         end
     end
 end)
-
-
