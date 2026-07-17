@@ -672,7 +672,6 @@ end
 -- the same death check used everywhere else in this file. Bails out
 -- early (returns false) if bossLoopEnabled goes false mid-fight.
 function fightBossUntilDead(monster, isSpecial, bossName)
-    -- Wait briefly for Root or PrimaryPart to load into workspace
     local root = monster:FindFirstChild("Root") or monster.PrimaryPart
     if not root then
         local startRootWait = os.clock()
@@ -716,7 +715,6 @@ function fightBossUntilDead(monster, isSpecial, bossName)
             BossLoopLiveStatusLbl.Text = "Status: Re-snapping to " .. tostring(bossName or "boss") .. "..."
             monster = resnapToCurrentBoss(bossName, monster) or monster
             lastSnapAt = os.clock()
-            BossLoopLiveStatusLbl.Text = "Status: Fighting " .. tostring(bossName or "boss") .. "..."
         end
 
         if isSpecial and os.clock() - fightStartedAt >= 9 then
@@ -759,24 +757,13 @@ function runBossFight(entry)
     pcall(function()
         DataPullFunc:InvokeServer("AreaTeleportToRegionChannel", areaId)
     end)
+    task.wait(2)
+    if not bossLoopEnabled then currentBossFight = nil; return end
 
-    -- Smart travel load wait: proceeds the instant player arrives in target area ID
-    local startTravelWait = os.clock()
-    while os.clock() - startTravelWait < 3 do
-        if not bossLoopEnabled or wasBossDeathNotified(entry.name) then break end
-        local _, curAreaId = detectCurrentArea()
-        if curAreaId == areaId then
-            break -- Player arrived in target area! Proceed immediately!
-        end
-        task.wait(0.1)
-    end
-
-    if not bossLoopEnabled or wasBossDeathNotified(entry.name) then
-        if wasBossDeathNotified(entry.name) then
-            BossLoopLiveStatusLbl.Text = "Status: 💀 " .. entry.name .. " killed during travel — skipping!"
-            BossLoopLiveStatusLbl.TextColor3 = C.red
-            task.wait(1)
-        end
+    if wasBossDeathNotified(entry.name) then
+        BossLoopLiveStatusLbl.Text = "Status: 💀 " .. entry.name .. " killed during travel — skipping!"
+        BossLoopLiveStatusLbl.TextColor3 = C.red
+        task.wait(1)
         currentBossFight = nil
         return
     end
@@ -835,21 +822,19 @@ function runBossFight(entry)
     end
 
     local isSpecial = isSpecialBossName(entry.name)
+    BossLoopLiveStatusLbl.Text = "Status: Fighting " .. entry.name .. "..."
+    BossLoopLiveStatusLbl.TextColor3 = C.gold
     local won = fightBossUntilDead(monster, isSpecial, entry.name)
 
     if won then
         _G.NoxarSetBossMount(true) -- remount after kill so next travel/return is mounted
-        BossLoopLiveStatusLbl.Text = "Status: " .. entry.name .. " defeated/dead! Waiting 2s..."
+        BossLoopLiveStatusLbl.Text = "Status: " .. entry.name .. " defeated! Waiting 2s..."
         task.wait(2)
     end
 
     currentBossFight = nil
 end
 
--- Dedup guard for the queue -- true if this exact boss is already queued
--- or is the one currently being fought, so a duplicate notification (or
--- the same boss spawning again while one's already queued) doesn't pile
--- up multiple entries for it.
 function isAlreadyTracked(bossName)
     if currentBossFight and currentBossFight.name == bossName then return true end
     for _, q in ipairs(bossQueue) do
