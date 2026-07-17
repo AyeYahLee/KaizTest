@@ -240,58 +240,19 @@ Instance.new("UICorner", ClearFarmSpotBtn).CornerRadius = UDim.new(0, 9)
 -- Teleports to a saved AreaFarm spot: fires the area-change remote for
 -- its AreaID, waits, then snaps the character to the exact saved CFrame.
 -- Shared by both Farming Spot TP and the boss loop's "go back" step.
-function teleportToAreaFarmSpot(spot, skipSettle, maxWait)
+function teleportToAreaFarmSpot(spot, skipSettle, preSnapWait)
     if not spot then return false end
     pcall(function()
         DataPullFunc:InvokeServer("AreaTeleportToRegionChannel", spot.areaId)
     end)
+    task.wait(preSnapWait or 2)
 
-    -- Wait up to maxWait (5s) for character to arrive in target area zone
-    local startWait = os.clock()
-    local timeCap = maxWait or 5
-    while os.clock() - startWait < timeCap do
-        local r = getRoot()
-        if r then
-            local _, currentAreaId = detectCurrentArea()
-            if currentAreaId == spot.areaId then
-                break
-            end
-        end
-        task.wait(0.1)
-    end
-
-    -- Allow 1.5s for game server channel spawn sequence to finish placing character on entrance bridge
-    task.wait(1.5)
-
-    -- Ensure character Root exists
     local r = getRoot()
-    if not r then
-        local startRootWait = os.clock()
-        while os.clock() - startRootWait < 2 do
-            r = getRoot()
-            if r then break end
-            task.wait(0.1)
-        end
-    end
-
     if r then
-        local targetCFrame = CFrame.new(spot.x, spot.y, spot.z)
+        r.CFrame = CFrame.new(spot.x, spot.y, spot.z)
+        r.AssemblyLinearVelocity = Vector3.zero
+        r.AssemblyAngularVelocity = Vector3.zero
 
-        -- Exact-position re-snap after server spawn completes (5 retries with 3.0s delay)
-        for attempt = 1, 5 do
-            r = getRoot()
-            if not r then break end
-            r.CFrame = targetCFrame
-            r.AssemblyLinearVelocity = Vector3.zero
-            r.AssemblyAngularVelocity = Vector3.zero
-            task.wait(3.0)
-            r = getRoot()
-            if r and (r.Position - targetCFrame.Position).Magnitude <= 10 then
-                break
-            end
-        end
-
-        -- Wait 5s after arriving, then jump twice (anti-AFK).
         local function settle()
             task.wait(5)
             local char = LP.Character
@@ -718,8 +679,8 @@ function fightBossUntilDead(monster, isSpecial, bossName)
             lastSnapAt = os.clock()
         end
 
-        if isSpecial and os.clock() - fightStartedAt >= 17 then
-            BossLoopLiveStatusLbl.Text = "Status: " .. tostring(bossName or "Special") .. " timed out after 17s — continuing..."
+        if isSpecial and os.clock() - fightStartedAt >= 9 then
+            BossLoopLiveStatusLbl.Text = "Status: " .. tostring(bossName or "Special") .. " timed out after 9s — continuing..."
             return true -- special/ultra timeout guard so the loop never gets stuck here
         end
 
