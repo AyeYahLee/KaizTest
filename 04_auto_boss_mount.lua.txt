@@ -718,8 +718,8 @@ function fightBossUntilDead(monster, isSpecial, bossName)
             lastSnapAt = os.clock()
         end
 
-        if isSpecial and os.clock() - fightStartedAt >= 9 then
-            BossLoopLiveStatusLbl.Text = "Status: " .. tostring(bossName or "Special") .. " timed out after 9s — continuing..."
+        if isSpecial and os.clock() - fightStartedAt >= 17 then
+            BossLoopLiveStatusLbl.Text = "Status: " .. tostring(bossName or "Special") .. " timed out after 17s — continuing..."
             return true -- special/ultra timeout guard so the loop never gets stuck here
         end
 
