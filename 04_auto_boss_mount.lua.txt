@@ -58,6 +58,7 @@ function detectCurrentArea()
     local areaFolder = workspace:FindFirstChild("Area")
     if not areaFolder then return nil, nil end
 
+    -- Pass 1: Exact bounding box containment check
     for _, region in ipairs(areaFolder:GetChildren()) do
         local areaZone = region:FindFirstChild("Area")
         if areaZone then
@@ -84,6 +85,35 @@ function detectCurrentArea()
             end
         end
     end
+
+    -- Pass 2: Nearest area proximity fallback (for far/outer positions in an area)
+    local nearestName, nearestId = nil, nil
+    local minDistance = math.huge
+
+    for _, region in ipairs(areaFolder:GetChildren()) do
+        local areaZone = region:FindFirstChild("Area")
+        if areaZone then
+            local zoneFolder = areaZone:FindFirstChild("AreaZone")
+            if zoneFolder then
+                for _, part in ipairs(zoneFolder:GetChildren()) do
+                    if part:IsA("BasePart") then
+                        local areaId = tonumber(part.Name:match("Area(%d+)"))
+                        local dist = (myPos - part.Position).Magnitude
+                        if dist < minDistance then
+                            minDistance = dist
+                            nearestId = areaId
+                            nearestName = areaId and AreaIdToName[areaId] or region.Name
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if nearestId and minDistance <= 5000 then
+        return nearestName, nearestId
+    end
+
     return nil, nil
 end
 
