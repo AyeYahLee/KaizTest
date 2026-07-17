@@ -1,7 +1,7 @@
 -- ==========================================
 -- 0. GAME ID SECURITY CHECK
 -- ==========================================
-local TARGET_PLACE_ID = 98664161516921 -- ⚠️ REPLACE THIS WITH YOUR GAME'S PLACE ID
+TARGET_PLACE_ID = 98664161516921 -- ⚠️ REPLACE THIS WITH YOUR GAME'S PLACE ID
 
 if game.PlaceId ~= TARGET_PLACE_ID then
     warn("[Noxar Panel] Execution blocked: Incorrect Game/Place ID. Current ID: " .. tostring(game.PlaceId))
@@ -24,7 +24,7 @@ end
 -- running, then start fresh.
 if _G.NoxarPanelThreads then
     for _, thread in pairs(_G.NoxarPanelThreads) do
-        pcall(task.cancel, thread)
+        if type(task.cancel) == "function" then pcall(task.cancel, thread) end
     end
 end
 _G.NoxarPanelThreads = {}
@@ -32,18 +32,18 @@ _G.NoxarPanelThreads = {}
 -- spawnTracked(name, fn): same as task.spawn(fn), but stores the thread
 -- under `name` in the registry so it can be looked up and cancelled later
 -- (by CloseBtn, or by the next script re-execution above).
-local function spawnTracked(name, fn)
+function spawnTracked(name, fn)
     if _G.NoxarPanelThreads[name] then
-        pcall(task.cancel, _G.NoxarPanelThreads[name])
+        if type(task.cancel) == "function" then pcall(task.cancel, _G.NoxarPanelThreads[name]) end
     end
     local thread = task.spawn(fn)
     _G.NoxarPanelThreads[name] = thread
     return thread
 end
 
-local function cancelAllTrackedThreads()
+function cancelAllTrackedThreads()
     for _, thread in pairs(_G.NoxarPanelThreads) do
-        pcall(task.cancel, thread)
+        if type(task.cancel) == "function" then pcall(task.cancel, thread) end
     end
     _G.NoxarPanelThreads = {}
 end
@@ -67,7 +67,7 @@ _G.NoxarPanelConnections = {}
 -- stores the connection under `name` in the registry so it can be
 -- disconnected later (by CloseBtn, or by the next script re-execution
 -- above).
-local function connectTracked(name, signal, fn)
+function connectTracked(name, signal, fn)
     if _G.NoxarPanelConnections[name] then
         pcall(function() _G.NoxarPanelConnections[name]:Disconnect() end)
     end
@@ -76,27 +76,45 @@ local function connectTracked(name, signal, fn)
     return conn
 end
 
-local function disconnectAllTrackedConnections()
+function disconnectAllTrackedConnections()
     for _, conn in pairs(_G.NoxarPanelConnections) do
         pcall(function() conn:Disconnect() end)
     end
     _G.NoxarPanelConnections = {}
 end
 
-local Players = game:GetService("Players")
-local RS = game:GetService("ReplicatedStorage")
-local UIS = game:GetService("UserInputService")
-local TS = game:GetService("TweenService")
-local RunService = game:GetService("RunService")
-local HttpService = game:GetService("HttpService")
-local TeleportService = game:GetService("TeleportService")
-local LP = Players.LocalPlayer
-local PathTool = require(game:GetService("ReplicatedStorage").CommonLibrary.Tool.PathTool)
+Players = game:GetService("Players")
+RS = game:GetService("ReplicatedStorage")
+UIS = game:GetService("UserInputService")
+TS = game:GetService("TweenService")
+RunService = game:GetService("RunService")
+HttpService = game:GetService("HttpService")
+TeleportService = game:GetService("TeleportService")
+LP = Players.LocalPlayer
+PathTool = nil -- lazy-loaded only when a Shop button is pressed, to avoid console errors on execute
+
+-- Small compatibility layer for executor/Luau differences.
+if type(table.pack) ~= "function" then
+    function table.pack(...)
+        return { n = select("#", ...), ... }
+    end
+end
+if type(table.unpack) ~= "function" and type(unpack) == "function" then
+    table.unpack = unpack
+end
+if type(math.clamp) ~= "function" then
+    function math.clamp(x, a, b)
+        x = tonumber(x) or a
+        if x < a then return a end
+        if x > b then return b end
+        return x
+    end
+end
 
 -- ==========================================
 -- 1. CONFIGURATION & COMPACT MOBILE STATE
 -- ==========================================
-local C = {
+C = {
     -- Fluent Pro theme: clean, muted, executor-library inspired
     bg         = Color3.fromRGB(9, 11, 18),
     surface    = Color3.fromRGB(15, 18, 28),
@@ -114,39 +132,38 @@ local C = {
 }
 
 -- Fluent Pro layout: compact for mobile landscape, with real sidebar tabs.
-local normalSize = UDim2.new(0, 386, 0, 326)
-local miniSize = UDim2.new(0, 386, 0, 42)
-local isMinimized = false
-local uiScaleValue = 1 -- saved manual UI size, adjustable in Settings
+normalSize = UDim2.new(0, 386, 0, 326)
+miniSize = UDim2.new(0, 386, 0, 42)
+isMinimized = false
+uiScaleValue = 1 -- saved manual UI size, adjustable in Settings
 
 -- Core Farm/Claim States (Defaults)
-local ATTACK_DELAY = 0.05
-local EQUIP_DELAY = 0.5
-local HOVER_HEIGHT = 11
+ATTACK_DELAY = 0.05
+EQUIP_DELAY = 0.5
+HOVER_HEIGHT = 11
 
-local running = false
-local runId = 0
-local selectedMonster = nil
-local monstersEquipped = false
-local currentTarget = nil
-local nameCache = {}
-local autoClaimEnabled = true
-local antiAfkEnabled = true 
-local autoHatchEnabled = false
-local selectedEggId = 10
-local selectedEggName = "Sprout Egg"
+running = false
+runId = 0
+selectedMonster = nil
+monstersEquipped = false
+currentTarget = nil
+nameCache = {}
+autoClaimEnabled = true
+antiAfkEnabled = true 
+autoHatchEnabled = false
+selectedEggId = 10
+selectedEggName = "Sprout Egg"
 
 -- Server States
-local rejoinTimerEnabled = false
-local rejoinMinutes = 60
-local rejoinDeadline = nil
-local savedPositions = {} 
+rejoinTimerEnabled = false
+rejoinMinutes = 60
+rejoinDeadline = nil
+savedPositions = {} 
 
 -- AreaFarm States (completely separate from savedPositions above)
 -- farmingSpot shape: {areaId = number, areaName = string, x = number, y = number, z = number} or nil if unset
-local farmingSpot = nil
-local bossLoopEnabled = false
-local bossLoopStatus = "Idle"
+farmingSpot = nil
+bossLoopEnabled = false
 -- selectedBosses: bossName -> true, which bosses from BOSS_LIST (defined
 -- further down, near the event-driven boss loop) the user has opted in
 -- to auto-farm. bossQueue: FIFO array of {name=, area=} for selected
@@ -154,14 +171,14 @@ local bossLoopStatus = "Idle"
 -- {name=, area=} of whichever boss is actively being fought right now,
 -- or nil if idle -- also doubles as the "don't interrupt a fight in
 -- progress" guard.
-local selectedBosses = {}
-local bossQueue = {}
-local currentBossFight = nil
-local wasFarmingBeforeBossFight = false -- lets the boss loop cleanly pause/resume the regular Auto-Farm toggle instead of fighting over glue/equip with it
+selectedBosses = {}
+bossQueue = {}
+currentBossFight = nil
+wasFarmingBeforeBossFight = false -- lets the boss loop cleanly pause/resume the regular Auto-Farm toggle instead of fighting over glue/equip with it
 
-local DataPullFunc = RS:WaitForChild("CommonLibrary"):WaitForChild("Tool"):WaitForChild("RemoteManager"):WaitForChild("Funcs"):WaitForChild("DataPullFunc")
-local NotificationEvent = RS:WaitForChild("CommonLibrary"):WaitForChild("Tool"):WaitForChild("RemoteManager"):WaitForChild("Events"):WaitForChild("NotificationEvent")
-local clientMonsters = workspace:WaitForChild("ClientMonsters")
+DataPullFunc = RS:WaitForChild("CommonLibrary"):WaitForChild("Tool"):WaitForChild("RemoteManager"):WaitForChild("Funcs"):WaitForChild("DataPullFunc")
+NotificationEvent = RS:WaitForChild("CommonLibrary"):WaitForChild("Tool"):WaitForChild("RemoteManager"):WaitForChild("Events"):WaitForChild("NotificationEvent")
+clientMonsters = workspace:WaitForChild("ClientMonsters")
 
 -- Boss Loop mount helper. Uses the exact remote from your MountTest:
 -- DataPullFunc:InvokeServer("PetSwitchRideStatusChannel", true/false)
@@ -180,7 +197,7 @@ end
 
 -- Direct access to the game's own hatch logic (more reliable than raw
 -- remote calls — this is the actual client function the Hatch button uses).
-local EggSystem
+EggSystem = nil
 do
     local ok, mod = pcall(function()
         return require(RS.CommonLogic.Egg.EggSystem)
@@ -192,7 +209,7 @@ end
 -- real ModuleScript at ReplicatedStorage.CommonLogic.Pet.PetBreedSystem.
 -- ClientCreateBreeding(fatherId, motherId) and ClientHatching() are the
 -- exact functions the in-game Breed/Hatch buttons call.
-local PetBreedSystem
+PetBreedSystem = nil
 do
     local ok, mod = pcall(function()
         return require(RS.CommonLogic.Pet.PetBreedSystem)
@@ -202,7 +219,7 @@ end
 
 -- CfgPetBreed holds BreedTime / ParentGradeMin — real ModuleScript,
 -- confirmed at ReplicatedStorage.CommonConfig.Pet.CfgPetBreed
-local CfgPetBreed
+CfgPetBreed = nil
 do
     local ok, mod = pcall(function()
         return require(RS.CommonConfig.Pet.CfgPetBreed)
@@ -213,7 +230,7 @@ end
 -- Male/Female gender constants — pet:GetGender() returns one of these.
 -- Falls back to the game's typical 1/2 enum-as-number convention if the
 -- constants module path below doesn't resolve.
-local PetGenderType = {Male = 1, Female = 2}
+PetGenderType = {Male = 1, Female = 2}
 do
     local ok, mod = pcall(function()
         return require(RS.CommonConfig.Constants)
@@ -224,21 +241,21 @@ do
 end
 
 -- Selected pet IDs for breeding (father = male, mother = female)
-local breedFatherId = nil
-local breedFatherLabel = nil
-local breedMotherId = nil
-local breedMotherLabel = nil
-local autoBreedHatchEnabled = false -- auto-fires ClientHatching() when the timer completes
-local autoBreedEnabled = false      -- auto-fires ClientCreateBreeding() again after each collect, looping forever
+breedFatherId = nil
+breedFatherLabel = nil
+breedMotherId = nil
+breedMotherLabel = nil
+autoBreedHatchEnabled = false -- auto-fires ClientHatching() when the timer completes
+autoBreedEnabled = false      -- auto-fires ClientCreateBreeding() again after each collect, looping forever
 
-local groundRayParams = RaycastParams.new()
+groundRayParams = RaycastParams.new()
 groundRayParams.FilterType = Enum.RaycastFilterType.Exclude
-local rayDirection = Vector3.new(0, -200, 0)
+rayDirection = Vector3.new(0, -200, 0)
 
 -- ==========================================
 -- 1.2 EGG DATA DICTIONARY
 -- ==========================================
-local EggDatabase = {
+EggDatabase = {
     {id = 1, name = "Pyroclasm Egg"}, {id = 2, name = "WaterEgg"}, {id = 3, name = "GrassEgg"}, {id = 4, name = "SwampEgg"},
     {id = 5, name = "FireEgg"}, {id = 6, name = "Pyroclasm Egg"}, {id = 7, name = "Strange Egg"}, {id = 8, name = "Ice Egg"},
     {id = 9, name = "Glacier Egg"}, {id = 10, name = "Sprout Egg"}, {id = 11, name = "Turkey Egg"}, {id = 12, name = "Abuse Egg"},
@@ -259,8 +276,7 @@ local EggDatabase = {
     {id = 62, name = "Neon Ofrenda Egg"}, {id = 63, name = "Void Egg"}, {id = 64, name = "Scareaper's Egg"}, {id = 65, name = "Shadow Rotthorn Egg"},
     {id = 66, name = "Shadow Sealed Core Egg"}, {id = 67, name = "Runegolem's Egg"}, {id = 68, name = "Rune Warden Egg"}, {id = 69, name = "Jade Crab Egg"},
     {id = 70, name = "Beatopus's Egg"}, {id = 71, name = "Flash Chest Egg"}, {id = 72, name = "Golden Winged Sacred Egg"},
-    {id = 271, name = "Valentine's King Egg"}, {id = 140000, name = "Rosette Egg"}, {id = 211, name = "Rift EggII"},
-    {id = 50000, name = "FireEgg"}, {id = 80000, name = "Ice Egg"}
+    {id = 271, name = "Valentine's King Egg"}, {id = 211, name = "Rift EggII"}
 }
 
 -- ==========================================
@@ -271,7 +287,7 @@ local EggDatabase = {
 -- Filters exactly the same way the in-game breed-parent picker does:
 -- not a child pet, Grade >= ParentGradeMin, template not CantBreed,
 -- and split by gender (Male -> father list, Female -> mother list).
-local function getGamePlayer()
+function getGamePlayer()
     local ok, gp = pcall(function()
         local CPM = require(RS.CommonLibrary.Player.ClientPlayerManager)
         return CPM.GetGamePlayer()
@@ -281,7 +297,7 @@ local function getGamePlayer()
 end
 
 -- Returns two arrays: { {id=.., name=.., grade=..}, ... } for males and females
-local function scanBreedablePets()
+function scanBreedablePets()
     local males, females = {}, {}
     local gp = getGamePlayer()
     if not gp or not gp.pet or not gp.pet.IterBagItem then
@@ -321,7 +337,7 @@ end
 -- Checks whether breeding slot 1 currently has an active/completed
 -- breed in progress, using the same GetBreeding() call the in-game
 -- AreaPetBreedShower uses to render the info GUI above the egg.
-local function getBreedingSlotInfo()
+function getBreedingSlotInfo()
     local gp = getGamePlayer()
     if not gp or not gp.pet or not gp.pet.GetBreeding then return nil end
     local ok, info = pcall(function() return gp.pet:GetBreeding(1) end)
@@ -329,12 +345,12 @@ local function getBreedingSlotInfo()
     return nil
 end
 
-local BreedTimeSeconds = (CfgPetBreed and CfgPetBreed.BreedTime) or 14400 -- fallback if module didn't resolve
+BreedTimeSeconds = (CfgPetBreed and CfgPetBreed.BreedTime) or 14400 -- fallback if module didn't resolve
 
 
-local configFileName = "NoxarSave.json"
+configFileName = "NoxarSave.json"
 
-local function saveConfig()
+function saveConfig()
     if writefile then
         local data = { 
             target = selectedMonster,
@@ -368,7 +384,7 @@ local function saveConfig()
     end
 end
 
-local function loadConfig()
+function loadConfig()
     if isfile and isfile(configFileName) and readfile then
         pcall(function()
             local data = HttpService:JSONDecode(readfile(configFileName))
@@ -405,21 +421,21 @@ loadConfig()
 -- ==========================================
 -- 2. CORE LOGIC (FARMING, CLAIM, & HATCH)
 -- ==========================================
-local function equipBest()
+function equipBest()
     if not monstersEquipped then
         pcall(function() DataPullFunc:InvokeServer("PetEquipBestChannel") end)
         monstersEquipped = true
     end
 end
 
-local function unequipAll()
+function unequipAll()
     if monstersEquipped then
         pcall(function() DataPullFunc:InvokeServer("PetUnEquipAllChannel") end)
         monstersEquipped = false
     end
 end
 
-local function getRoot()
+function getRoot()
     local char = LP.Character
     return char and char:FindFirstChild("HumanoidRootPart")
 end
@@ -428,7 +444,7 @@ end
 -- lockOntoTarget below). Tracked via connectTracked, so a stale lock
 -- from a previous script re-execution also gets cleaned up automatically
 -- at the top of the file, same as every other tracked connection here.
-local function unlockTarget()
+function unlockTarget()
     if _G.NoxarPanelConnections["farmLock"] then
         pcall(function() _G.NoxarPanelConnections["farmLock"]:Disconnect() end)
         _G.NoxarPanelConnections["farmLock"] = nil
@@ -443,7 +459,7 @@ end
 -- once per acquired target and unlockTarget() when it's done with it --
 -- NOT called repeatedly per attack tick, since the Heartbeat connection
 -- itself is what keeps it locked every frame in between.
-local function lockOntoTarget(targetRoot)
+function lockOntoTarget(targetRoot)
     unlockTarget()
     if not targetRoot or not targetRoot.Parent then return end
 
@@ -479,7 +495,7 @@ end
 -- only by the boss fight (fightBossUntilDead), which snaps once when
 -- the fight starts and then relies on your in-game auto-attack -- it
 -- doesn't need continuous re-locking the way regular farming does.
-local function glueToTarget(targetRoot)
+function glueToTarget(targetRoot)
     if not targetRoot or not targetRoot.Parent then return end
     local r = getRoot()
     if not r then return end
@@ -502,7 +518,7 @@ local function glueToTarget(targetRoot)
     r.AssemblyAngularVelocity = Vector3.zero
 end
 
-local function buildNameCache()
+function buildNameCache()
     table.clear(nameCache) 
     if not clientMonsters then return end
 
@@ -527,7 +543,7 @@ local function buildNameCache()
     end
 end
 
-local function scanMonsterTypes()
+function scanMonsterTypes()
     buildNameCache()
     local seen = {}
     local types = {}
@@ -551,7 +567,7 @@ local function scanMonsterTypes()
     return types
 end
 
-local function getTargetMonsters()
+function getTargetMonsters()
     local monsters = {}
     for _, m in ipairs(clientMonsters:GetChildren()) do
         local info = nameCache[m.Name]
@@ -566,7 +582,7 @@ local function getTargetMonsters()
     return monsters
 end
 
-local function startFarming(statusLbl)
+function startFarming(statusLbl)
     local myId = runId
     local killed = 0
 
@@ -625,9 +641,9 @@ local function startFarming(statusLbl)
     statusLbl.Text = "Status: Stopped. Killed: " .. killed
 end
 
-local ClaimStatus
-local LastClaimLbl
-local function claimRemote(channelName, ...)
+ClaimStatus = nil
+LastClaimLbl = nil
+function claimRemote(channelName, ...)
     local args = table.pack(...)
     pcall(function()
         DataPullFunc:InvokeServer(channelName, table.unpack(args, 1, args.n))
@@ -635,7 +651,7 @@ local function claimRemote(channelName, ...)
     task.wait(0.1)
 end
 
-local function claimEverything()
+function claimEverything()
     if not autoClaimEnabled then
         return false
     end
@@ -675,7 +691,7 @@ end
 -- ==========================================
 -- 3. SERVER & ANTI-AFK MECHANICS 
 -- ==========================================
-local VirtualUser = game:GetService("VirtualUser")
+VirtualUser = game:GetService("VirtualUser")
 connectTracked("antiAfkWatcher", LP.Idled, function()
     if antiAfkEnabled then
         VirtualUser:Button2Down(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
@@ -684,7 +700,7 @@ connectTracked("antiAfkWatcher", LP.Idled, function()
     end
 end)
 
-local function rejoinSameServer()
+function rejoinSameServer()
     local placeId = game.PlaceId
     local ok, joinData = pcall(function() return LP:GetJoinData() end)
     local code = ok and joinData and joinData.PrivateServerAccessCode
@@ -700,8 +716,8 @@ local function rejoinSameServer()
     end
 end
 
-local CoreGui = game:GetService("CoreGui")
-local promptOverlay = CoreGui:FindFirstChild("RobloxPromptGui")
+CoreGui = game:GetService("CoreGui")
+promptOverlay = CoreGui:FindFirstChild("RobloxPromptGui")
     and CoreGui.RobloxPromptGui:FindFirstChild("promptOverlay")
 if promptOverlay then
     connectTracked("promptErrorWatcher", promptOverlay.ChildAdded, function(child)
@@ -710,6 +726,8 @@ if promptOverlay then
         end
     end)
 end
+
+
 
 -- ==========================================
 -- 4. FLUENT PRO UI - COMPLETE VISUAL REWRITE
@@ -844,16 +862,16 @@ function _G.NoxarUI.updateChoiceRow(row, pill, bar, active, activeText, inactive
     end
 end
 
-local old = LP.PlayerGui:FindFirstChild("NoxarMobilePanel")
+old = LP.PlayerGui:FindFirstChild("NoxarMobilePanel")
 if old then old:Destroy() end
 
-local sg = Instance.new("ScreenGui")
+sg = Instance.new("ScreenGui")
 sg.Name = "NoxarMobilePanel"
 sg.ResetOnSpawn = false
 sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 sg.Parent = LP.PlayerGui
 
-local Main = Instance.new("Frame", sg)
+Main = Instance.new("Frame", sg)
 Main.Size = normalSize
 Main.Position = UDim2.new(0.5, -193, 0.42, -163) -- starts slightly higher on mobile landscape
 Main.BackgroundColor3 = C.bg
@@ -909,7 +927,7 @@ end
 _G.NoxarUI.applyUIScale()
 
 -- Header
-local TitleBar = Instance.new("Frame", Main)
+TitleBar = Instance.new("Frame", Main)
 TitleBar.Size = UDim2.new(1, 0, 0, 42)
 TitleBar.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
 TitleBar.BorderSizePixel = 0
@@ -918,13 +936,13 @@ _G.NoxarUI.corner(TitleBar, 14)
 TitleBar.ClipsDescendants = true
 -- Keeps the header bottom edge straight while expanded, but lets the full
 -- titlebar round cleanly when minimized.
-local HeaderBottomFix = Instance.new("Frame", TitleBar)
+HeaderBottomFix = Instance.new("Frame", TitleBar)
 HeaderBottomFix.Size = UDim2.new(1, 0, 0, 14)
 HeaderBottomFix.Position = UDim2.new(0, 0, 1, -14)
 HeaderBottomFix.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
 HeaderBottomFix.BorderSizePixel = 0
 
-local TitleLbl = Instance.new("TextLabel", TitleBar)
+TitleLbl = Instance.new("TextLabel", TitleBar)
 TitleLbl.Size = UDim2.new(1, -96, 1, 0)
 TitleLbl.Position = UDim2.new(0, 14, 0, 0)
 TitleLbl.BackgroundTransparency = 1
@@ -934,7 +952,7 @@ TitleLbl.Font = Enum.Font.GothamBold
 TitleLbl.TextSize = 14
 TitleLbl.TextXAlignment = Enum.TextXAlignment.Left
 
-local MinBtn = Instance.new("TextButton", TitleBar)
+MinBtn = Instance.new("TextButton", TitleBar)
 MinBtn.Size = UDim2.new(0, 30, 0, 25)
 MinBtn.Position = UDim2.new(1, -70, 0.5, -12)
 MinBtn.Text = "—"
@@ -942,7 +960,7 @@ _G.NoxarUI.nav(MinBtn, false)
 MinBtn.TextColor3 = C.text
 MinBtn.TextXAlignment = Enum.TextXAlignment.Center
 
-local CloseBtn = Instance.new("TextButton", TitleBar)
+CloseBtn = Instance.new("TextButton", TitleBar)
 CloseBtn.Size = UDim2.new(0, 30, 0, 25)
 CloseBtn.Position = UDim2.new(1, -35, 0.5, -12)
 CloseBtn.Text = "×"
@@ -952,7 +970,7 @@ CloseBtn.TextColor3 = C.red
 CloseBtn.TextXAlignment = Enum.TextXAlignment.Center
 
 -- Sidebar tabs
-local TabBar = Instance.new("Frame", Main)
+TabBar = Instance.new("Frame", Main)
 TabBar.Size = UDim2.new(0, 104, 1, -42)
 TabBar.Position = UDim2.new(0, 0, 0, 42)
 TabBar.BackgroundColor3 = Color3.fromRGB(10, 12, 20)
@@ -960,52 +978,58 @@ TabBar.BorderSizePixel = 0
 _G.NoxarUI.corner(TabBar, 14)
 _G.NoxarUI.stroke(TabBar, C.borderSoft, 0.78, 1)
 
-local TabIndicator = Instance.new("Frame", TabBar)
+TabIndicator = Instance.new("Frame", TabBar)
 TabIndicator.Size = UDim2.new(0, 3, 0, 36)
 TabIndicator.Position = UDim2.new(0, 0, 0, 10)
 TabIndicator.BackgroundColor3 = C.accent
 TabIndicator.BorderSizePixel = 0
 _G.NoxarUI.corner(TabIndicator, 3)
 
-local TabFarmBtn = Instance.new("TextButton", TabBar)
+TabFarmBtn = Instance.new("TextButton", TabBar)
 TabFarmBtn.Size = UDim2.new(1, -12, 0, 36)
 TabFarmBtn.Position = UDim2.new(0, 7, 0, 10)
 TabFarmBtn.Text = "  Farm"
 _G.NoxarUI.nav(TabFarmBtn, true)
 
-local TabClaimBtn = Instance.new("TextButton", TabBar)
-TabClaimBtn.Size = UDim2.new(1, -12, 0, 36)
-TabClaimBtn.Position = UDim2.new(0, 7, 0, 136)
-TabClaimBtn.Text = "  Shop"
-_G.NoxarUI.nav(TabClaimBtn, false)
-
-local TabServerBtn = Instance.new("TextButton", TabBar)
-TabServerBtn.Size = UDim2.new(1, -12, 0, 36)
-TabServerBtn.Position = UDim2.new(0, 7, 0, 178)
-TabServerBtn.Text = "  Settings"
-_G.NoxarUI.nav(TabServerBtn, false)
-
-local TabHatchBtn = Instance.new("TextButton", TabBar)
-TabHatchBtn.Size = UDim2.new(1, -12, 0, 36)
-TabHatchBtn.Position = UDim2.new(0, 7, 0, 94)
-TabHatchBtn.Text = "  Hatch"
-_G.NoxarUI.nav(TabHatchBtn, false)
-
-local TabAreaFarmBtn = Instance.new("TextButton", TabBar)
+TabAreaFarmBtn = Instance.new("TextButton", TabBar)
 TabAreaFarmBtn.Size = UDim2.new(1, -12, 0, 36)
 TabAreaFarmBtn.Position = UDim2.new(0, 7, 0, 52)
 TabAreaFarmBtn.Text = "  Auto"
 _G.NoxarUI.nav(TabAreaFarmBtn, false)
 
+TabRiftBtn = Instance.new("TextButton", TabBar)
+TabRiftBtn.Size = UDim2.new(1, -12, 0, 36)
+TabRiftBtn.Position = UDim2.new(0, 7, 0, 94)
+TabRiftBtn.Text = "  Rift"
+_G.NoxarUI.nav(TabRiftBtn, false)
+
+TabHatchBtn = Instance.new("TextButton", TabBar)
+TabHatchBtn.Size = UDim2.new(1, -12, 0, 36)
+TabHatchBtn.Position = UDim2.new(0, 7, 0, 136)
+TabHatchBtn.Text = "  Hatch"
+_G.NoxarUI.nav(TabHatchBtn, false)
+
+TabClaimBtn = Instance.new("TextButton", TabBar)
+TabClaimBtn.Size = UDim2.new(1, -12, 0, 36)
+TabClaimBtn.Position = UDim2.new(0, 7, 0, 178)
+TabClaimBtn.Text = "  Shop"
+_G.NoxarUI.nav(TabClaimBtn, false)
+
+TabServerBtn = Instance.new("TextButton", TabBar)
+TabServerBtn.Size = UDim2.new(1, -12, 0, 36)
+TabServerBtn.Position = UDim2.new(0, 7, 0, 220)
+TabServerBtn.Text = "  Settings"
+_G.NoxarUI.nav(TabServerBtn, false)
+
 -- Page area
-local ContentArea = Instance.new("Frame", Main)
+ContentArea = Instance.new("Frame", Main)
 ContentArea.Size = UDim2.new(1, -104, 1, -42)
 ContentArea.Position = UDim2.new(0, 104, 0, 42)
 ContentArea.BackgroundColor3 = Color3.fromRGB(9, 11, 19)
 ContentArea.BorderSizePixel = 0
 _G.NoxarUI.corner(ContentArea, 14)
 
-local FarmTab = Instance.new("ScrollingFrame", ContentArea)
+FarmTab = Instance.new("ScrollingFrame", ContentArea)
 FarmTab.Size = UDim2.new(1, 0, 1, 0)
 FarmTab.BackgroundTransparency = 1
 FarmTab.BorderSizePixel = 0
@@ -1014,7 +1038,7 @@ FarmTab.ScrollBarImageColor3 = C.accent
 FarmTab.CanvasSize = UDim2.new(0, 0, 0, 0)
 FarmTab.AutomaticCanvasSize = Enum.AutomaticSize.Y
 
-local ClaimTab = Instance.new("ScrollingFrame", ContentArea)
+ClaimTab = Instance.new("ScrollingFrame", ContentArea)
 ClaimTab.Size = UDim2.new(1, 0, 1, 0)
 ClaimTab.BackgroundTransparency = 1
 ClaimTab.BorderSizePixel = 0
@@ -1024,7 +1048,7 @@ ClaimTab.CanvasSize = UDim2.new(0, 0, 0, 0)
 ClaimTab.AutomaticCanvasSize = Enum.AutomaticSize.Y
 ClaimTab.Visible = false
 
-local ServerTab = Instance.new("ScrollingFrame", ContentArea)
+ServerTab = Instance.new("ScrollingFrame", ContentArea)
 ServerTab.Size = UDim2.new(1, 0, 1, 0)
 ServerTab.BackgroundTransparency = 1
 ServerTab.BorderSizePixel = 0
@@ -1034,7 +1058,7 @@ ServerTab.CanvasSize = UDim2.new(0, 0, 0, 0)
 ServerTab.AutomaticCanvasSize = Enum.AutomaticSize.Y
 ServerTab.Visible = false
 
-local HatchTab = Instance.new("ScrollingFrame", ContentArea)
+HatchTab = Instance.new("ScrollingFrame", ContentArea)
 HatchTab.Size = UDim2.new(1, 0, 1, 0)
 HatchTab.BackgroundTransparency = 1
 HatchTab.Visible = false
@@ -1044,7 +1068,7 @@ HatchTab.ScrollBarImageColor3 = C.accent
 HatchTab.CanvasSize = UDim2.new(0, 0, 0, 0)
 HatchTab.AutomaticCanvasSize = Enum.AutomaticSize.Y
 
-local AreaFarmTab = Instance.new("ScrollingFrame", ContentArea)
+AreaFarmTab = Instance.new("ScrollingFrame", ContentArea)
 AreaFarmTab.Size = UDim2.new(1, 0, 1, 0)
 AreaFarmTab.BackgroundTransparency = 1
 AreaFarmTab.Visible = false
@@ -1054,16 +1078,40 @@ AreaFarmTab.ScrollBarImageColor3 = C.accent
 AreaFarmTab.CanvasSize = UDim2.new(0, 0, 0, 0)
 AreaFarmTab.AutomaticCanvasSize = Enum.AutomaticSize.Y
 
+RiftTab = Instance.new("ScrollingFrame", ContentArea)
+RiftTab.Size = UDim2.new(1, 0, 1, 0)
+RiftTab.BackgroundTransparency = 1
+RiftTab.Visible = false
+RiftTab.BorderSizePixel = 0
+RiftTab.ScrollBarThickness = 3
+RiftTab.ScrollBarImageColor3 = C.accent
+RiftTab.CanvasSize = UDim2.new(0, 0, 0, 0)
+RiftTab.AutomaticCanvasSize = Enum.AutomaticSize.Y
+
+RiftTab = Instance.new("ScrollingFrame", ContentArea)
+RiftTab.Size = UDim2.new(1, 0, 1, 0)
+RiftTab.BackgroundTransparency = 1
+RiftTab.Visible = false
+RiftTab.BorderSizePixel = 0
+RiftTab.ScrollBarThickness = 3
+RiftTab.ScrollBarImageColor3 = C.accent
+RiftTab.CanvasSize = UDim2.new(0, 0, 0, 0)
+RiftTab.AutomaticCanvasSize = Enum.AutomaticSize.Y
+
+
+
 -- ==========================================
 -- 5. FARM TAB GENERATION
 -- ==========================================
-local UIListFarm = Instance.new("UIListLayout", FarmTab)
+UIListFarm = Instance.new("UIListLayout", FarmTab)
 UIListFarm.Padding = UDim.new(0, 5)
 UIListFarm.HorizontalAlignment = Enum.HorizontalAlignment.Center
 UIListFarm.SortOrder = Enum.SortOrder.LayoutOrder
-Instance.new("UIPadding", FarmTab).PaddingTop = UDim.new(0, 5)
+FarmTabPadding = Instance.new("UIPadding", FarmTab)
+FarmTabPadding.PaddingTop = UDim.new(0, 5)
+FarmTabPadding.PaddingBottom = UDim.new(0, 26)
 
-local TargetLbl = Instance.new("TextLabel", FarmTab)
+TargetLbl = Instance.new("TextLabel", FarmTab)
 TargetLbl.Size = UDim2.new(1, -20, 0, 16)
 TargetLbl.BackgroundTransparency = 1
 TargetLbl.Text = selectedMonster and ("Target: " .. selectedMonster) or "Target: All Monsters"
@@ -1073,14 +1121,14 @@ TargetLbl.TextSize = 11
 TargetLbl.TextXAlignment = Enum.TextXAlignment.Left
 TargetLbl.LayoutOrder = 1
 
-local TargetDropBtn = Instance.new("TextButton", FarmTab)
+TargetDropBtn = Instance.new("TextButton", FarmTab)
 TargetDropBtn.Size = UDim2.new(1, -20, 0, 30)
 TargetDropBtn.BackgroundColor3 = C.card2
 TargetDropBtn.Text = selectedMonster and ("▼  " .. selectedMonster) or "▼  All Monsters"
 TargetDropBtn.LayoutOrder = 2
 _G.NoxarUI.drop(TargetDropBtn)
 
-local ScanBtn = Instance.new("TextButton", FarmTab)
+ScanBtn = Instance.new("TextButton", FarmTab)
 ScanBtn.Size = UDim2.new(1, -20, 0, 30)
 ScanBtn.BackgroundColor3 = C.accent
 ScanBtn.TextColor3 = C.text
@@ -1090,17 +1138,18 @@ ScanBtn.TextSize = 11
 Instance.new("UICorner", ScanBtn).CornerRadius = UDim.new(0, 9)
 ScanBtn.LayoutOrder = 3
 
-local ScrollFarm = Instance.new("ScrollingFrame", FarmTab)
+ScrollFarm = Instance.new("ScrollingFrame", FarmTab)
 ScrollFarm.Size = UDim2.new(1, -20, 0, 84) 
 ScrollFarm.BackgroundColor3 = C.surface
 ScrollFarm.ScrollBarThickness = 3
 ScrollFarm.ScrollBarImageColor3 = C.accent
 ScrollFarm.BorderSizePixel = 0
+ScrollFarm.AutomaticCanvasSize = Enum.AutomaticSize.Y
 Instance.new("UICorner", ScrollFarm).CornerRadius = UDim.new(0, 9)
 ScrollFarm.LayoutOrder = 4
 ScrollFarm.Size = UDim2.new(1, -20, 0, 0)
 ScrollFarm.Visible = false
-local ScrollList = Instance.new("UIListLayout", ScrollFarm)
+ScrollList = Instance.new("UIListLayout", ScrollFarm)
 ScrollList.Padding = UDim.new(0, 3)
 Instance.new("UIPadding", ScrollFarm).PaddingTop = UDim.new(0, 3)
 
@@ -1110,7 +1159,7 @@ TargetDropBtn.MouseButton1Click:Connect(function()
     _G.NoxarUI.animateDrop(ScrollFarm, open, 132)
 end)
 
-local function populateList(types)
+function populateList(types)
     for _, c in ipairs(ScrollFarm:GetChildren()) do
         if c:IsA("TextButton") then c:Destroy() end
     end
@@ -1139,7 +1188,15 @@ local function populateList(types)
             saveConfig()
         end)
     end
-    ScrollFarm.CanvasSize = UDim2.new(0, 0, 0, ScrollList.AbsoluteContentSize.Y + 8)
+    local currentScale = tonumber(uiScaleValue) or 1
+if currentScale <= 0 then currentScale = 1 end
+local buttonCount = 0
+for _, c in ipairs(ScrollFarm:GetChildren()) do
+    if c:IsA("TextButton") then buttonCount = buttonCount + 1 end
+end
+local unscaledAbsHeight = (ScrollList.AbsoluteContentSize.Y / currentScale) + 10
+local unscaledCountHeight = buttonCount * 37 + 10
+ScrollFarm.CanvasSize = UDim2.new(0, 0, 0, math.max(unscaledAbsHeight, unscaledCountHeight))
 end
 
 ScanBtn.MouseButton1Click:Connect(function()
@@ -1164,17 +1221,17 @@ ScanBtn.MouseButton1Click:Connect(function()
     end)
 end)
 
-local DelaysFrame = Instance.new("Frame", FarmTab)
+DelaysFrame = Instance.new("Frame", FarmTab)
 DelaysFrame.Size = UDim2.new(1, -20, 0, 24)
 DelaysFrame.BackgroundTransparency = 1
 DelaysFrame.LayoutOrder = 5
 
-local SpamBg = Instance.new("Frame", DelaysFrame)
+SpamBg = Instance.new("Frame", DelaysFrame)
 SpamBg.Size = UDim2.new(0.48, 0, 1, 0)
 SpamBg.BackgroundColor3 = C.card
 Instance.new("UICorner", SpamBg).CornerRadius = UDim.new(0, 9)
 
-local SpamLbl = Instance.new("TextLabel", SpamBg)
+SpamLbl = Instance.new("TextLabel", SpamBg)
 SpamLbl.Size = UDim2.new(0.5, 0, 1, 0)
 SpamLbl.Position = UDim2.new(0, 8, 0, 0)
 SpamLbl.BackgroundTransparency = 1
@@ -1184,7 +1241,7 @@ SpamLbl.Font = Enum.Font.Gotham
 SpamLbl.TextSize = 10
 SpamLbl.TextXAlignment = Enum.TextXAlignment.Left
 
-local SpamBox = Instance.new("TextBox", SpamBg)
+SpamBox = Instance.new("TextBox", SpamBg)
 SpamBox.Size = UDim2.new(0.35, 0, 0, 16)
 SpamBox.Position = UDim2.new(0.55, 0, 0.5, -8)
 SpamBox.BackgroundColor3 = C.surface
@@ -1200,13 +1257,13 @@ SpamBox.FocusLost:Connect(function()
     saveConfig()
 end)
 
-local EquipBg = Instance.new("Frame", DelaysFrame)
+EquipBg = Instance.new("Frame", DelaysFrame)
 EquipBg.Size = UDim2.new(0.48, 0, 1, 0)
 EquipBg.Position = UDim2.new(0.52, 0, 0, 0)
 EquipBg.BackgroundColor3 = C.card
 Instance.new("UICorner", EquipBg).CornerRadius = UDim.new(0, 9)
 
-local EquipLbl = Instance.new("TextLabel", EquipBg)
+EquipLbl = Instance.new("TextLabel", EquipBg)
 EquipLbl.Size = UDim2.new(0.5, 0, 1, 0)
 EquipLbl.Position = UDim2.new(0, 8, 0, 0)
 EquipLbl.BackgroundTransparency = 1
@@ -1216,7 +1273,7 @@ EquipLbl.Font = Enum.Font.Gotham
 EquipLbl.TextSize = 10
 EquipLbl.TextXAlignment = Enum.TextXAlignment.Left
 
-local EquipBox = Instance.new("TextBox", EquipBg)
+EquipBox = Instance.new("TextBox", EquipBg)
 EquipBox.Size = UDim2.new(0.35, 0, 0, 16)
 EquipBox.Position = UDim2.new(0.55, 0, 0.5, -8)
 EquipBox.BackgroundColor3 = C.surface
@@ -1232,7 +1289,7 @@ EquipBox.FocusLost:Connect(function()
     saveConfig()
 end)
 
-local FarmStatus = Instance.new("TextLabel", FarmTab)
+FarmStatus = Instance.new("TextLabel", FarmTab)
 FarmStatus.Size = UDim2.new(1, -20, 0, 16)
 FarmStatus.BackgroundTransparency = 1
 FarmStatus.Text = "Status: Idle"
@@ -1241,7 +1298,7 @@ FarmStatus.Font = Enum.Font.GothamSemibold
 FarmStatus.TextSize = 10
 FarmStatus.LayoutOrder = 6
 
-local StartFarmBtn = Instance.new("TextButton", FarmTab)
+StartFarmBtn = Instance.new("TextButton", FarmTab)
 StartFarmBtn.Size = UDim2.new(1, -20, 0, 34)
 StartFarmBtn.BackgroundColor3 = C.green
 StartFarmBtn.TextColor3 = C.bg
@@ -1251,7 +1308,7 @@ StartFarmBtn.TextSize = 12
 Instance.new("UICorner", StartFarmBtn).CornerRadius = UDim.new(0, 9)
 StartFarmBtn.LayoutOrder = 7
 
-local function toggleFarming(forceState)
+function toggleFarming(forceState)
     if forceState ~= nil then
         running = forceState
     else
@@ -1296,20 +1353,22 @@ end
 -- ==========================================
 -- 6. SHOPS TAB + AUTO CLAIM CONTROLS
 -- ==========================================
-local UIListClaim = Instance.new("UIListLayout", ClaimTab)
-UIListClaim.Padding = UDim.new(0, 8)
+UIListClaim = Instance.new("UIListLayout", ClaimTab)
+UIListClaim.Padding = UDim.new(0, 6)
 UIListClaim.HorizontalAlignment = Enum.HorizontalAlignment.Center
 UIListClaim.SortOrder = Enum.SortOrder.LayoutOrder
-Instance.new("UIPadding", ClaimTab).PaddingTop = UDim.new(0, 8)
+ClaimTabPadding = Instance.new("UIPadding", ClaimTab)
+ClaimTabPadding.PaddingTop = UDim.new(0, 6)
+ClaimTabPadding.PaddingBottom = UDim.new(0, 26)
 
 -- Auto Claim controls are transferred into the Auto tab below Boss Loop.
-local AutoClaimDivider = Instance.new("Frame", AreaFarmTab)
+AutoClaimDivider = Instance.new("Frame", AreaFarmTab)
 AutoClaimDivider.Size = UDim2.new(1, -20, 0, 1)
 AutoClaimDivider.BackgroundColor3 = C.border
 AutoClaimDivider.BorderSizePixel = 0
 AutoClaimDivider.LayoutOrder = 16
 
-local AutoClaimTitleLbl = Instance.new("TextLabel", AreaFarmTab)
+AutoClaimTitleLbl = Instance.new("TextLabel", AreaFarmTab)
 AutoClaimTitleLbl.Size = UDim2.new(1, -20, 0, 18)
 AutoClaimTitleLbl.BackgroundTransparency = 1
 AutoClaimTitleLbl.Text = "Auto Claim"
@@ -1338,7 +1397,7 @@ LastClaimLbl.Font = Enum.Font.Gotham
 LastClaimLbl.TextSize = 10
 LastClaimLbl.LayoutOrder = 19
 
-local ToggleClaimBtn = Instance.new("TextButton", AreaFarmTab)
+ToggleClaimBtn = Instance.new("TextButton", AreaFarmTab)
 ToggleClaimBtn.Size = UDim2.new(1, -20, 0, 32)
 ToggleClaimBtn.BackgroundColor3 = autoClaimEnabled and C.green or C.red
 ToggleClaimBtn.TextColor3 = autoClaimEnabled and C.bg or C.text
@@ -1348,7 +1407,7 @@ ToggleClaimBtn.TextSize = 11
 Instance.new("UICorner", ToggleClaimBtn).CornerRadius = UDim.new(0, 9)
 ToggleClaimBtn.LayoutOrder = 20
 
-local ClaimNowBtn = Instance.new("TextButton", AreaFarmTab)
+ClaimNowBtn = Instance.new("TextButton", AreaFarmTab)
 ClaimNowBtn.Size = UDim2.new(1, -20, 0, 32)
 ClaimNowBtn.BackgroundColor3 = C.card
 ClaimNowBtn.TextColor3 = C.text
@@ -1359,7 +1418,7 @@ Instance.new("UICorner", ClaimNowBtn).CornerRadius = UDim.new(0, 9)
 Instance.new("UIStroke", ClaimNowBtn).Color = C.border
 ClaimNowBtn.LayoutOrder = 21
 
-local ClaimInfoLbl = Instance.new("TextLabel", AreaFarmTab)
+ClaimInfoLbl = Instance.new("TextLabel", AreaFarmTab)
 ClaimInfoLbl.Size = UDim2.new(1, -20, 0, 44)
 ClaimInfoLbl.BackgroundTransparency = 1
 ClaimInfoLbl.BorderSizePixel = 0
@@ -1399,7 +1458,7 @@ ClaimNowBtn.MouseButton1Click:Connect(function()
 end)
 
 -- Shops tab: quick game view shortcuts. OpenView calls are pcall-wrapped.
-local ShopTitleLbl = Instance.new("TextLabel", ClaimTab)
+ShopTitleLbl = Instance.new("TextLabel", ClaimTab)
 ShopTitleLbl.Size = UDim2.new(1, -20, 0, 22)
 ShopTitleLbl.BackgroundTransparency = 1
 ShopTitleLbl.Text = "Shop"
@@ -1409,20 +1468,48 @@ ShopTitleLbl.TextSize = 13
 ShopTitleLbl.TextXAlignment = Enum.TextXAlignment.Left
 ShopTitleLbl.LayoutOrder = 1
 
-local ShopInfoLbl = Instance.new("TextLabel", ClaimTab)
-ShopInfoLbl.Size = UDim2.new(1, -20, 0, 28)
+ShopInfoLbl = Instance.new("TextLabel", ClaimTab)
+ShopInfoLbl.Size = UDim2.new(1, -20, 0, 18)
 ShopInfoLbl.BackgroundTransparency = 1
-ShopInfoLbl.Text = "Open shop, pet, and crafting screens directly."
+ShopInfoLbl.Text = "Open shop, pet, and crafting screens."
 ShopInfoLbl.TextColor3 = Color3.fromRGB(180, 190, 220)
 ShopInfoLbl.Font = Enum.Font.Gotham
-ShopInfoLbl.TextSize = 9
+ShopInfoLbl.TextSize = 8
 ShopInfoLbl.TextWrapped = true
 ShopInfoLbl.TextXAlignment = Enum.TextXAlignment.Left
 ShopInfoLbl.LayoutOrder = 2
 
-local function createShopButton(order, title, callback)
+function getPathToolSafe()
+    if PathTool then return PathTool end
+    if _G.PathTool then
+        PathTool = _G.PathTool
+        return PathTool
+    end
+    pcall(function()
+        PathTool = require(game:GetService("ReplicatedStorage").CommonLibrary.Tool.PathTool)
+    end)
+    return PathTool
+end
+
+function openViewSafe(viewName, arg1)
+    -- Fully guarded: no nil function calls, no startup require, no console spam
+    -- unless the game's own opened view prints something internally.
+    pcall(function()
+        local pt = getPathToolSafe()
+        local vm = pt and pt.ViewManager
+        local openView = vm and vm.OpenView
+        if type(openView) ~= "function" then return end
+        if arg1 ~= nil then
+            openView(viewName, arg1)
+        else
+            openView(viewName)
+        end
+    end)
+end
+
+function createShopButton(order, title, viewName, arg1)
     local btn = Instance.new("TextButton", ClaimTab)
-    btn.Size = UDim2.new(1, -20, 0, 34)
+    btn.Size = UDim2.new(1, -20, 0, 30)
     btn.BackgroundColor3 = C.card
     btn.TextColor3 = C.text
     btn.Text = title
@@ -1433,41 +1520,31 @@ local function createShopButton(order, title, callback)
     Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 9)
     _G.NoxarUI.stroke(btn, C.borderSoft, 0.55, 1)
     btn.MouseButton1Click:Connect(function()
-        pcall(callback)
+        openViewSafe(viewName, arg1)
     end)
     return btn
 end
 
-createShopButton(3, "Tower Shop", function()
-    PathTool.ViewManager.OpenView("TowerShopView")
-end)
-createShopButton(4, "Pet Gear Shop", function()
-    PathTool.ViewManager.OpenView("PetGearRollView", "Shop")
-end)
-createShopButton(5, "Pet Center", function()
-    PathTool.ViewManager.OpenView("PetEvolveView")
-end)
-createShopButton(6, "Pet Evolution", function()
-    PathTool.ViewManager.OpenView("PetTransformView")
-end)
-createShopButton(7, "Abyss Shop", function()
-    PathTool.ViewManager.OpenView("AbyssShopView")
-end)
-createShopButton(8, "Crafting Workshop", function()
-    PathTool.ViewManager.OpenView("SyntheticView")
-end)
+createShopButton(3, "Tower Shop", "TowerShopView")
+createShopButton(4, "Pet Gear Shop", "PetGearRollView", "Shop")
+createShopButton(5, "Pet Center", "PetEvolveView")
+createShopButton(6, "Pet Evolution", "PetTransformView")
+createShopButton(7, "Abyss Shop", "AbyssShopView")
+createShopButton(8, "Crafting Workshop", "SyntheticView")
 
 -- ==========================================
 -- 7. SETTINGS TAB GENERATION
 -- ==========================================
-local UIListServer = Instance.new("UIListLayout", ServerTab)
+UIListServer = Instance.new("UIListLayout", ServerTab)
 UIListServer.Padding = UDim.new(0, 6)
 UIListServer.HorizontalAlignment = Enum.HorizontalAlignment.Center
 UIListServer.SortOrder = Enum.SortOrder.LayoutOrder
-Instance.new("UIPadding", ServerTab).PaddingTop = UDim.new(0, 6)
+ServerTabPadding = Instance.new("UIPadding", ServerTab)
+ServerTabPadding.PaddingTop = UDim.new(0, 6)
+ServerTabPadding.PaddingBottom = UDim.new(0, 26)
 
 -- Section 1: Anti-AFK Toggle
-local AntiAfkBtn = Instance.new("TextButton", ServerTab)
+AntiAfkBtn = Instance.new("TextButton", ServerTab)
 AntiAfkBtn.Size = UDim2.new(1, -20, 0, 26)
 AntiAfkBtn.BackgroundColor3 = antiAfkEnabled and C.green or C.red
 AntiAfkBtn.TextColor3 = antiAfkEnabled and C.bg or C.text
@@ -1565,7 +1642,7 @@ _G.NoxarUIScaleControls.Box.FocusLost:Connect(function()
 end)
 
 -- Section 3: Auto Rejoin
-local RejoinLbl = Instance.new("TextLabel", ServerTab)
+RejoinLbl = Instance.new("TextLabel", ServerTab)
 RejoinLbl.Size = UDim2.new(1, -20, 0, 14)
 RejoinLbl.BackgroundTransparency = 1
 RejoinLbl.Text = "Auto Rejoin Timer"
@@ -1575,14 +1652,14 @@ RejoinLbl.TextSize = 11
 RejoinLbl.TextXAlignment = Enum.TextXAlignment.Left
 RejoinLbl.LayoutOrder = 4
 
-local RejoinRow = Instance.new("Frame", ServerTab)
+RejoinRow = Instance.new("Frame", ServerTab)
 RejoinRow.Size = UDim2.new(1, -20, 0, 26)
 RejoinRow.BackgroundColor3 = C.surface
 RejoinRow.BorderSizePixel = 0
 RejoinRow.LayoutOrder = 5
 Instance.new("UICorner", RejoinRow).CornerRadius = UDim.new(0, 9)
 
-local RejoinBox = Instance.new("TextBox", RejoinRow)
+RejoinBox = Instance.new("TextBox", RejoinRow)
 RejoinBox.Size = UDim2.new(0, 40, 0, 18)
 RejoinBox.Position = UDim2.new(0, 8, 0.5, -9)
 RejoinBox.BackgroundColor3 = C.card
@@ -1592,7 +1669,7 @@ RejoinBox.TextSize = 10
 RejoinBox.Text = tostring(rejoinMinutes)
 Instance.new("UICorner", RejoinBox).CornerRadius = UDim.new(0, 7)
 
-local RejoinMinLbl = Instance.new("TextLabel", RejoinRow)
+RejoinMinLbl = Instance.new("TextLabel", RejoinRow)
 RejoinMinLbl.Size = UDim2.new(0, 60, 1, 0)
 RejoinMinLbl.Position = UDim2.new(0, 55, 0, 0)
 RejoinMinLbl.BackgroundTransparency = 1
@@ -1602,7 +1679,7 @@ RejoinMinLbl.Font = Enum.Font.Gotham
 RejoinMinLbl.TextSize = 10
 RejoinMinLbl.TextXAlignment = Enum.TextXAlignment.Left
 
-local RejoinToggleBtn = Instance.new("TextButton", RejoinRow)
+RejoinToggleBtn = Instance.new("TextButton", RejoinRow)
 RejoinToggleBtn.Size = UDim2.new(0, 50, 0, 18)
 RejoinToggleBtn.Position = UDim2.new(1, -58, 0.5, -9)
 RejoinToggleBtn.BackgroundColor3 = rejoinTimerEnabled and C.green or C.red
@@ -1612,7 +1689,7 @@ RejoinToggleBtn.Font = Enum.Font.GothamBold
 RejoinToggleBtn.TextSize = 10
 Instance.new("UICorner", RejoinToggleBtn).CornerRadius = UDim.new(0, 7)
 
-local RejoinStatusLbl = Instance.new("TextLabel", ServerTab)
+RejoinStatusLbl = Instance.new("TextLabel", ServerTab)
 RejoinStatusLbl.Size = UDim2.new(1, -20, 0, 14)
 RejoinStatusLbl.BackgroundTransparency = 1
 RejoinStatusLbl.Text = rejoinTimerEnabled and "Timer running..." or "Disabled"
@@ -1622,7 +1699,7 @@ RejoinStatusLbl.TextSize = 10
 RejoinStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
 RejoinStatusLbl.LayoutOrder = 6
 
-local function setRejoin(state)
+function setRejoin(state)
     rejoinTimerEnabled = state
     if rejoinTimerEnabled then
         rejoinDeadline = tick() + rejoinMinutes * 60
@@ -1670,7 +1747,7 @@ spawnTracked("rejoinTimer", function()
 end)
 
 -- Section 3: Positions Saver
-local PosLbl = Instance.new("TextLabel", ServerTab)
+PosLbl = Instance.new("TextLabel", ServerTab)
 PosLbl.Size = UDim2.new(1, -20, 0, 14)
 PosLbl.BackgroundTransparency = 1
 PosLbl.Text = "Saved Positions"
@@ -1680,7 +1757,7 @@ PosLbl.TextSize = 11
 PosLbl.TextXAlignment = Enum.TextXAlignment.Left
 PosLbl.LayoutOrder = 7
 
-local SavePosBtn = Instance.new("TextButton", ServerTab)
+SavePosBtn = Instance.new("TextButton", ServerTab)
 SavePosBtn.Size = UDim2.new(1, -20, 0, 26)
 SavePosBtn.BackgroundColor3 = C.card
 SavePosBtn.TextColor3 = C.text
@@ -1691,7 +1768,7 @@ Instance.new("UICorner", SavePosBtn).CornerRadius = UDim.new(0, 9)
 Instance.new("UIStroke", SavePosBtn).Color = C.border
 SavePosBtn.LayoutOrder = 8
 
-local ScrollPos = Instance.new("ScrollingFrame", ServerTab)
+ScrollPos = Instance.new("ScrollingFrame", ServerTab)
 ScrollPos.Size = UDim2.new(1, -20, 0, 96) 
 ScrollPos.BackgroundColor3 = C.surface
 ScrollPos.ScrollBarThickness = 3
@@ -1699,11 +1776,11 @@ ScrollPos.ScrollBarImageColor3 = C.accent
 ScrollPos.BorderSizePixel = 0
 Instance.new("UICorner", ScrollPos).CornerRadius = UDim.new(0, 9)
 ScrollPos.LayoutOrder = 9
-local ScrollPosList = Instance.new("UIListLayout", ScrollPos)
+ScrollPosList = Instance.new("UIListLayout", ScrollPos)
 ScrollPosList.Padding = UDim.new(0, 4)
 Instance.new("UIPadding", ScrollPos).PaddingTop = UDim.new(0, 4)
 
-local function refreshPositionsList()
+function refreshPositionsList()
     for _, c in ipairs(ScrollPos:GetChildren()) do
         if c:IsA("Frame") then c:Destroy() end
     end
@@ -1764,7 +1841,9 @@ local function refreshPositionsList()
             refreshPositionsList() 
         end)
     end
-    ScrollPos.CanvasSize = UDim2.new(0, 0, 0, ScrollPosList.AbsoluteContentSize.Y + 8)
+    local currentScale = tonumber(uiScaleValue) or 1
+    if currentScale <= 0 then currentScale = 1 end
+    ScrollPos.CanvasSize = UDim2.new(0, 0, 0, (ScrollPosList.AbsoluteContentSize.Y / currentScale) + 10)
 end
 
 SavePosBtn.MouseButton1Click:Connect(function()
@@ -1785,16 +1864,20 @@ if rejoinTimerEnabled then
 end
 refreshPositionsList()
 
+
+
 -- ==========================================
 -- 7.5 HATCH TAB GENERATION
 -- ==========================================
-local UIListHatch = Instance.new("UIListLayout", HatchTab)
-UIListHatch.Padding = UDim.new(0, 8)
+UIListHatch = Instance.new("UIListLayout", HatchTab)
+UIListHatch.Padding = UDim.new(0, 6)
 UIListHatch.HorizontalAlignment = Enum.HorizontalAlignment.Center
 UIListHatch.SortOrder = Enum.SortOrder.LayoutOrder
-Instance.new("UIPadding", HatchTab).PaddingTop = UDim.new(0, 8)
+HatchTabPadding = Instance.new("UIPadding", HatchTab)
+HatchTabPadding.PaddingTop = UDim.new(0, 6)
+HatchTabPadding.PaddingBottom = UDim.new(0, 34)
 
-local HatchStatusLbl = Instance.new("TextLabel", HatchTab)
+HatchStatusLbl = Instance.new("TextLabel", HatchTab)
 HatchStatusLbl.Size = UDim2.new(1, -20, 0, 22)
 HatchStatusLbl.BackgroundColor3 = Color3.fromRGB(20, 25, 39)
 HatchStatusLbl.Text = autoHatchEnabled and "Status: Active" or "Status: Idle"
@@ -1804,7 +1887,7 @@ HatchStatusLbl.TextSize = 11
 Instance.new("UICorner", HatchStatusLbl).CornerRadius = UDim.new(0, 9)
 HatchStatusLbl.LayoutOrder = 1
 
-local HatchTargetLbl = Instance.new("TextLabel", HatchTab)
+HatchTargetLbl = Instance.new("TextLabel", HatchTab)
 HatchTargetLbl.Size = UDim2.new(1, -20, 0, 16)
 HatchTargetLbl.BackgroundTransparency = 1
 HatchTargetLbl.Text = "Target: " .. selectedEggName .. " (" .. selectedEggId .. ")"
@@ -1814,14 +1897,14 @@ HatchTargetLbl.TextSize = 11
 HatchTargetLbl.TextXAlignment = Enum.TextXAlignment.Left
 HatchTargetLbl.LayoutOrder = 2
 
-local EggDropBtn = Instance.new("TextButton", HatchTab)
+EggDropBtn = Instance.new("TextButton", HatchTab)
 EggDropBtn.Size = UDim2.new(1, -20, 0, 30)
 EggDropBtn.BackgroundColor3 = C.card2
 EggDropBtn.Text = "▼  " .. selectedEggName .. "  |  ID " .. tostring(selectedEggId)
 EggDropBtn.LayoutOrder = 3
 _G.NoxarUI.drop(EggDropBtn)
 
-local EggSearchBox = Instance.new("TextBox", HatchTab)
+EggSearchBox = Instance.new("TextBox", HatchTab)
 EggSearchBox.Size = UDim2.new(1, -20, 0, 24)
 EggSearchBox.BackgroundColor3 = C.card
 EggSearchBox.TextColor3 = C.text
@@ -1835,34 +1918,44 @@ Instance.new("UICorner", EggSearchBox).CornerRadius = UDim.new(0, 9)
 Instance.new("UIPadding", EggSearchBox).PaddingLeft = UDim.new(0, 6)
 EggSearchBox.LayoutOrder = 4
 
-local ScrollHatch = Instance.new("ScrollingFrame", HatchTab)
+ScrollHatch = Instance.new("ScrollingFrame", HatchTab)
 ScrollHatch.Size = UDim2.new(1, -20, 0, 124)
 ScrollHatch.BackgroundColor3 = C.surface
 ScrollHatch.ScrollBarThickness = 3
 ScrollHatch.ScrollBarImageColor3 = C.accent
 ScrollHatch.BorderSizePixel = 0
+ScrollHatch.AutomaticCanvasSize = Enum.AutomaticSize.Y
 Instance.new("UICorner", ScrollHatch).CornerRadius = UDim.new(0, 9)
 ScrollHatch.LayoutOrder = 5
-local ScrollHatchList = Instance.new("UIListLayout", ScrollHatch)
+ScrollHatchList = Instance.new("UIListLayout", ScrollHatch)
 ScrollHatchList.Padding = UDim.new(0, 3)
 Instance.new("UIPadding", ScrollHatch).PaddingTop = UDim.new(0, 3)
+
+
 
 EggSearchBox.Visible = false
 ScrollHatch.Size = UDim2.new(1, -20, 0, 0)
 ScrollHatch.Visible = false
 
-local eggButtons = {} -- {btn = TextButton, searchName = "lowercase egg name"}
+eggButtons = {} -- {btn = TextButton, searchName = "lowercase egg name"}
 
-local function refreshEggListCanvas()
-    -- Recompute canvas size after buttons are shown/hidden by the filter,
-    -- since UIListLayout only accounts for visible children automatically
-    -- on its own AbsoluteContentSize, but we nudge it a frame late to be safe.
+function refreshEggListCanvas()
     task.defer(function()
-        ScrollHatch.CanvasSize = UDim2.new(0, 0, 0, ScrollHatchList.AbsoluteContentSize.Y + 8)
+        local currentScale = tonumber(uiScaleValue) or 1
+        if currentScale <= 0 then currentScale = 1 end
+        local visibleCount = 0
+        for _, entry in ipairs(eggButtons) do
+            if entry.btn and entry.btn.Visible then
+                visibleCount = visibleCount + 1
+            end
+        end
+        local unscaledAbsHeight = (ScrollHatchList.AbsoluteContentSize.Y / currentScale) + 10
+        local unscaledCountHeight = visibleCount * 37 + 10
+        ScrollHatch.CanvasSize = UDim2.new(0, 0, 0, math.max(unscaledAbsHeight, unscaledCountHeight))
     end)
 end
 
-local function applyEggFilter(query)
+function applyEggFilter(query)
     query = query:lower():match("^%s*(.-)%s*$") -- trim whitespace
     for _, entry in ipairs(eggButtons) do
         entry.btn.Visible = (query == "") or entry.searchName:find(query, 1, true) ~= nil
@@ -1878,6 +1971,7 @@ EggDropBtn.MouseButton1Click:Connect(function()
     local show = not ScrollHatch.Visible
     EggSearchBox.Visible = show
     EggDropBtn.Text = show and "▲  Close egg list" or ("▼  " .. selectedEggName .. "  |  ID " .. tostring(selectedEggId))
+    refreshEggListCanvas()
     _G.NoxarUI.animateDrop(ScrollHatch, show, 142)
 end)
 
@@ -1895,9 +1989,9 @@ for _, egg in ipairs(EggDatabase) do
 
     table.insert(eggButtons, {btn = btn, searchName = egg.name:lower()})
 end
-ScrollHatch.CanvasSize = UDim2.new(0, 0, 0, ScrollHatchList.AbsoluteContentSize.Y + 8)
+refreshEggListCanvas()
 
-local ToggleHatchBtn = Instance.new("TextButton", HatchTab)
+ToggleHatchBtn = Instance.new("TextButton", HatchTab)
 ToggleHatchBtn.Size = UDim2.new(1, -20, 0, 32)
 ToggleHatchBtn.BackgroundColor3 = autoHatchEnabled and C.green or C.red
 ToggleHatchBtn.TextColor3 = autoHatchEnabled and C.bg or C.text
@@ -1926,13 +2020,13 @@ end)
 -- ==========================================
 -- 7.55 BREEDING SECTION (inside Hatch tab)
 -- ==========================================
-local BreedDivider = Instance.new("Frame", HatchTab)
+BreedDivider = Instance.new("Frame", HatchTab)
 BreedDivider.Size = UDim2.new(1, -20, 0, 1)
 BreedDivider.BackgroundColor3 = C.border
 BreedDivider.BorderSizePixel = 0
 BreedDivider.LayoutOrder = 7
 
-local BreedHeaderLbl = Instance.new("TextLabel", HatchTab)
+BreedHeaderLbl = Instance.new("TextLabel", HatchTab)
 BreedHeaderLbl.Size = UDim2.new(1, -20, 0, 20)
 BreedHeaderLbl.BackgroundTransparency = 1
 BreedHeaderLbl.Text = "🧬 Pet Breeding"
@@ -1942,7 +2036,7 @@ BreedHeaderLbl.TextSize = 12
 BreedHeaderLbl.TextXAlignment = Enum.TextXAlignment.Left
 BreedHeaderLbl.LayoutOrder = 8
 
-local BreedStatusLbl = Instance.new("TextLabel", HatchTab)
+BreedStatusLbl = Instance.new("TextLabel", HatchTab)
 BreedStatusLbl.Size = UDim2.new(1, -20, 0, 16)
 BreedStatusLbl.BackgroundTransparency = 1
 BreedStatusLbl.Text = "Slot 1: Empty"
@@ -1970,7 +2064,7 @@ function _G.NoxarUI.breedButtonText(kind, open, label, id)
 end
 
 -- Father picker button
-local FatherBtn = Instance.new("TextButton", HatchTab)
+FatherBtn = Instance.new("TextButton", HatchTab)
 FatherBtn.Size = UDim2.new(1, -20, 0, 30)
 FatherBtn.BackgroundColor3 = C.card
 FatherBtn.TextColor3 = breedFatherId and C.text or C.sub
@@ -1983,7 +2077,7 @@ Instance.new("UICorner", FatherBtn).CornerRadius = UDim.new(0, 9)
 FatherBtn.LayoutOrder = 10
 
 -- Mother picker button
-local MotherBtn = Instance.new("TextButton", HatchTab)
+MotherBtn = Instance.new("TextButton", HatchTab)
 MotherBtn.Size = UDim2.new(1, -20, 0, 30)
 MotherBtn.BackgroundColor3 = C.card
 MotherBtn.TextColor3 = breedMotherId and C.text or C.sub
@@ -1997,7 +2091,7 @@ MotherBtn.LayoutOrder = 11
 
 -- Dropdown list frame (shared, repurposed for father/mother based on
 -- which button was pressed last)
-local BreedListFrame = Instance.new("ScrollingFrame", HatchTab)
+BreedListFrame = Instance.new("ScrollingFrame", HatchTab)
 BreedListFrame.Size = UDim2.new(1, -20, 0, 0) -- expands when opened
 BreedListFrame.BackgroundColor3 = C.surface
 BreedListFrame.BorderSizePixel = 0
@@ -2008,12 +2102,12 @@ BreedListFrame.ClipsDescendants = true
 BreedListFrame.LayoutOrder = 12
 Instance.new("UICorner", BreedListFrame).CornerRadius = UDim.new(0, 9)
 _G.NoxarUI.stroke(BreedListFrame, C.borderSoft, 0.5, 1)
-local BreedListLayout = Instance.new("UIListLayout", BreedListFrame)
+BreedListLayout = Instance.new("UIListLayout", BreedListFrame)
 BreedListLayout.Padding = UDim.new(0, 2)
 
-local breedListOpenFor = nil -- "father" or "mother" or nil
+breedListOpenFor = nil -- "father" or "mother" or nil
 
-local function closeBreedList()
+function closeBreedList()
     -- Important: collapse the list BEFORE restoring LayoutOrder.
     -- If we move BreedListFrame back under Mother while it is still visible,
     -- the father list flashes under the Mother selector for a split second.
@@ -2034,7 +2128,7 @@ end
 
 -- Visual-only grade label for the breeding selection list. Does not change
 -- any grade values or breeding logic. Colors intentionally not used.
-local function getBreedRankVisual(grade)
+function getBreedRankVisual(grade)
     if grade == 1 then return "E" end
     if grade == 2 then return "D" end
     if grade == 3 then return "C" end
@@ -2045,7 +2139,7 @@ local function getBreedRankVisual(grade)
     return tostring(grade or "?")
 end
 
-local function populateBreedList(kind)
+function populateBreedList(kind)
     for _, c in ipairs(BreedListFrame:GetChildren()) do
         if c:IsA("TextButton") then c:Destroy() end
     end
@@ -2119,7 +2213,7 @@ MotherBtn.MouseButton1Click:Connect(function()
 end)
 
 -- Breed button — fires the game's own ClientCreateBreeding(father, mother)
-local BreedBtn = Instance.new("TextButton", HatchTab)
+BreedBtn = Instance.new("TextButton", HatchTab)
 BreedBtn.Size = UDim2.new(1, -20, 0, 30)
 BreedBtn.BackgroundColor3 = C.accent
 BreedBtn.TextColor3 = C.text
@@ -2155,7 +2249,7 @@ end)
 -- Auto Hatch Egg toggle — once breeding slot 1 finishes, automatically
 -- fires ClientHatching() to collect the resulting pet, same idea as
 -- the incubator auto-hatch loop below.
-local AutoBreedHatchBtn = Instance.new("TextButton", HatchTab)
+AutoBreedHatchBtn = Instance.new("TextButton", HatchTab)
 AutoBreedHatchBtn.Size = UDim2.new(1, -20, 0, 30)
 AutoBreedHatchBtn.BackgroundColor3 = autoBreedHatchEnabled and C.green or C.red
 AutoBreedHatchBtn.TextColor3 = C.text
@@ -2181,7 +2275,7 @@ end)
 -- fires ClientCreateBreeding() again with the same two selected pets,
 -- looping breed -> hatch -> breed forever until turned off. Forces
 -- Auto-Collect on too, since a breed loop needs the egg cleared to restart.
-local AutoBreedBtn = Instance.new("TextButton", HatchTab)
+AutoBreedBtn = Instance.new("TextButton", HatchTab)
 AutoBreedBtn.Size = UDim2.new(1, -20, 0, 30)
 AutoBreedBtn.BackgroundColor3 = autoBreedEnabled and C.green or C.red
 AutoBreedBtn.TextColor3 = C.text
@@ -2216,13 +2310,17 @@ AutoBreedBtn.MouseButton1Click:Connect(function()
     saveConfig()
 end)
 
+
+refreshEggListCanvas()
+
+
 -- ==========================================
 -- 7.6 AREAFARM TAB GENERATION
 -- ==========================================
 -- Area Database Map (only used to know which AreaID a saved spot belongs
 -- to — same channel/pattern as the existing DataPullFunc calls elsewhere
 -- in this file, e.g. TowerTakeDailyRewardAllChannel above).
-local AreaFarmIDs = {
+AreaFarmIDs = {
     ["Starter Island"] = 1,
     ["Volcano"] = 2,
     ["Frost Isle"] = 3,
@@ -2238,7 +2336,7 @@ local AreaFarmIDs = {
     ["Skyheart Isle"] = 10000,
     ["Activity place"] = 10001,
 }
-local SortedAreaFarmAreas = {}
+SortedAreaFarmAreas = {}
 for name, id in pairs(AreaFarmIDs) do
     table.insert(SortedAreaFarmAreas, {Name = name, ID = id})
 end
@@ -2247,7 +2345,7 @@ table.sort(SortedAreaFarmAreas, function(a, b) return a.ID < b.ID end)
 -- Reverse lookup: AreaID -> proper display name, built from the same
 -- table the area button list uses. Lets detection show "Mobius Circus"
 -- instead of the internal folder codename "youleyuan", etc.
-local AreaIdToName = {}
+AreaIdToName = {}
 for name, id in pairs(AreaFarmIDs) do
     AreaIdToName[id] = name
 end
@@ -2268,7 +2366,7 @@ end
 -- part instead of trying to match names. This also means detection now
 -- works for areas that aren't in AreaFarmIDs at all yet (e.g. Caidan,
 -- youleyuan, longdao, kulouisland, fish).
-local function detectCurrentArea()
+function detectCurrentArea()
     local r = getRoot()
     if not r then return nil, nil end
     local myPos = r.Position
@@ -2276,6 +2374,7 @@ local function detectCurrentArea()
     local areaFolder = workspace:FindFirstChild("Area")
     if not areaFolder then return nil, nil end
 
+    -- Pass 1: Exact bounding box containment check
     for _, region in ipairs(areaFolder:GetChildren()) do
         local areaZone = region:FindFirstChild("Area")
         if areaZone then
@@ -2302,31 +2401,61 @@ local function detectCurrentArea()
             end
         end
     end
+
+    -- Pass 2: Nearest area proximity fallback (for far/outer positions in an area)
+    local nearestName, nearestId = nil, nil
+    local minDistance = math.huge
+
+    for _, region in ipairs(areaFolder:GetChildren()) do
+        local areaZone = region:FindFirstChild("Area")
+        if areaZone then
+            local zoneFolder = areaZone:FindFirstChild("AreaZone")
+            if zoneFolder then
+                for _, part in ipairs(zoneFolder:GetChildren()) do
+                    if part:IsA("BasePart") then
+                        local areaId = tonumber(part.Name:match("Area(%d+)"))
+                        local dist = (myPos - part.Position).Magnitude
+                        if dist < minDistance then
+                            minDistance = dist
+                            nearestId = areaId
+                            nearestName = areaId and AreaIdToName[areaId] or region.Name
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if nearestId and minDistance <= 5000 then
+        return nearestName, nearestId
+    end
+
     return nil, nil
 end
 
-local UIListAreaFarm = Instance.new("UIListLayout", AreaFarmTab)
-UIListAreaFarm.Padding = UDim.new(0, 8)
+UIListAreaFarm = Instance.new("UIListLayout", AreaFarmTab)
+UIListAreaFarm.Padding = UDim.new(0, 6)
 UIListAreaFarm.HorizontalAlignment = Enum.HorizontalAlignment.Center
 UIListAreaFarm.SortOrder = Enum.SortOrder.LayoutOrder
-Instance.new("UIPadding", AreaFarmTab).PaddingTop = UDim.new(0, 8)
-Instance.new("UIPadding", AreaFarmTab).PaddingBottom = UDim.new(0, 8)
+AreaFarmTabPadding = Instance.new("UIPadding", AreaFarmTab)
+AreaFarmTabPadding.PaddingTop = UDim.new(0, 6)
+AreaFarmTabPadding.PaddingBottom = UDim.new(0, 34)
 
-local AreaFarmHintLbl = Instance.new("TextLabel", AreaFarmTab)
+AreaFarmHintLbl = Instance.new("TextLabel", AreaFarmTab)
 AreaFarmHintLbl.Size = UDim2.new(1, -20, 0, 0)
 AreaFarmHintLbl.BackgroundTransparency = 1
 AreaFarmHintLbl.Text = ""
 AreaFarmHintLbl.Visible = false
 AreaFarmHintLbl.LayoutOrder = 1
 
-local AreaDropBtn = Instance.new("TextButton", AreaFarmTab)
+AreaDropBtn = Instance.new("TextButton", AreaFarmTab)
 AreaDropBtn.Size = UDim2.new(1, -20, 0, 30)
 AreaDropBtn.BackgroundColor3 = C.card2
 AreaDropBtn.Text = "▼  Area teleports"
 AreaDropBtn.LayoutOrder = 2
 _G.NoxarUI.drop(AreaDropBtn)
 
-local ScrollAreaFarm = Instance.new("ScrollingFrame", AreaFarmTab)
+ScrollAreaFarm = Instance.new("ScrollingFrame", AreaFarmTab)
 ScrollAreaFarm.Size = UDim2.new(1, -20, 0, 98)
 ScrollAreaFarm.BackgroundColor3 = C.surface
 ScrollAreaFarm.ScrollBarThickness = 3
@@ -2336,7 +2465,7 @@ Instance.new("UICorner", ScrollAreaFarm).CornerRadius = UDim.new(0, 9)
 ScrollAreaFarm.LayoutOrder = 3
 ScrollAreaFarm.Size = UDim2.new(1, -20, 0, 0)
 ScrollAreaFarm.Visible = false
-local ScrollAreaFarmList = Instance.new("UIListLayout", ScrollAreaFarm)
+ScrollAreaFarmList = Instance.new("UIListLayout", ScrollAreaFarm)
 ScrollAreaFarmList.Padding = UDim.new(0, 3)
 Instance.new("UIPadding", ScrollAreaFarm).PaddingTop = UDim.new(0, 3)
 
@@ -2360,16 +2489,22 @@ for _, area in ipairs(SortedAreaFarmAreas) do
         _G.NoxarUI.animateDrop(ScrollAreaFarm, false, 112)
     end)
 end
-ScrollAreaFarm.CanvasSize = UDim2.new(0, 0, 0, ScrollAreaFarmList.AbsoluteContentSize.Y + 6)
+
+-- UIScale-proof canvas height calculation (unscales AbsoluteContentSize if uiScaleValue < 1.0)
+local currentScale = tonumber(uiScaleValue) or 1
+if currentScale <= 0 then currentScale = 1 end
+local unscaledAbsHeight = (ScrollAreaFarmList.AbsoluteContentSize.Y / currentScale) + 10
+local unscaledCountHeight = #SortedAreaFarmAreas * 37 + 10
+ScrollAreaFarm.CanvasSize = UDim2.new(0, 0, 0, math.max(unscaledAbsHeight, unscaledCountHeight))
 
 -- ── Farming Spot ─────────────────────────────────────────────
-local FarmSpotDivider = Instance.new("Frame", AreaFarmTab)
+FarmSpotDivider = Instance.new("Frame", AreaFarmTab)
 FarmSpotDivider.Size = UDim2.new(1, -20, 0, 1)
 FarmSpotDivider.BackgroundColor3 = C.border
 FarmSpotDivider.BorderSizePixel = 0
 FarmSpotDivider.LayoutOrder = 4
 
-local FarmSpotLbl = Instance.new("TextLabel", AreaFarmTab)
+FarmSpotLbl = Instance.new("TextLabel", AreaFarmTab)
 FarmSpotLbl.Size = UDim2.new(1, -20, 0, 16)
 FarmSpotLbl.BackgroundTransparency = 1
 FarmSpotLbl.Text = "Farming Spot"
@@ -2379,7 +2514,7 @@ FarmSpotLbl.TextSize = 12
 FarmSpotLbl.TextXAlignment = Enum.TextXAlignment.Left
 FarmSpotLbl.LayoutOrder = 5
 
-local FarmSpotInfoLbl = Instance.new("TextLabel", AreaFarmTab)
+FarmSpotInfoLbl = Instance.new("TextLabel", AreaFarmTab)
 FarmSpotInfoLbl.Size = UDim2.new(1, -20, 0, 28)
 FarmSpotInfoLbl.BackgroundTransparency = 1
 FarmSpotInfoLbl.Text = "Saved position to return to after all bosses are defeated"
@@ -2390,14 +2525,17 @@ FarmSpotInfoLbl.TextWrapped = true
 FarmSpotInfoLbl.TextXAlignment = Enum.TextXAlignment.Left
 FarmSpotInfoLbl.LayoutOrder = 6
 
-local function farmSpotStatusText()
+function farmSpotStatusText()
     if farmingSpot then
-        return "Saved: " .. farmingSpot.areaName
+        local x = math.floor(farmingSpot.x or 0)
+        local y = math.floor(farmingSpot.y or 0)
+        local z = math.floor(farmingSpot.z or 0)
+        return "Saved: " .. farmingSpot.areaName .. " (" .. x .. ", " .. y .. ", " .. z .. ")"
     end
     return "Saved: None"
 end
 
-local FarmSpotStatusLbl = Instance.new("TextLabel", AreaFarmTab)
+FarmSpotStatusLbl = Instance.new("TextLabel", AreaFarmTab)
 FarmSpotStatusLbl.Size = UDim2.new(1, -20, 0, 16)
 FarmSpotStatusLbl.BackgroundTransparency = 1
 FarmSpotStatusLbl.Text = farmSpotStatusText()
@@ -2407,12 +2545,12 @@ FarmSpotStatusLbl.TextSize = 10
 FarmSpotStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
 FarmSpotStatusLbl.LayoutOrder = 7
 
-local FarmSpotRow = Instance.new("Frame", AreaFarmTab)
+FarmSpotRow = Instance.new("Frame", AreaFarmTab)
 FarmSpotRow.Size = UDim2.new(1, -20, 0, 28)
 FarmSpotRow.BackgroundTransparency = 1
 FarmSpotRow.LayoutOrder = 8
 
-local SaveFarmSpotBtn = Instance.new("TextButton", FarmSpotRow)
+SaveFarmSpotBtn = Instance.new("TextButton", FarmSpotRow)
 SaveFarmSpotBtn.Size = UDim2.new(0.34, -4, 1, 0)
 SaveFarmSpotBtn.Position = UDim2.new(0, 0, 0, 0)
 SaveFarmSpotBtn.BackgroundColor3 = C.card
@@ -2423,7 +2561,7 @@ SaveFarmSpotBtn.Text = "Save"
 SaveFarmSpotBtn.BorderSizePixel = 0
 Instance.new("UICorner", SaveFarmSpotBtn).CornerRadius = UDim.new(0, 9)
 
-local TPFarmSpotBtn = Instance.new("TextButton", FarmSpotRow)
+TPFarmSpotBtn = Instance.new("TextButton", FarmSpotRow)
 TPFarmSpotBtn.Size = UDim2.new(0.33, -4, 1, 0)
 TPFarmSpotBtn.Position = UDim2.new(0.34, 4, 0, 0)
 TPFarmSpotBtn.BackgroundColor3 = C.accent
@@ -2434,7 +2572,7 @@ TPFarmSpotBtn.Text = "TP"
 TPFarmSpotBtn.BorderSizePixel = 0
 Instance.new("UICorner", TPFarmSpotBtn).CornerRadius = UDim.new(0, 9)
 
-local ClearFarmSpotBtn = Instance.new("TextButton", FarmSpotRow)
+ClearFarmSpotBtn = Instance.new("TextButton", FarmSpotRow)
 ClearFarmSpotBtn.Size = UDim2.new(0.33, -4, 1, 0)
 ClearFarmSpotBtn.Position = UDim2.new(0.67, 4, 0, 0)
 ClearFarmSpotBtn.BackgroundColor3 = C.red
@@ -2448,20 +2586,19 @@ Instance.new("UICorner", ClearFarmSpotBtn).CornerRadius = UDim.new(0, 9)
 -- Teleports to a saved AreaFarm spot: fires the area-change remote for
 -- its AreaID, waits, then snaps the character to the exact saved CFrame.
 -- Shared by both Farming Spot TP and the boss loop's "go back" step.
-local function teleportToAreaFarmSpot(spot, skipSettle, preSnapWait)
+function teleportToAreaFarmSpot(spot, skipSettle, preSnapWait)
     if not spot then return false end
     pcall(function()
         DataPullFunc:InvokeServer("AreaTeleportToRegionChannel", spot.areaId)
     end)
     task.wait(preSnapWait or 2)
+
     local r = getRoot()
     if r then
         r.CFrame = CFrame.new(spot.x, spot.y, spot.z)
+        r.AssemblyLinearVelocity = Vector3.zero
+        r.AssemblyAngularVelocity = Vector3.zero
 
-        -- Wait 5s after arriving, then jump twice (anti-AFK). When
-        -- skipSettle is true (boss loop), this runs in the background
-        -- instead of blocking the caller, so boss detection can start
-        -- immediately after the CFrame snap instead of ~6s later.
         local function settle()
             task.wait(5)
             local char = LP.Character
@@ -2469,7 +2606,7 @@ local function teleportToAreaFarmSpot(spot, skipSettle, preSnapWait)
             if hum then
                 for i = 1, 2 do
                     hum:ChangeState(Enum.HumanoidStateType.Jumping)
-                    task.wait(6) -- 6s gap before the second anti-AFK jump
+                    task.wait(6)
                 end
             end
         end
@@ -2510,11 +2647,12 @@ TPFarmSpotBtn.MouseButton1Click:Connect(function()
     if farmingSpot then
         FarmSpotStatusLbl.Text = "Teleporting..."
         FarmSpotStatusLbl.TextColor3 = Color3.fromRGB(205, 215, 245)
-        -- Wait 5s for area loading, snap to the exact saved spot, then run
-        -- the anti-AFK jumps in the background so status updates immediately.
-        teleportToAreaFarmSpot(farmingSpot, true, 5)
-        FarmSpotStatusLbl.Text = farmSpotStatusText()
-        FarmSpotStatusLbl.TextColor3 = C.green
+        -- Run teleport asynchronously so the UI stays 100% responsive
+        task.spawn(function()
+            teleportToAreaFarmSpot(farmingSpot, true, 5)
+            FarmSpotStatusLbl.Text = farmSpotStatusText()
+            FarmSpotStatusLbl.TextColor3 = C.green
+        end)
     else
         FarmSpotStatusLbl.Text = "No Farming Spot saved!"
         FarmSpotStatusLbl.TextColor3 = C.red
@@ -2528,6 +2666,41 @@ ClearFarmSpotBtn.MouseButton1Click:Connect(function()
     saveConfig()
 end)
 
+-- Startup Check: Runs ONCE on script load/rejoin. Wait for game & character
+-- to fully load before teleporting to saved spot.
+task.spawn(function()
+    if not game:IsLoaded() then
+        pcall(function() game.Loaded:Wait() end)
+    end
+    task.wait(3.5) -- Extended initial wait on rejoin so remote channels are ready
+
+    if farmingSpot then
+        local r = getRoot()
+        if not r then
+            local startWait = os.clock()
+            while os.clock() - startWait < 3 do
+                r = getRoot()
+                if r then break end
+                task.wait(0.2)
+            end
+        end
+
+        if r then
+            local currentAreaName, currentAreaId = detectCurrentArea()
+            local savedPos = Vector3.new(farmingSpot.x, farmingSpot.y, farmingSpot.z)
+            local dist = (r.Position - savedPos).Magnitude
+
+            if currentAreaId ~= farmingSpot.areaId or dist > 20 then
+                FarmSpotStatusLbl.Text = "Startup TP to saved spot..."
+                FarmSpotStatusLbl.TextColor3 = Color3.fromRGB(205, 215, 245)
+                teleportToAreaFarmSpot(farmingSpot, true, 5)
+                FarmSpotStatusLbl.Text = farmSpotStatusText()
+                FarmSpotStatusLbl.TextColor3 = C.green
+            end
+        end
+    end
+end)
+
 -- ── Boss Loop (event-driven) ────────────────────────────────
 -- Regular + Ultra Rare bosses, confirmed from captured spawn
 -- notifications. We now listen for BOTH event kinds:
@@ -2535,7 +2708,7 @@ end)
 -- Areas here match the existing AreaFarmIDs keys exactly, and the live
 -- spawn notification's DescParams[2] is still used as the source of truth
 -- when queueing a fight.
-local BOSS_LIST = {
+BOSS_LIST = {
     -- Regular boss spawns (MonsterAppear)
     { name = "Flaragon",         area = "Volcano",          tier = "Boss" },
     { name = "Gildron",          area = "Duneveil Isle",    tier = "Boss" },
@@ -2561,13 +2734,13 @@ local BOSS_LIST = {
     { name = "Bull Lord",        area = "Specter Shallows", tier = "Ultra" },
 }
 
-local BossLoopDivider = Instance.new("Frame", AreaFarmTab)
+BossLoopDivider = Instance.new("Frame", AreaFarmTab)
 BossLoopDivider.Size = UDim2.new(1, -20, 0, 1)
 BossLoopDivider.BackgroundColor3 = C.border
 BossLoopDivider.BorderSizePixel = 0
 BossLoopDivider.LayoutOrder = 9
 
-local BossLoopTitleLbl = Instance.new("TextLabel", AreaFarmTab)
+BossLoopTitleLbl = Instance.new("TextLabel", AreaFarmTab)
 BossLoopTitleLbl.Size = UDim2.new(1, -20, 0, 16)
 BossLoopTitleLbl.BackgroundTransparency = 1
 BossLoopTitleLbl.Text = "💀 Boss Loop"
@@ -2577,7 +2750,7 @@ BossLoopTitleLbl.TextSize = 12
 BossLoopTitleLbl.TextXAlignment = Enum.TextXAlignment.Left
 BossLoopTitleLbl.LayoutOrder = 10
 
-local BossListHintLbl = Instance.new("TextLabel", AreaFarmTab)
+BossListHintLbl = Instance.new("TextLabel", AreaFarmTab)
 BossListHintLbl.Size = UDim2.new(1, -20, 0, 14)
 BossListHintLbl.BackgroundTransparency = 1
 BossListHintLbl.Text = "Select Boss/Special Mons to automate"
@@ -2594,14 +2767,14 @@ function _G.NoxarUI.bossCount(tbl)
     return n
 end
 
-local BossDropBtn = Instance.new("TextButton", AreaFarmTab)
+BossDropBtn = Instance.new("TextButton", AreaFarmTab)
 BossDropBtn.Size = UDim2.new(1, -20, 0, 30)
 BossDropBtn.BackgroundColor3 = C.card2
 BossDropBtn.Text = "▼  Boss checklist  (" .. tostring(_G.NoxarUI.bossCount(selectedBosses)) .. ")"
 BossDropBtn.LayoutOrder = 12
 _G.NoxarUI.drop(BossDropBtn)
 
-local BossListScroll = Instance.new("ScrollingFrame", AreaFarmTab)
+BossListScroll = Instance.new("ScrollingFrame", AreaFarmTab)
 BossListScroll.Size = UDim2.new(1, -20, 0, 126)
 BossListScroll.BackgroundColor3 = C.card
 BossListScroll.BorderSizePixel = 0
@@ -2614,7 +2787,7 @@ Instance.new("UICorner", BossListScroll).CornerRadius = UDim.new(0, 6)
 
 BossListScroll.Size = UDim2.new(1, -20, 0, 0)
 BossListScroll.Visible = false
-local BossListLayout = Instance.new("UIListLayout", BossListScroll)
+BossListLayout = Instance.new("UIListLayout", BossListScroll)
 BossListLayout.SortOrder = Enum.SortOrder.LayoutOrder
 BossListLayout.Padding = UDim.new(0, 3)
 Instance.new("UIPadding", BossListScroll).PaddingTop = UDim.new(0, 4)
@@ -2644,17 +2817,17 @@ for i, boss in ipairs(BOSS_LIST) do
     end)
 end
 
-local BossLoopLiveStatusLbl = Instance.new("TextLabel", AreaFarmTab)
+BossLoopLiveStatusLbl = Instance.new("TextLabel", AreaFarmTab)
 BossLoopLiveStatusLbl.Size = UDim2.new(1, -20, 0, 16)
 BossLoopLiveStatusLbl.BackgroundTransparency = 1
-BossLoopLiveStatusLbl.Text = "Status: " .. bossLoopStatus
+BossLoopLiveStatusLbl.Text = "Status: Idle"
 BossLoopLiveStatusLbl.TextColor3 = Color3.fromRGB(205, 215, 245)
 BossLoopLiveStatusLbl.Font = Enum.Font.GothamSemibold
 BossLoopLiveStatusLbl.TextSize = 10
 BossLoopLiveStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
 BossLoopLiveStatusLbl.LayoutOrder = 14
 
-local ToggleBossLoopBtn = Instance.new("TextButton", AreaFarmTab)
+ToggleBossLoopBtn = Instance.new("TextButton", AreaFarmTab)
 ToggleBossLoopBtn.Size = UDim2.new(1, -20, 0, 30)
 ToggleBossLoopBtn.BackgroundColor3 = bossLoopEnabled and C.green or C.red
 ToggleBossLoopBtn.TextColor3 = C.text
@@ -2701,7 +2874,7 @@ end)
 -- nameplate matches the boss name from the notification -- no distance
 -- cap needed here (unlike the old findNearestBoss), since we already
 -- know exactly which area we just teleported into.
-local function findBossByName(bossName)
+function findBossByName(bossName)
     buildNameCache()
     for _, m in ipairs(clientMonsters:GetChildren()) do
         local info = nameCache[m.Name]
@@ -2716,16 +2889,19 @@ end
 -- Waits for ClientMonsters' child count to stop changing (settled) or a
 -- max timeout -- avoids scanning before the new area has actually
 -- streamed its monsters in.
-local function waitForMonstersToSettle(maxWait)
+function waitForMonstersToSettle(maxWait, bossName)
     local start = os.clock()
     local lastCount = -1
     local stableSince = nil
     while os.clock() - start < maxWait do
+        if bossName and wasBossDeathNotified(bossName) then
+            return false, true -- second return value indicates died/killed
+        end
         local count = #clientMonsters:GetChildren()
         if count == lastCount then
             stableSince = stableSince or os.clock()
             if os.clock() - stableSince >= 1 then
-                return true -- stable for a full second, good enough
+                return true, false
             end
         else
             stableSince = nil
@@ -2733,7 +2909,67 @@ local function waitForMonstersToSettle(maxWait)
         lastCount = count
         task.wait(0.25)
     end
-    return false -- hit the timeout instead of settling
+    return false, false
+end
+
+SPECIAL_BOSS_SET = {}
+for _, boss in ipairs(BOSS_LIST) do
+    if boss.tier == "Ultra" then
+        SPECIAL_BOSS_SET[boss.name] = true
+    end
+end
+
+function isSpecialBossName(bossName)
+    return SPECIAL_BOSS_SET[bossName] == true
+end
+
+_G.NoxarBossDeathNotified = _G.NoxarBossDeathNotified or {}
+
+function markBossDeathNotified(bossName)
+    if not bossName then return end
+    local deadName = (type(bossName) == "table" and bossName[1]) or tostring(bossName)
+    _G.NoxarBossDeathNotified[deadName] = os.clock()
+
+    -- Purge from bossQueue immediately so it won't queue or waste time on it
+    local removedCount = 0
+    if bossQueue then
+        for i = #bossQueue, 1, -1 do
+            if bossQueue[i] and bossQueue[i].name == deadName then
+                table.remove(bossQueue, i)
+                removedCount = removedCount + 1
+            end
+        end
+    end
+
+    -- Live UI status update
+    if bossLoopEnabled and BossLoopLiveStatusLbl then
+        if currentBossFight and currentBossFight.name == deadName then
+            BossLoopLiveStatusLbl.Text = "Status: 💀 " .. deadName .. " died — aborting..."
+            BossLoopLiveStatusLbl.TextColor3 = C.red
+        elseif removedCount > 0 then
+            BossLoopLiveStatusLbl.Text = "Status: 💀 " .. deadName .. " died — removed from queue (" .. #bossQueue .. " left)"
+            BossLoopLiveStatusLbl.TextColor3 = C.red
+        end
+    end
+end
+
+function wasBossDeathNotified(bossName, sinceTime)
+    local t = bossName and _G.NoxarBossDeathNotified and _G.NoxarBossDeathNotified[bossName]
+    return t ~= nil and (not sinceTime or t >= sinceTime)
+end
+
+function resnapToCurrentBoss(bossName, fallbackMonster)
+    local monster = findBossByName(bossName) or fallbackMonster
+    if not monster then return fallbackMonster end
+    local root = monster:FindFirstChild("Root") or monster.PrimaryPart
+    if root then
+        _G.NoxarSetBossMount(true)
+        task.wait(0.1)
+        glueToTarget(root)
+        task.wait(0.1)
+        _G.NoxarSetBossMount(false)
+    end
+    return monster
 end
 
 -- Fights a specific boss instance until it dies. Teleports onto it once
@@ -2743,18 +2979,57 @@ end
 -- this script clicking anything. "Still present in ClientMonsters" is
 -- the same death check used everywhere else in this file. Bails out
 -- early (returns false) if bossLoopEnabled goes false mid-fight.
-local function fightBossUntilDead(monster)
-    local root = monster:FindFirstChild("Root")
+function fightBossUntilDead(monster, isSpecial, bossName)
+    local root = monster:FindFirstChild("Root") or monster.PrimaryPart
+    if not root then
+        local startRootWait = os.clock()
+        while os.clock() - startRootWait < 2 do
+            root = monster:FindFirstChild("Root") or monster.PrimaryPart
+            if root then break end
+            task.wait(0.1)
+        end
+    end
+
+    local fightStartedAt = os.clock()
+    local lastSnapAt = fightStartedAt
+
     if root then
-        glueToTarget(root) -- one-time snap onto the boss, not a repeating lock
-        task.wait(0.2) -- let snap apply before unmounting for the actual fight
+        BossLoopLiveStatusLbl.Text = "Status: Snapping onto " .. tostring(bossName or "boss") .. "..."
+        BossLoopLiveStatusLbl.TextColor3 = C.gold
+
+        _G.NoxarSetBossMount(true)
+        task.wait(0.1)
+        glueToTarget(root)
+        task.wait(0.1)
         _G.NoxarSetBossMount(false)
     end
 
+    BossLoopLiveStatusLbl.Text = "Status: Fighting " .. tostring(bossName or "boss") .. "..."
+    BossLoopLiveStatusLbl.TextColor3 = C.gold
+
     while bossLoopEnabled do
-        if not clientMonsters:FindFirstChild(monster.Name) then
-            return true -- boss is dead
+        if wasBossDeathNotified(bossName, fightStartedAt) then
+            return true -- server kill notification confirmed it
         end
+
+        if not clientMonsters:FindFirstChild(monster.Name) then
+            return true -- boss is dead/disappeared from ClientMonsters
+        end
+
+        -- Teleport/glitch failsafe: if we have been "fighting" the same target
+        -- for 5s with no MonsterDead notification, snap directly back onto the
+        -- live boss model again. This does NOT area-teleport, only direct snap.
+        if os.clock() - lastSnapAt >= 5 then
+            BossLoopLiveStatusLbl.Text = "Status: Re-snapping to " .. tostring(bossName or "boss") .. "..."
+            monster = resnapToCurrentBoss(bossName, monster) or monster
+            lastSnapAt = os.clock()
+        end
+
+        if isSpecial and os.clock() - fightStartedAt >= 9 then
+            BossLoopLiveStatusLbl.Text = "Status: " .. tostring(bossName or "Special") .. " timed out after 9s — continuing..."
+            return true -- special/ultra timeout guard so the loop never gets stuck here
+        end
+
         task.wait(0.5) -- just polling for death now, no need to run at ATTACK_DELAY speed
     end
 
@@ -2763,8 +3038,18 @@ end
 
 -- Runs the full cycle for one queued boss: travel to its area, scan for
 -- it by name, teleport onto it, fight until dead.
-local function runBossFight(entry)
+function runBossFight(entry)
     currentBossFight = entry
+
+    -- Check if this boss was already killed while waiting in the queue
+    if wasBossDeathNotified(entry.name) then
+        BossLoopLiveStatusLbl.Text = "Status: 💀 " .. entry.name .. " was killed — skipping!"
+        BossLoopLiveStatusLbl.TextColor3 = C.red
+        task.wait(1)
+        currentBossFight = nil
+        return
+    end
+
     _G.NoxarSetBossMount(true) -- mount while traveling between boss/special areas
     BossLoopLiveStatusLbl.Text = "Status: " .. entry.name .. " @ " .. entry.area .. " — traveling..."
     BossLoopLiveStatusLbl.TextColor3 = C.gold
@@ -2783,9 +3068,25 @@ local function runBossFight(entry)
     task.wait(2)
     if not bossLoopEnabled then currentBossFight = nil; return end
 
+    if wasBossDeathNotified(entry.name) then
+        BossLoopLiveStatusLbl.Text = "Status: 💀 " .. entry.name .. " killed during travel — skipping!"
+        BossLoopLiveStatusLbl.TextColor3 = C.red
+        task.wait(1)
+        currentBossFight = nil
+        return
+    end
+
     BossLoopLiveStatusLbl.Text = "Status: Waiting for monsters to load in " .. entry.area .. "..."
-    waitForMonstersToSettle(6)
-    if not bossLoopEnabled then currentBossFight = nil; return end
+    local settled, died = waitForMonstersToSettle(6, entry.name)
+    if not bossLoopEnabled or died or wasBossDeathNotified(entry.name) then
+        if died or wasBossDeathNotified(entry.name) then
+            BossLoopLiveStatusLbl.Text = "Status: 💀 " .. entry.name .. " killed while loading — skipping!"
+            BossLoopLiveStatusLbl.TextColor3 = C.red
+            task.wait(1)
+        end
+        currentBossFight = nil
+        return
+    end
 
     BossLoopLiveStatusLbl.Text = "Status: Searching for " .. entry.name .. "..."
     local monster = nil
@@ -2793,6 +3094,14 @@ local function runBossFight(entry)
     local maxFindWait = 15
 
     while bossLoopEnabled and os.clock() - searchStartedAt < maxFindWait do
+        if wasBossDeathNotified(entry.name) then
+            BossLoopLiveStatusLbl.Text = "Status: 💀 " .. entry.name .. " killed while searching — skipping!"
+            BossLoopLiveStatusLbl.TextColor3 = C.red
+            task.wait(1)
+            currentBossFight = nil
+            return
+        end
+
         monster = findBossByName(entry.name)
         if monster then
             break -- found early, do not wait the rest of the timeout
@@ -2800,10 +3109,18 @@ local function runBossFight(entry)
 
         local remaining = math.max(0, maxFindWait - (os.clock() - searchStartedAt))
         BossLoopLiveStatusLbl.Text = "Status: Searching for " .. entry.name .. "... " .. string.format("%.0f", remaining) .. "s"
-        task.wait(0.5)
+        task.wait(0.25)
     end
 
     if not bossLoopEnabled then currentBossFight = nil; return end
+
+    if wasBossDeathNotified(entry.name) then
+        BossLoopLiveStatusLbl.Text = "Status: 💀 " .. entry.name .. " killed — skipping!"
+        BossLoopLiveStatusLbl.TextColor3 = C.red
+        task.wait(1)
+        currentBossFight = nil
+        return
+    end
 
     if not monster then
         BossLoopLiveStatusLbl.Text = "Status: ❌ " .. entry.name .. " not found after 15s search"
@@ -2812,9 +3129,10 @@ local function runBossFight(entry)
         return
     end
 
+    local isSpecial = isSpecialBossName(entry.name)
     BossLoopLiveStatusLbl.Text = "Status: Fighting " .. entry.name .. "..."
     BossLoopLiveStatusLbl.TextColor3 = C.gold
-    local won = fightBossUntilDead(monster)
+    local won = fightBossUntilDead(monster, isSpecial, entry.name)
 
     if won then
         _G.NoxarSetBossMount(true) -- remount after kill so next travel/return is mounted
@@ -2825,11 +3143,7 @@ local function runBossFight(entry)
     currentBossFight = nil
 end
 
--- Dedup guard for the queue -- true if this exact boss is already queued
--- or is the one currently being fought, so a duplicate notification (or
--- the same boss spawning again while one's already queued) doesn't pile
--- up multiple entries for it.
-local function isAlreadyTracked(bossName)
+function isAlreadyTracked(bossName)
     if currentBossFight and currentBossFight.name == bossName then return true end
     for _, q in ipairs(bossQueue) do
         if q.name == bossName then return true end
@@ -2839,6 +3153,17 @@ end
 
 connectTracked("notificationEvent", NotificationEvent.OnClientEvent, function(...)
     local args = table.pack(...) -- table.pack, not ipairs -- some slots are nil and ipairs would silently stop early
+
+    -- Death notifications use ServerMessage/MonsterDead and include the dead
+    -- monster name at args[4][1]. Track them so active fights can end instantly.
+    if args[1] == "ServerMessage" and args[2] == "MonsterDead" then
+        local payload = args[4]
+        if type(payload) == "table" then
+            markBossDeathNotified(payload[1])
+        end
+        return
+    end
+
     if not bossLoopEnabled then return end
     if args[1] ~= "ViewBubble" then return end
 
@@ -2854,6 +3179,11 @@ connectTracked("notificationEvent", NotificationEvent.OnClientEvent, function(..
     local bossName = payload.Name
     local areaName = payload.DescParams and payload.DescParams[2]
     if not bossName or not areaName then return end
+
+    -- Clear stale death notification on a fresh spawn so future fights can queue properly
+    if _G.NoxarBossDeathNotified then
+        _G.NoxarBossDeathNotified[bossName] = nil
+    end
 
     if not selectedBosses[bossName] then return end -- not one you've opted in to
     if isAlreadyTracked(bossName) then return end
@@ -2895,11 +3225,10 @@ spawnTracked("bossLoop", function()
             if farmingSpot then
                 BossLoopLiveStatusLbl.Text = "Status: Queue empty — returning to Farming Spot..."
                 BossLoopLiveStatusLbl.TextColor3 = Color3.fromRGB(205, 215, 245)
-                -- Wait 5s for area loading, snap back to the exact Farming Spot, then
-                -- anti-AFK jumps continue in the background so farming resumes sooner.
+                -- Teleport/travel back to saved Farming Spot (stays mounted during travel)
                 teleportToAreaFarmSpot(farmingSpot, true, 5)
             end
-            _G.NoxarSetBossMount(false, true) -- final unmount once boss queue is finished/return is done
+            _G.NoxarSetBossMount(false, true) -- Unmount AFTER travel/teleport back to Farming Spot completes
             if wasFarmingBeforeBossFight then
                 toggleFarming(true) -- cleanly restart Auto-Farm (spawns a fresh farmLoop thread, updates its button)
                 wasFarmingBeforeBossFight = false
@@ -2910,6 +3239,355 @@ spawnTracked("bossLoop", function()
         end
     end
 end)
+
+
+
+
+-- ==========================================
+-- 7.7 RIFT TAB & AUTO RIFT ENGINE
+-- ==========================================
+UIListRift = Instance.new("UIListLayout", RiftTab)
+UIListRift.Padding = UDim.new(0, 6)
+UIListRift.HorizontalAlignment = Enum.HorizontalAlignment.Center
+UIListRift.SortOrder = Enum.SortOrder.LayoutOrder
+
+RiftTabPadding = Instance.new("UIPadding", RiftTab)
+RiftTabPadding.PaddingTop = UDim.new(0, 8)
+RiftTabPadding.PaddingBottom = UDim.new(0, 34)
+
+RiftTitleLbl = Instance.new("TextLabel", RiftTab)
+RiftTitleLbl.Size = UDim2.new(1, -20, 0, 18)
+RiftTitleLbl.BackgroundTransparency = 1
+RiftTitleLbl.Text = "🌀 Auto Rift"
+RiftTitleLbl.TextColor3 = C.gold
+RiftTitleLbl.Font = Enum.Font.GothamBlack
+RiftTitleLbl.TextSize = 13
+RiftTitleLbl.TextXAlignment = Enum.TextXAlignment.Left
+RiftTitleLbl.LayoutOrder = 1
+
+RiftInfoLbl = Instance.new("TextLabel", RiftTab)
+RiftInfoLbl.Size = UDim2.new(1, -20, 0, 28)
+RiftInfoLbl.BackgroundTransparency = 1
+RiftInfoLbl.Text = "Automatically scans for active rift portals, enters, and fights rift bosses"
+RiftInfoLbl.TextColor3 = Color3.fromRGB(180, 190, 220)
+RiftInfoLbl.Font = Enum.Font.Gotham
+RiftInfoLbl.TextSize = 10
+RiftInfoLbl.TextWrapped = true
+RiftInfoLbl.TextXAlignment = Enum.TextXAlignment.Left
+RiftInfoLbl.LayoutOrder = 2
+
+RiftLiveStatusLbl = Instance.new("TextLabel", RiftTab)
+RiftLiveStatusLbl.Size = UDim2.new(1, -20, 0, 18)
+RiftLiveStatusLbl.BackgroundTransparency = 1
+RiftLiveStatusLbl.Text = "Status: Idle"
+RiftLiveStatusLbl.TextColor3 = Color3.fromRGB(205, 215, 245)
+RiftLiveStatusLbl.Font = Enum.Font.GothamSemibold
+RiftLiveStatusLbl.TextSize = 10
+RiftLiveStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
+RiftLiveStatusLbl.LayoutOrder = 3
+
+ToggleRiftBtn = Instance.new("TextButton", RiftTab)
+ToggleRiftBtn.Size = UDim2.new(1, -20, 0, 30)
+ToggleRiftBtn.BackgroundColor3 = autoRiftEnabled and C.green or C.red
+ToggleRiftBtn.TextColor3 = C.text
+ToggleRiftBtn.Font = Enum.Font.GothamBold
+ToggleRiftBtn.TextSize = 11
+ToggleRiftBtn.Text = autoRiftEnabled and "● AUTO RIFT: ON" or "● AUTO RIFT: OFF"
+ToggleRiftBtn.BorderSizePixel = 0
+Instance.new("UICorner", ToggleRiftBtn).CornerRadius = UDim.new(0, 9)
+ToggleRiftBtn.LayoutOrder = 4
+
+ToggleRiftBtn.MouseButton1Click:Connect(function()
+    autoRiftEnabled = not autoRiftEnabled
+    if autoRiftEnabled then
+        ToggleRiftBtn.BackgroundColor3 = C.green
+        ToggleRiftBtn.Text = "● AUTO RIFT: ON"
+        RiftLiveStatusLbl.Text = "Status: Scanning for active rift portal..."
+        RiftLiveStatusLbl.TextColor3 = Color3.fromRGB(205, 215, 245)
+    else
+        ToggleRiftBtn.BackgroundColor3 = C.red
+        ToggleRiftBtn.Text = "● AUTO RIFT: OFF"
+        RiftLiveStatusLbl.Text = "Status: Disabled"
+        RiftLiveStatusLbl.TextColor3 = Color3.fromRGB(205, 215, 245)
+    end
+    saveConfig()
+end)
+
+RiftDelayRow = Instance.new("Frame", RiftTab)
+RiftDelayRow.Size = UDim2.new(1, -20, 0, 28)
+RiftDelayRow.BackgroundColor3 = C.card
+RiftDelayRow.BorderSizePixel = 0
+Instance.new("UICorner", RiftDelayRow).CornerRadius = UDim.new(0, 7)
+RiftDelayRow.LayoutOrder = 5
+
+RiftDelayLbl = Instance.new("TextLabel", RiftDelayRow)
+RiftDelayLbl.Size = UDim2.new(0.65, 0, 1, 0)
+RiftDelayLbl.Position = UDim2.new(0, 10, 0, 0)
+RiftDelayLbl.BackgroundTransparency = 1
+RiftDelayLbl.Text = "Leave Arena Delay (Sec):"
+RiftDelayLbl.TextColor3 = Color3.fromRGB(180, 190, 220)
+RiftDelayLbl.Font = Enum.Font.Gotham
+RiftDelayLbl.TextSize = 10
+RiftDelayLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+RiftDelayBox = Instance.new("TextBox", RiftDelayRow)
+RiftDelayBox.Size = UDim2.new(0.3, -8, 0.7, 0)
+RiftDelayBox.Position = UDim2.new(0.7, 0, 0.15, 0)
+RiftDelayBox.BackgroundColor3 = C.surface
+RiftDelayBox.Text = tostring(riftLeaveDelay)
+RiftDelayBox.TextColor3 = C.text
+RiftDelayBox.Font = Enum.Font.GothamBold
+RiftDelayBox.TextSize = 11
+RiftDelayBox.ClearTextOnFocus = false
+Instance.new("UICorner", RiftDelayBox).CornerRadius = UDim.new(0, 5)
+
+RiftDelayBox.FocusLost:Connect(function()
+    local val = tonumber(RiftDelayBox.Text) or 1
+    val = math.clamp(val, 0, 10)
+    riftLeaveDelay = val
+    RiftDelayBox.Text = tostring(val)
+    saveConfig()
+end)
+
+-- ── AutoRift Helpers ──────────────────────────────────────────────
+local function isRiftBossAlive()
+    local pg = lp:FindFirstChild("PlayerGui")
+    local mainGui = pg and pg:FindFirstChild("MainGui")
+    local screenGui = mainGui and mainGui:FindFirstChild("ScreenGui")
+    local mainTopView = screenGui and screenGui:FindFirstChild("MainTopView")
+    local bgBoss = mainTopView and mainTopView:FindFirstChild("BgBoss")
+
+    if bgBoss and bgBoss.Visible then
+        local hpBar = bgBoss:FindFirstChild("HpBar")
+        local labValue = hpBar and hpBar:FindFirstChild("LabValue")
+        if labValue and labValue.Text and labValue.Text ~= "" then
+            local curHpStr = labValue.Text:match("^([%d%.]+)")
+            if curHpStr and tonumber(curHpStr) and tonumber(curHpStr) <= 0 then
+                return false
+            end
+            return true
+        end
+    end
+
+    return false
+end
+
+local function findRiftPortal()
+    local dd = workspace:FindFirstChild("DynamicDungeon")
+    if not dd then return nil end
+
+    for _, dungeon in ipairs(dd:GetChildren()) do
+        if enteredRifts[dungeon] then continue end
+        local dungeonId = tonumber(dungeon.Name:match("Dungeon_(%d+)"))
+        local startTick = dungeon:GetAttribute("DungeonStartTick")
+        if dungeonId and startTick then
+            local clickPart = nil
+            for _, d in ipairs(dungeon:GetDescendants()) do
+                if d:IsA("ClickDetector") and d.Parent:IsA("BasePart") then
+                    clickPart = d.Parent
+                    break
+                end
+            end
+            if not clickPart then
+                for _, d in ipairs(dungeon:GetDescendants()) do
+                    if d:IsA("BasePart") then
+                        clickPart = d
+                        break
+                    end
+                end
+            end
+
+            if clickPart then
+                return {
+                    instance = dungeon,
+                    dungeonId = dungeonId,
+                    startTick = startTick,
+                    clickPart = clickPart,
+                }
+            end
+        end
+    end
+    return nil
+end
+
+local function clickRiftPart(part)
+    local cd = part and part:FindFirstChildOfClass("ClickDetector")
+    if cd then
+        pcall(function() fireclickdetector(cd) end)
+        return true
+    end
+    return false
+end
+
+local function createRiftTeam(dungeonId, startTick)
+    return pcall(function()
+        DataPullFunc:InvokeServer("DungeonCreateTeamChannel", dungeonId, startTick)
+    end)
+end
+
+local function startRiftDungeon(dungeonId, startTick)
+    return pcall(function()
+        DataPullFunc:InvokeServer("DungeonStartChannel", dungeonId, startTick)
+    end)
+end
+
+local function leaveRiftArena()
+    return pcall(function()
+        DataPullFunc:InvokeServer("ArenaLeaveChannel")
+    end)
+end
+
+-- ── AutoRift Engine ───────────────────────────────────────────────
+spawnTracked("autoRift", function()
+    while task.wait(0.5) do
+        if not autoRiftEnabled then
+            continue
+        end
+
+        -- Prune destroyed rifts
+        for inst in pairs(enteredRifts) do
+            if not inst.Parent then
+                enteredRifts[inst] = nil
+            end
+        end
+
+        RiftLiveStatusLbl.Text = "Status: Scanning for active rift portal..."
+        RiftLiveStatusLbl.TextColor3 = Color3.fromRGB(205, 215, 245)
+        local rift = findRiftPortal()
+
+        if not rift then
+            task.wait(1)
+            continue
+        end
+
+        RiftLiveStatusLbl.Text = "Status: 📍 Found Rift (" .. rift.instance.Name .. ") — Teleporting..."
+        RiftLiveStatusLbl.TextColor3 = C.gold
+
+        local r = getRoot()
+        if r and rift.clickPart then
+            r.CFrame = CFrame.new(rift.clickPart.Position.X, rift.clickPart.Position.Y, rift.clickPart.Position.Z)
+            r.AssemblyLinearVelocity = Vector3.zero
+        end
+        task.wait(0.3)
+
+        -- Guard 1: Proximity Lock Guard
+        r = getRoot()
+        if r and rift.clickPart then
+            local dist = (r.Position - rift.clickPart.Position).Magnitude
+            if dist > 12 then
+                RiftLiveStatusLbl.Text = "Status: 🔁 Re-snapping to portal..."
+                r.CFrame = CFrame.new(rift.clickPart.Position.X, rift.clickPart.Position.Y, rift.clickPart.Position.Z)
+                task.wait(0.2)
+            end
+        end
+
+        RiftLiveStatusLbl.Text = "Status: 👆 Opening rift menu..."
+        clickRiftPart(rift.clickPart)
+        enteredRifts[rift.instance] = true
+        task.wait(0.5)
+
+        -- Re-verify distance
+        r = getRoot()
+        if r and rift.clickPart then
+            local dist = (r.Position - rift.clickPart.Position).Magnitude
+            if dist > 12 then
+                r.CFrame = CFrame.new(rift.clickPart.Position.X, rift.clickPart.Position.Y, rift.clickPart.Position.Z)
+                task.wait(0.2)
+            end
+        end
+
+        RiftLiveStatusLbl.Text = "Status: 👥 Creating team..."
+        local ok1 = createRiftTeam(rift.dungeonId, rift.startTick)
+        task.wait(0.3)
+
+        RiftLiveStatusLbl.Text = "Status: ▶ Entering rift arena..."
+        local ok2 = startRiftDungeon(rift.dungeonId, rift.startTick)
+        task.wait(0.5)
+
+        if not ok1 or not ok2 then
+            RiftLiveStatusLbl.Text = "Status: ⚠ Enter failed — retrying in 3s"
+            RiftLiveStatusLbl.TextColor3 = C.red
+            enteredRifts[rift.instance] = nil
+            task.wait(3)
+            continue
+        end
+
+        -- Guard 2: Arena Entry Verification Check
+        RiftLiveStatusLbl.Text = "Status: ⏳ Loading arena & verifying entry..."
+        local portalPos = rift.clickPart.Position
+        local enteredArena = false
+        local verifyStart = os.clock()
+
+        while autoRiftEnabled and os.clock() - verifyStart < 6 do
+            r = getRoot()
+            local currentDist = r and (r.Position - portalPos).Magnitude or 0
+            if isRiftBossAlive() or currentDist > 50 then
+                enteredArena = true
+                break
+            end
+            task.wait(0.25)
+        end
+
+        if not enteredArena then
+            RiftLiveStatusLbl.Text = "Status: ⚠ Failed to enter arena (still outside) — resetting portal..."
+            RiftLiveStatusLbl.TextColor3 = C.red
+            enteredRifts[rift.instance] = nil
+            task.wait(2)
+            continue
+        end
+
+        -- Step 1: Wait for Top Boss Health Bar to appear
+        RiftLiveStatusLbl.Text = "Status: ⏳ Waiting for Boss Health Bar to appear..."
+        RiftLiveStatusLbl.TextColor3 = C.gold
+        local uiAppeared = false
+        local uiWaitStart = os.clock()
+
+        while autoRiftEnabled and os.clock() - uiWaitStart < 12 do
+            if isRiftBossAlive() then
+                uiAppeared = true
+                break
+            end
+            task.wait(0.15)
+        end
+
+        if not uiAppeared then
+            RiftLiveStatusLbl.Text = "Status: ⚠ Boss Health Bar never appeared — leaving arena..."
+            RiftLiveStatusLbl.TextColor3 = C.red
+            leaveRiftArena()
+            task.wait(2)
+            continue
+        end
+
+        -- Step 2: Fight Loop — Monitors top Health Bar until it vanishes on boss death!
+        RiftLiveStatusLbl.Text = "Status: ⚔️ Fighting rift boss (Monitoring top Health Bar)..."
+        RiftLiveStatusLbl.TextColor3 = C.gold
+        local fightStart = os.clock()
+        local MAX_FIGHT_SECONDS = 180
+
+        while autoRiftEnabled and isRiftBossAlive() do
+            if os.clock() - fightStart > MAX_FIGHT_SECONDS then
+                RiftLiveStatusLbl.Text = "Status: ⚠ Fight timeout — leaving arena"
+                RiftLiveStatusLbl.TextColor3 = C.red
+                break
+            end
+            task.wait(0.15)
+        end
+
+        if not autoRiftEnabled then break end
+
+        RiftLiveStatusLbl.Text = "Status: ✅ Top Boss Bar vanished — leaving arena in " .. tostring(riftLeaveDelay) .. "s..."
+        RiftLiveStatusLbl.TextColor3 = C.green
+        if riftLeaveDelay > 0 then
+            task.wait(riftLeaveDelay)
+        end
+        leaveRiftArena()
+
+        RiftLiveStatusLbl.Text = "Status: ⏱ Returned! Waiting 3s for next rift..."
+        RiftLiveStatusLbl.TextColor3 = Color3.fromRGB(205, 215, 245)
+        task.wait(3)
+    end
+end)
+
 
 
 -- ==========================================
@@ -2979,6 +3657,7 @@ CloseBtn.MouseButton1Click:Connect(function()
     bossLoopEnabled = false
     table.clear(bossQueue)
     currentBossFight = nil
+    autoRiftEnabled = false
     _G.NoxarSetBossMount(false, true)
 
     cancelAllTrackedThreads()
@@ -2998,7 +3677,7 @@ CloseBtn.MouseButton1Click:Connect(function()
 end)
 
 -- Dragging Engine
-local dragging, dragStart, startPos
+dragging, dragStart, startPos = nil, nil, nil
 connectTracked("dragInputBegan", TitleBar.InputBegan, function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         dragging = true; dragStart = input.Position; startPos = Main.Position
@@ -3056,11 +3735,11 @@ end)
 -- we only start a slot we just emptied ourselves, never blind-restart a
 -- slot we're merely guessing is empty. incubatorKnownEmpty tracks which
 -- slots we're confident are actually empty right now.
-local incubatorKnownEmpty = {} -- [index] = true once we've either claimed it or confirmed it empty
+incubatorKnownEmpty = {} -- [index] = true once we've either claimed it or confirmed it empty
 
 -- One-time pass: try Start on every slot once at startup, in case some
 -- are sitting empty from before the script ran (e.g. after a rejoin).
-local hatchBootstrapped = false
+hatchBootstrapped = false
 
 spawnTracked("autoHatchLoop", function()
     while task.wait(3) do
