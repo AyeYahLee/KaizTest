@@ -237,26 +237,50 @@ Instance.new("UICorner", ClearFarmSpotBtn).CornerRadius = UDim.new(0, 9)
 -- Teleports to a saved AreaFarm spot: fires the area-change remote for
 -- its AreaID, waits, then snaps the character to the exact saved CFrame.
 -- Shared by both Farming Spot TP and the boss loop's "go back" step.
-function teleportToAreaFarmSpot(spot, skipSettle, preSnapWait)
+function teleportToAreaFarmSpot(spot, skipSettle, maxWait)
     if not spot then return false end
     pcall(function()
         DataPullFunc:InvokeServer("AreaTeleportToRegionChannel", spot.areaId)
     end)
-    task.wait(preSnapWait or 2)
+
+    -- Smart Area Load Wait: Polls every 0.1s up to maxWait (5s max cap).
+    -- Proceeds IMMEDIATELY the instant the character arrives in the target area!
+    local startWait = os.clock()
+    local timeCap = maxWait or 5
+    while os.clock() - startWait < timeCap do
+        local r = getRoot()
+        if r then
+            local _, currentAreaId = detectCurrentArea()
+            if currentAreaId == spot.areaId then
+                break -- Arrived in target zone early! Proceed instantly!
+            end
+        end
+        task.wait(0.1)
+    end
+
+    -- Safety check for character Root
     local r = getRoot()
+    if not r then
+        local startRootWait = os.clock()
+        while os.clock() - startRootWait < 2 do
+            r = getRoot()
+            if r then break end
+            task.wait(0.1)
+        end
+    end
+
     if r then
         local targetCFrame = CFrame.new(spot.x, spot.y, spot.z)
 
-        -- Exact-position failsafe: sometimes the area teleport finishes but the
-        -- game nudges/flings the character near the saved spot instead of on it.
-        -- Re-snap a few times until we're close enough to the saved CFrame.
-        for attempt = 1, 3 do
+        -- Exact-position failsafe: retries up to 10 times until position is 100% confirmed.
+        -- Breaks out instantly on attempt 1 as soon as distance is <= 10 studs.
+        for attempt = 1, 10 do
             r = getRoot()
             if not r then break end
             r.CFrame = targetCFrame
             r.AssemblyLinearVelocity = Vector3.zero
             r.AssemblyAngularVelocity = Vector3.zero
-            task.wait(0.35)
+            task.wait(0.2)
             r = getRoot()
             if r and (r.Position - targetCFrame.Position).Magnitude <= 10 then
                 break
@@ -723,10 +747,15 @@ function runBossFight(entry)
         DataPullFunc:InvokeServer("AreaTeleportToRegionChannel", areaId)
     end)
 
-    -- Travel delay with immediate death detection
-    for _ = 1, 8 do
-        task.wait(0.25)
+    -- Smart travel load wait: proceeds the instant player arrives in target area ID
+    local startTravelWait = os.clock()
+    while os.clock() - startTravelWait < 3 do
         if not bossLoopEnabled or wasBossDeathNotified(entry.name) then break end
+        local _, curAreaId = detectCurrentArea()
+        if curAreaId == areaId then
+            break -- Player arrived in target area! Proceed immediately!
+        end
+        task.wait(0.1)
     end
 
     if not bossLoopEnabled or wasBossDeathNotified(entry.name) then
