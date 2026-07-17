@@ -358,12 +358,25 @@ ClearFarmSpotBtn.MouseButton1Click:Connect(function()
     saveConfig()
 end)
 
--- Startup Check: Runs ONCE on script load. If a Farming Spot is saved
--- and player is not already at that spot, teleports to saved spot automatically.
+-- Startup Check: Runs ONCE on script load/rejoin. Wait for game & character
+-- to fully load before teleporting to saved spot.
 task.spawn(function()
-    task.wait(1.5)
+    if not game:IsLoaded() then
+        pcall(function() game.Loaded:Wait() end)
+    end
+    task.wait(3.5) -- Extended initial wait on rejoin so remote channels are ready
+
     if farmingSpot then
         local r = getRoot()
+        if not r then
+            local startWait = os.clock()
+            while os.clock() - startWait < 3 do
+                r = getRoot()
+                if r then break end
+                task.wait(0.2)
+            end
+        end
+
         if r then
             local currentAreaName, currentAreaId = detectCurrentArea()
             local savedPos = Vector3.new(farmingSpot.x, farmingSpot.y, farmingSpot.z)
