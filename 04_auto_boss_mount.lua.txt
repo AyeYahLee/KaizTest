@@ -887,6 +887,7 @@ spawnTracked("bossLoop", function()
             runBossFight(nextEntry)
 
         elseif not currentBossFight and #bossQueue == 0 and not returnedToFarmSpot then
+            _G.NoxarSetBossMount(false, true) -- Unmount immediately the moment all bosses are dead / queue drains empty
             if farmingSpot then
                 BossLoopLiveStatusLbl.Text = "Status: Queue empty — returning to Farming Spot..."
                 BossLoopLiveStatusLbl.TextColor3 = Color3.fromRGB(205, 215, 245)
@@ -894,7 +895,6 @@ spawnTracked("bossLoop", function()
                 -- anti-AFK jumps continue in the background so farming resumes sooner.
                 teleportToAreaFarmSpot(farmingSpot, true, 5)
             end
-            _G.NoxarSetBossMount(false, true) -- final unmount once boss queue is finished/return is done
             if wasFarmingBeforeBossFight then
                 toggleFarming(true) -- cleanly restart Auto-Farm (spawns a fresh farmLoop thread, updates its button)
                 wasFarmingBeforeBossFight = false
