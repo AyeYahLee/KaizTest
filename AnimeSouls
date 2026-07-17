@@ -42,12 +42,12 @@ local targetNames = {}
 local rejoinTimerEnabled = false
 local rejoinMinutes = 60
 local rejoinDeadline = nil
-local autoKickEnabled = true -- NEW: Auto Kick State (Defaults to true)
+local autoKickEnabled = true
 
 -- Spin State
 local autoSpinEnabled = false
 local spinDelay = 0.1
-local selectedSpins = {}
+local selectedSpins = {} -- Keyed by unique label (e.g., "Breathing", "Ninja") to avoid channel collisions
 
 -- Gamble State
 local gambleEnabled = false
@@ -62,14 +62,16 @@ local function saveSettings()
     for name, _ in pairs(targetNames) do table.insert(targetsList, name) end
 
     local spinList = {}
-    for channel, _ in pairs(selectedSpins) do table.insert(spinList, channel) end
+    for key, on in pairs(selectedSpins) do
+        if on then table.insert(spinList, key) end
+    end
 
     local data = {
         farmRunning = farmRunning,
         selectedMonsters = targetsList,
         rejoinEnabled = rejoinTimerEnabled,
         rejoinMinutes = rejoinMinutes,
-        autoKickEnabled = autoKickEnabled, -- Saved here
+        autoKickEnabled = autoKickEnabled,
         autoSpinEnabled = autoSpinEnabled,
         spinDelay = spinDelay,
         selectedSpins = spinList,
@@ -91,7 +93,6 @@ local function loadSettings()
     end)
 
     if ok and data then
-        -- Farm
         farmRunning = data.farmRunning or false
         if data.selectedMonsters then
             for _, name in ipairs(data.selectedMonsters) do
@@ -99,30 +100,26 @@ local function loadSettings()
             end
         end
 
-        -- Server
         rejoinTimerEnabled = data.rejoinEnabled or false
         rejoinMinutes = tonumber(data.rejoinMinutes) or 60
         if data.autoKickEnabled ~= nil then
             autoKickEnabled = data.autoKickEnabled
         end
 
-        -- Spin
         autoSpinEnabled = data.autoSpinEnabled or false
         spinDelay = tonumber(data.spinDelay) or 0.1
         if data.selectedSpins then
-            for _, channel in ipairs(data.selectedSpins) do
-                selectedSpins[channel] = true
+            for _, key in ipairs(data.selectedSpins) do
+                selectedSpins[key] = true
             end
         end
 
-        -- Gamble
         gambleEnabled = data.gambleEnabled or false
         gambleDelay = tonumber(data.gambleDelay) or 1.5
         gamblePulls = tonumber(data.gamblePulls) or 3
     end
 end
 
--- Global cleanup function registered for re-execution safety
 _G.StopNoxarFarm = function()
     farmRunning = false
     autoSpinEnabled = false
@@ -130,16 +127,14 @@ _G.StopNoxarFarm = function()
     if farmThread then pcall(function() task.cancel(farmThread) end) end
 end
 
--- Load settings immediately on execution
 loadSettings()
 
 -- ══════════════════════════════════════════════════════════════════
 -- SERVER SECURITY — Anti-Public Server
 -- ══════════════════════════════════════════════════════════════════
 local function checkServerPop()
-    if not autoKickEnabled then return end -- Won't run if toggled off
-    
-    -- game.PrivateServerId is empty if you are in a public server
+    if not autoKickEnabled then return end
+
     if game.PrivateServerId == "" then
         local playerCount = #Players:GetPlayers()
         if playerCount >= 2 then
@@ -148,10 +143,8 @@ local function checkServerPop()
     end
 end
 
--- Run on execution
 checkServerPop()
 
--- Run whenever a new player joins
 Players.PlayerAdded:Connect(function()
     checkServerPop()
 end)
@@ -192,7 +185,6 @@ end
 local function getNearest()
     local cm = workspace:FindFirstChild("ClientMonsters")
     if not cm then return nil end
-
     local nearest, nearDist = nil, math.huge
     for _, m in pairs(cm:GetChildren()) do
         if m:IsA("Model") then
@@ -270,11 +262,18 @@ local C = {
 }
 
 local function corner(r, p)
-    local c=Instance.new("UICorner",p); c.CornerRadius=UDim.new(0,r); return c
+    local c = Instance.new("UICorner", p)
+    c.CornerRadius = UDim.new(0, r)
+    return c
 end
+
 local function stroke(w, col, p)
-    local s=Instance.new("UIStroke",p); s.Thickness=w; s.Color=col; return s
+    local s = Instance.new("UIStroke", p)
+    s.Thickness = w
+    s.Color = col
+    return s
 end
+
 local function tween(obj, t, props)
     TweenService:Create(obj, TweenInfo.new(t, Enum.EasingStyle.Quad), props):Play()
 end
@@ -294,6 +293,7 @@ corner(14, frame)
 
 local outerGlow = stroke(2, C.accent, frame)
 outerGlow.Transparency = 1
+
 local frameScale = Instance.new("UIScale", frame)
 frameScale.Scale = 0.85
 
@@ -319,14 +319,14 @@ header.Parent = frame
 corner(14, header)
 
 local hfix = Instance.new("Frame", header)
-hfix.Size = UDim2.new(1,0,0,14)
-hfix.Position = UDim2.new(0,0,1,-14)
+hfix.Size = UDim2.new(1, 0, 0, 14)
+hfix.Position = UDim2.new(0, 0, 1, -14)
 hfix.BackgroundColor3 = C.header1
 hfix.BorderSizePixel = 0
 
 local hline = Instance.new("Frame", frame)
-hline.Size = UDim2.new(1,0,0,1)
-hline.Position = UDim2.new(0,0,0,HEADER_H)
+hline.Size = UDim2.new(1, 0, 0, 1)
+hline.Position = UDim2.new(0, 0, 0, HEADER_H)
 hline.BackgroundColor3 = C.accent
 hline.BorderSizePixel = 0
 hline.BackgroundTransparency = 0.4
@@ -388,8 +388,8 @@ title.TextSize = 17
 title.TextXAlignment = Enum.TextXAlignment.Left
 
 local subtitle = Instance.new("TextLabel", header)
-subtitle.Size = UDim2.new(1,-100,0,14)
-subtitle.Position = UDim2.new(0,46,1,-17)
+subtitle.Size = UDim2.new(1, -100, 0, 14)
+subtitle.Position = UDim2.new(0, 46, 1, -17)
 subtitle.BackgroundTransparency = 1
 subtitle.Text = "NoxarK"
 subtitle.TextColor3 = C.accentDim
@@ -415,26 +415,27 @@ local function setMinimized(state)
     minBtn.Text = state and "▢" or "—"
     hfix.Visible = not state
 end
+
 minBtn.MouseButton1Click:Connect(function() setMinimized(not minimized) end)
 
 local statusPill = Instance.new("Frame", frame)
-statusPill.Size = UDim2.new(1,-24,0,30)
-statusPill.Position = UDim2.new(0,12,0,HEADER_H+TAB_H+8)
+statusPill.Size = UDim2.new(1, -24, 0, 30)
+statusPill.Position = UDim2.new(0, 12, 0, HEADER_H + TAB_H + 8)
 statusPill.BackgroundColor3 = C.bgMid
 statusPill.BorderSizePixel = 0
 corner(8, statusPill)
 stroke(1, C.divider, statusPill)
 
 local statusDot = Instance.new("Frame", statusPill)
-statusDot.Size = UDim2.new(0,8,0,8)
-statusDot.Position = UDim2.new(0,10,0.5,-4)
+statusDot.Size = UDim2.new(0, 8, 0, 8)
+statusDot.Position = UDim2.new(0, 10, 0.5, -4)
 statusDot.BackgroundColor3 = C.textDim
 statusDot.BorderSizePixel = 0
 corner(4, statusDot)
 
 local statusLbl = Instance.new("TextLabel", statusPill)
-statusLbl.Size = UDim2.new(1,-28,1,0)
-statusLbl.Position = UDim2.new(0,26,0,0)
+statusLbl.Size = UDim2.new(1, -28, 1, 0)
+statusLbl.Position = UDim2.new(0, 26, 0, 0)
 statusLbl.BackgroundTransparency = 1
 statusLbl.Text = "Stopped — select monsters below"
 statusLbl.TextColor3 = C.textDim
@@ -455,8 +456,8 @@ local function setStatus(text, active)
 end
 
 local uptimeLbl = Instance.new("TextLabel", frame)
-uptimeLbl.Size = UDim2.new(1,-24,0,18)
-uptimeLbl.Position = UDim2.new(0,12,0,HEADER_H+TAB_H+42)
+uptimeLbl.Size = UDim2.new(1, -24, 0, 18)
+uptimeLbl.Position = UDim2.new(0, 12, 0, HEADER_H + TAB_H + 42)
 uptimeLbl.BackgroundTransparency = 1
 uptimeLbl.Text = "⏱ Uptime: 00:00"
 uptimeLbl.TextColor3 = C.textDim
@@ -476,6 +477,7 @@ local function formatUptime(seconds)
 end
 
 local scriptStartTime = tick()
+
 task.spawn(function()
     while uptimeLbl.Parent do
         uptimeLbl.Text = "⏱ Uptime: " .. formatUptime(tick() - scriptStartTime)
@@ -484,8 +486,8 @@ task.spawn(function()
 end)
 
 local sectionLbl = Instance.new("TextLabel", frame)
-sectionLbl.Size = UDim2.new(1,-24,0,16)
-sectionLbl.Position = UDim2.new(0,12,0,HEADER_H+TAB_H+64)
+sectionLbl.Size = UDim2.new(1, -24, 0, 16)
+sectionLbl.Position = UDim2.new(0, 12, 0, HEADER_H + TAB_H + 64)
 sectionLbl.BackgroundTransparency = 1
 sectionLbl.Text = "▸ SELECT MONSTERS"
 sectionLbl.TextColor3 = C.textLabel
@@ -494,22 +496,23 @@ sectionLbl.TextSize = 11
 sectionLbl.TextXAlignment = Enum.TextXAlignment.Left
 
 local scroll = Instance.new("ScrollingFrame", frame)
-scroll.Size = UDim2.new(1,-24,0,92)
-scroll.Position = UDim2.new(0,12,0,HEADER_H+TAB_H+84)
+scroll.Size = UDim2.new(1, -24, 0, 92)
+scroll.Position = UDim2.new(0, 12, 0, HEADER_H + TAB_H + 84)
 scroll.BackgroundTransparency = 1
 scroll.BorderSizePixel = 0
 scroll.ScrollBarThickness = 2
 scroll.ScrollBarImageColor3 = C.accent
-scroll.CanvasSize = UDim2.new(0,0,0,0)
+scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
 scroll.ElasticBehavior = Enum.ElasticBehavior.Never
 
 local listLayout = Instance.new("UIListLayout", scroll)
-listLayout.Padding = UDim.new(0,5)
+listLayout.Padding = UDim.new(0, 5)
 
 local checkboxes = {}
+
 local function makeCheckbox(monName, index)
     local btn = Instance.new("TextButton", scroll)
-    btn.Size = UDim2.new(1,0,0,30)
+    btn.Size = UDim2.new(1, 0, 0, 30)
     btn.BackgroundColor3 = C.btnOff
     btn.BackgroundTransparency = 1
     btn.BorderSizePixel = 0
@@ -534,6 +537,7 @@ local function makeCheckbox(monName, index)
 
     btn.LayoutOrder = index or 0
     corner(8, btn)
+
     local btnStroke = stroke(1, C.divider, btn)
     btnStroke.Transparency = 1
 
@@ -559,6 +563,7 @@ local function makeCheckbox(monName, index)
             btn.TextColor3 = C.textDim
             btn.Text = " ○ " .. monName
         end
+
         saveSettings()
 
         TweenService:Create(btnScale, TweenInfo.new(0.08), {Scale = 0.96}):Play()
@@ -566,6 +571,7 @@ local function makeCheckbox(monName, index)
             TweenService:Create(btnScale, TweenInfo.new(0.12, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = 1}):Play()
         end)
     end)
+
     checkboxes[monName] = btn
 end
 
@@ -573,8 +579,8 @@ local SCAN_Y = HEADER_H + TAB_H + 182
 local START_Y = HEADER_H + TAB_H + 218
 
 local scanBtn = Instance.new("TextButton", frame)
-scanBtn.Size = UDim2.new(1,-24,0,30)
-scanBtn.Position = UDim2.new(0,12,0,SCAN_Y)
+scanBtn.Size = UDim2.new(1, -24, 0, 30)
+scanBtn.Position = UDim2.new(0, 12, 0, SCAN_Y)
 scanBtn.BackgroundColor3 = C.bgMid
 scanBtn.BorderSizePixel = 0
 scanBtn.Font = Enum.Font.GothamBold
@@ -585,13 +591,13 @@ corner(8, scanBtn)
 stroke(1, C.accentDim, scanBtn)
 
 local startBtn = Instance.new("TextButton", frame)
-startBtn.Size = UDim2.new(1,-24,0,34)
-startBtn.Position = UDim2.new(0,12,0,START_Y)
+startBtn.Size = UDim2.new(1, -24, 0, 34)
+startBtn.Position = UDim2.new(0, 12, 0, START_Y)
 startBtn.BackgroundColor3 = C.accentDim
 startBtn.BorderSizePixel = 0
 startBtn.Font = Enum.Font.GothamBold
 startBtn.TextSize = 14
-startBtn.TextColor3 = Color3.new(1,1,1)
+startBtn.TextColor3 = Color3.new(1, 1, 1)
 startBtn.Text = "▶ Start Farming"
 corner(10, startBtn)
 stroke(1.5, C.accent, startBtn)
@@ -606,10 +612,10 @@ startGrad.Rotation = 90
 local startScale = Instance.new("UIScale", startBtn)
 local scanScale = Instance.new("UIScale", scanBtn)
 
-scanBtn.MouseEnter:Connect(function() tween(scanBtn,0.12,{BackgroundColor3=C.accentDim}) end)
-scanBtn.MouseLeave:Connect(function() tween(scanBtn,0.12,{BackgroundColor3=C.bgMid}) end)
-startBtn.MouseEnter:Connect(function() tween(startBtn,0.12,{BackgroundColor3=C.accent}) end)
-startBtn.MouseLeave:Connect(function() tween(startBtn,0.12,{BackgroundColor3=farmRunning and C.red or C.accentDim}) end)
+scanBtn.MouseEnter:Connect(function() tween(scanBtn, 0.12, {BackgroundColor3 = C.accentDim}) end)
+scanBtn.MouseLeave:Connect(function() tween(scanBtn, 0.12, {BackgroundColor3 = C.bgMid}) end)
+startBtn.MouseEnter:Connect(function() tween(startBtn, 0.12, {BackgroundColor3 = C.accent}) end)
+startBtn.MouseLeave:Connect(function() tween(startBtn, 0.12, {BackgroundColor3 = farmRunning and C.red or C.accentDim}) end)
 
 scanBtn.MouseButton1Down:Connect(function() tween(scanScale, 0.08, {Scale = 0.95}) end)
 scanBtn.MouseButton1Up:Connect(function() tween(scanScale, 0.12, {Scale = 1}) end)
@@ -617,6 +623,7 @@ startBtn.MouseButton1Down:Connect(function() tween(startScale, 0.08, {Scale = 0.
 startBtn.MouseButton1Up:Connect(function() tween(startScale, 0.12, {Scale = 1}) end)
 
 local currentWorld = nil
+
 local function getWorldName()
     local area = workspace:FindFirstChild("Area")
     if area then return area.Name end
@@ -645,13 +652,15 @@ local function scanMonsters()
     for i, n in ipairs(names) do
         makeCheckbox(n, i)
     end
-    scroll.CanvasSize = UDim2.new(0,0,0,#names*35)
+
+    scroll.CanvasSize = UDim2.new(0, 0, 0, #names * 35)
 
     if #names > 0 then
         setStatus("Found " .. #names .. " monster type(s)", false)
     else
         setStatus("No monsters — are you in a world?", false)
     end
+
     currentWorld = getWorldName()
 end
 
@@ -673,14 +682,16 @@ local function setFarmState(state)
             setStatus("⚠ Select at least one monster!", false)
             tween(startBtn, 0.1, {BackgroundColor3 = C.red})
             task.delay(0.5, function()
-                if not farmRunning then tween(startBtn,0.2,{BackgroundColor3=C.accentDim}) end
+                if not farmRunning then tween(startBtn, 0.2, {BackgroundColor3 = C.accentDim}) end
             end)
             farmRunning = false
             saveSettings()
             return
         end
+
         tween(startBtn, 0.2, {BackgroundColor3 = C.red})
         startBtn.Text = "⏹ Stop Farming"
+
         local names = {}
         for n in pairs(targetNames) do table.insert(names, n) end
         setStatus("Farming: " .. table.concat(names, ", "), true)
@@ -690,10 +701,12 @@ local function setFarmState(state)
     else
         if farmThread then task.cancel(farmThread) end
         farmThread = nil
+
         tween(startBtn, 0.2, {BackgroundColor3 = C.accentDim})
         startBtn.Text = "▶ Start Farming"
         setStatus("Stopped", false)
     end
+
     saveSettings()
 end
 
@@ -717,8 +730,8 @@ local TeleportService = game:GetService("TeleportService")
 local CONTENT_Y = HEADER_H + TAB_H
 
 local rejoinLbl = Instance.new("TextLabel", frame)
-rejoinLbl.Size = UDim2.new(1,-24,0,16)
-rejoinLbl.Position = UDim2.new(0,12,0,CONTENT_Y+8)
+rejoinLbl.Size = UDim2.new(1, -24, 0, 16)
+rejoinLbl.Position = UDim2.new(0, 12, 0, CONTENT_Y + 8)
 rejoinLbl.BackgroundTransparency = 1
 rejoinLbl.Text = "▸ AUTO-REJOIN TIMER"
 rejoinLbl.TextColor3 = C.textLabel
@@ -728,8 +741,8 @@ rejoinLbl.TextXAlignment = Enum.TextXAlignment.Left
 rejoinLbl.Visible = false
 
 local timerRow = Instance.new("Frame", frame)
-timerRow.Size = UDim2.new(1,-24,0,34)
-timerRow.Position = UDim2.new(0,12,0,CONTENT_Y+28)
+timerRow.Size = UDim2.new(1, -24, 0, 34)
+timerRow.Position = UDim2.new(0, 12, 0, CONTENT_Y + 28)
 timerRow.BackgroundColor3 = C.bgMid
 timerRow.BorderSizePixel = 0
 timerRow.Visible = false
@@ -770,8 +783,8 @@ timerToggleBtn.TextSize = 11
 corner(6, timerToggleBtn)
 
 local timerStatusLbl = Instance.new("TextLabel", frame)
-timerStatusLbl.Size = UDim2.new(1,-24,0,16)
-timerStatusLbl.Position = UDim2.new(0,12,0,CONTENT_Y+66)
+timerStatusLbl.Size = UDim2.new(1, -24, 0, 16)
+timerStatusLbl.Position = UDim2.new(0, 12, 0, CONTENT_Y + 66)
 timerStatusLbl.BackgroundTransparency = 1
 timerStatusLbl.Text = "Disabled"
 timerStatusLbl.TextColor3 = C.textDim
@@ -780,10 +793,10 @@ timerStatusLbl.TextSize = 11
 timerStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
 timerStatusLbl.Visible = false
 
--- ── NEW AUTO KICK UI ──────────────────────────────────────────────
+-- ── AUTO KICK UI ──────────────────────────────────────────────
 local kickLbl = Instance.new("TextLabel", frame)
-kickLbl.Size = UDim2.new(1,-24,0,16)
-kickLbl.Position = UDim2.new(0,12,0,CONTENT_Y+94)
+kickLbl.Size = UDim2.new(1, -24, 0, 16)
+kickLbl.Position = UDim2.new(0, 12, 0, CONTENT_Y + 94)
 kickLbl.BackgroundTransparency = 1
 kickLbl.Text = "▸ ANTI-PUBLIC SERVER"
 kickLbl.TextColor3 = C.textLabel
@@ -793,8 +806,8 @@ kickLbl.TextXAlignment = Enum.TextXAlignment.Left
 kickLbl.Visible = false
 
 local kickRow = Instance.new("Frame", frame)
-kickRow.Size = UDim2.new(1,-24,0,34)
-kickRow.Position = UDim2.new(0,12,0,CONTENT_Y+114)
+kickRow.Size = UDim2.new(1, -24, 0, 34)
+kickRow.Position = UDim2.new(0, 12, 0, CONTENT_Y + 114)
 kickRow.BackgroundColor3 = C.bgMid
 kickRow.BorderSizePixel = 0
 kickRow.Visible = false
@@ -827,14 +840,13 @@ kickToggleBtn.MouseButton1Click:Connect(function()
     if autoKickEnabled then
         kickToggleBtn.Text = "ON"
         tween(kickToggleBtn, 0.15, {BackgroundColor3 = C.green})
-        checkServerPop() -- Check immediately in case we're already in a crowded server
+        checkServerPop()
     else
         kickToggleBtn.Text = "OFF"
         tween(kickToggleBtn, 0.15, {BackgroundColor3 = C.red})
     end
     saveSettings()
 end)
--- ──────────────────────────────────────────────────────────────────
 
 local function rejoinSameServer()
     local placeId = game.PlaceId
@@ -912,7 +924,7 @@ end)
 if rejoinTimerEnabled then applyRejoinState() end
 
 -- ══════════════════════════════════════════════════════════════════
--- SPIN TAB — auto spin for Aura / Shikai / Avatar / Breathing / Fighters
+-- SPIN TAB — auto spin for Aura / Shikai / Avatar / Breathing / Fighters / Ninja
 -- ══════════════════════════════════════════════════════════════════
 local SPIN_TYPES = {
     {label = "Aura", channel = "RollAureole", qty = 4},
@@ -920,27 +932,29 @@ local SPIN_TYPES = {
     {label = "Avatar", channel = "RollCharacter", qty = 2},
     {label = "Breathing", channel = "RollProperty", qty = 5},
     {label = "Fighters", channel = "RollAttendant", qty = 1},
+    {label = "Ninja", channel = "RollProperty", qty = 6},
 }
 
 local SPIN_SCROLL_H = H - CONTENT_Y - 12
+
 local spinScroll = Instance.new("ScrollingFrame", frame)
-spinScroll.Size = UDim2.new(1,-24,0,SPIN_SCROLL_H)
-spinScroll.Position = UDim2.new(0,12,0,CONTENT_Y+8)
+spinScroll.Size = UDim2.new(1, -24, 0, SPIN_SCROLL_H)
+spinScroll.Position = UDim2.new(0, 12, 0, CONTENT_Y + 8)
 spinScroll.BackgroundTransparency = 1
 spinScroll.BorderSizePixel = 0
 spinScroll.ScrollBarThickness = 2
 spinScroll.ScrollBarImageColor3 = C.accent
-spinScroll.CanvasSize = UDim2.new(0,0,0,0)
+spinScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
 spinScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
 spinScroll.ElasticBehavior = Enum.ElasticBehavior.Never
 spinScroll.Visible = false
 
 local spinList = Instance.new("UIListLayout", spinScroll)
-spinList.Padding = UDim.new(0,6)
+spinList.Padding = UDim.new(0, 6)
 spinList.SortOrder = Enum.SortOrder.LayoutOrder
 
 local spinSectionLbl = Instance.new("TextLabel", spinScroll)
-spinSectionLbl.Size = UDim2.new(1,0,0,16)
+spinSectionLbl.Size = UDim2.new(1, 0, 0, 16)
 spinSectionLbl.BackgroundTransparency = 1
 spinSectionLbl.Text = "▸ AUTO SPIN"
 spinSectionLbl.TextColor3 = C.textLabel
@@ -949,8 +963,10 @@ spinSectionLbl.TextSize = 11
 spinSectionLbl.TextXAlignment = Enum.TextXAlignment.Left
 spinSectionLbl.LayoutOrder = 1
 
+-- ✅ Key Fix: Selected spins are now tracked using t.label ("Breathing", "Ninja")
+-- rather than t.channel ("RollProperty") to prevent shared-channel collision!
 local function updateRowDisplay(t)
-    local selected = selectedSpins[t.channel] == true
+    local selected = selectedSpins[t.label] == true
     local dot = selected and "●" or "○"
     local text = " " .. dot .. " " .. t.label
     if t.pityText then text = text .. " — " .. t.pityText end
@@ -960,9 +976,10 @@ local function updateRowDisplay(t)
 end
 
 local spinToggleRows = {}
+
 for i, t in ipairs(SPIN_TYPES) do
     local row = Instance.new("TextButton", spinScroll)
-    row.Size = UDim2.new(1,0,0,26)
+    row.Size = UDim2.new(1, 0, 0, 26)
     row.BackgroundColor3 = C.btnOff
     row.BorderSizePixel = 0
     row.Font = Enum.Font.Gotham
@@ -973,21 +990,23 @@ for i, t in ipairs(SPIN_TYPES) do
     row.LayoutOrder = 1 + i
     corner(8, row)
     stroke(1, C.divider, row)
-    
+
     t.row = row
     t.pityText = nil
 
+    -- Toggle specifically by unique t.label name
     row.MouseButton1Click:Connect(function()
-        selectedSpins[t.channel] = not selectedSpins[t.channel] or nil
+        selectedSpins[t.label] = not selectedSpins[t.label] or nil
         updateRowDisplay(t)
         saveSettings()
     end)
+
     table.insert(spinToggleRows, row)
     updateRowDisplay(t)
 end
 
 local spinDelayRow = Instance.new("Frame", spinScroll)
-spinDelayRow.Size = UDim2.new(1,0,0,34)
+spinDelayRow.Size = UDim2.new(1, 0, 0, 34)
 spinDelayRow.BackgroundColor3 = C.bgMid
 spinDelayRow.BorderSizePixel = 0
 spinDelayRow.LayoutOrder = 10
@@ -1028,7 +1047,7 @@ spinToggleBtn.TextSize = 11
 corner(6, spinToggleBtn)
 
 local spinStatusLbl = Instance.new("TextLabel", spinScroll)
-spinStatusLbl.Size = UDim2.new(1,0,0,16)
+spinStatusLbl.Size = UDim2.new(1, 0, 0, 16)
 spinStatusLbl.BackgroundTransparency = 1
 spinStatusLbl.Text = "Disabled"
 spinStatusLbl.TextColor3 = C.textDim
@@ -1095,6 +1114,7 @@ local function doSpin(t)
     local ok, result = pcall(function()
         return RS.CommonLibrary.Tool.RemoteManager.Funcs.DataPullFunc:InvokeServer(t.channel, t.qty)
     end)
+
     if not ok then
         spinStatusLbl.Text = "Error: " .. describeResult(result):sub(1, 40)
     else
@@ -1112,7 +1132,7 @@ task.spawn(function()
         if autoSpinEnabled then
             local didAny = false
             for _, t in ipairs(SPIN_TYPES) do
-                if selectedSpins[t.channel] then
+                if selectedSpins[t.label] then
                     didAny = true
                     spinStatusLbl.Text = "Spinning: " .. t.label .. "..."
                     doSpin(t)
@@ -1133,13 +1153,13 @@ end)
 -- GAMBLE SECTION — separate mechanic (GambleJustDoItChannel)
 -- ══════════════════════════════════════════════════════════════════
 local gambleDivider = Instance.new("Frame", spinScroll)
-gambleDivider.Size = UDim2.new(1,0,0,1)
+gambleDivider.Size = UDim2.new(1, 0, 0, 1)
 gambleDivider.BackgroundColor3 = C.divider
 gambleDivider.BorderSizePixel = 0
 gambleDivider.LayoutOrder = 20
 
 local gambleSectionLbl = Instance.new("TextLabel", spinScroll)
-gambleSectionLbl.Size = UDim2.new(1,0,0,16)
+gambleSectionLbl.Size = UDim2.new(1, 0, 0, 16)
 gambleSectionLbl.BackgroundTransparency = 1
 gambleSectionLbl.Text = "▸ GAMBLE"
 gambleSectionLbl.TextColor3 = C.textLabel
@@ -1149,7 +1169,7 @@ gambleSectionLbl.TextXAlignment = Enum.TextXAlignment.Left
 gambleSectionLbl.LayoutOrder = 21
 
 local gambleDelayRow = Instance.new("Frame", spinScroll)
-gambleDelayRow.Size = UDim2.new(1,0,0,30)
+gambleDelayRow.Size = UDim2.new(1, 0, 0, 30)
 gambleDelayRow.BackgroundColor3 = C.bgMid
 gambleDelayRow.BorderSizePixel = 0
 gambleDelayRow.LayoutOrder = 22
@@ -1179,7 +1199,7 @@ gambleDelayLbl.TextSize = 10
 gambleDelayLbl.TextXAlignment = Enum.TextXAlignment.Left
 
 local gamblePullsRow = Instance.new("Frame", spinScroll)
-gamblePullsRow.Size = UDim2.new(1,0,0,30)
+gamblePullsRow.Size = UDim2.new(1, 0, 0, 30)
 gamblePullsRow.BackgroundColor3 = C.bgMid
 gamblePullsRow.BorderSizePixel = 0
 gamblePullsRow.LayoutOrder = 23
@@ -1220,7 +1240,7 @@ gambleToggleBtn.TextSize = 11
 corner(6, gambleToggleBtn)
 
 local gambleStatusLbl = Instance.new("TextLabel", spinScroll)
-gambleStatusLbl.Size = UDim2.new(1,0,0,16)
+gambleStatusLbl.Size = UDim2.new(1, 0, 0, 16)
 gambleStatusLbl.BackgroundTransparency = 1
 gambleStatusLbl.Text = "Spins: 0 | Hits: 0"
 gambleStatusLbl.TextColor3 = C.textDim
@@ -1230,7 +1250,7 @@ gambleStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
 gambleStatusLbl.LayoutOrder = 24
 
 local gambleSpacer = Instance.new("Frame", spinScroll)
-gambleSpacer.Size = UDim2.new(1,0,0,4)
+gambleSpacer.Size = UDim2.new(1, 0, 0, 4)
 gambleSpacer.BackgroundTransparency = 1
 gambleSpacer.LayoutOrder = 25
 
@@ -1293,7 +1313,7 @@ end)
 
 -- ── Tab switching ────────────────────────────────────────────────────
 local farmPageElements = {statusPill, uptimeLbl, sectionLbl, scroll, scanBtn, startBtn}
-local serverPageElements = {rejoinLbl, timerRow, timerStatusLbl, kickLbl, kickRow} -- ADDED KICK UI HERE
+local serverPageElements = {rejoinLbl, timerRow, timerStatusLbl, kickLbl, kickRow}
 local spinPageElements = {spinScroll}
 
 local function showTab(tab)
