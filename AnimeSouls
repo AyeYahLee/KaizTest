@@ -1234,7 +1234,7 @@ gambleSpacer.Size = UDim2.new(1,0,0,4)
 gambleSpacer.BackgroundTransparency = 1
 gambleSpacer.LayoutOrder = 25
 
-local GAMBLE_ID = "Gamble5_2"
+local GAMBLE_ID = "Gamble6_2"
 local gambleSpinCount = 0
 local gambleHitCount = 0
 
