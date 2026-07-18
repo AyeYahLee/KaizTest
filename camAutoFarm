@@ -3279,6 +3279,11 @@ riftRiftSearchPausedUntil = 0
 riftPostRiftTransition = false
 -- Strict Auto Rift state machine. Only SEARCHING may call findRift().
 riftPhase = "IDLE"
+-- Arena status is polled from several possible containers; cache the result
+-- briefly so the fight loop does not recursively scan Workspace every tick.
+riftArenaStatusCacheAt = 0
+riftArenaStatusCacheKnown = false
+riftArenaStatusCacheValue = nil
 -- Incrementing this invalidates every older Auto Rift loop instance.
 _G.NoxarRiftLoopGeneration = (_G.NoxarRiftLoopGeneration or 0) + 1
 
@@ -3407,6 +3412,14 @@ end
 -- used here; it is only the fallback handled by isRiftArenaActive(), because
 -- the bar can take a moment to appear after the arena has loaded.
 function getRiftArenaStatusSignal()
+    local now = os.clock()
+    if now - (riftArenaStatusCacheAt or 0) < 0.25 then
+        if riftArenaStatusCacheKnown then
+            return riftArenaStatusCacheValue
+        end
+        return nil
+    end
+
     local statusNames = {
         "InRiftArena", "IsInRiftArena", "RiftArenaActive", "RiftArenaStatus",
         "InArena", "IsInArena", "ArenaActive", "ArenaStatus", "DungeonStatus"
@@ -3422,8 +3435,17 @@ function getRiftArenaStatusSignal()
 
     for _, object in ipairs(containers) do
         local status = readRiftArenaStatusFromObject(object, statusNames)
-        if status ~= nil then return status end
+        if status ~= nil then
+            riftArenaStatusCacheAt = now
+            riftArenaStatusCacheKnown = true
+            riftArenaStatusCacheValue = status
+            return status
+        end
     end
+
+    riftArenaStatusCacheAt = now
+    riftArenaStatusCacheKnown = false
+    riftArenaStatusCacheValue = nil
     return nil
 end
 
@@ -3432,6 +3454,9 @@ function deactivateRiftArena()
     riftArenaBossBarSeen = false
     riftArenaMonster = nil
     riftArenaPortalPosition = nil
+    riftArenaStatusCacheAt = 0
+    riftArenaStatusCacheKnown = false
+    riftArenaStatusCacheValue = nil
 end
 
 -- Single gate for every Rift monster search. A real false arena status or
@@ -3823,7 +3848,7 @@ function mountSnapUnmountRiftMonster(monster)
     if not root then return false end
 
     _G.NoxarSetBossMount(true)
-    task.wait(0.4)
+    task.wait(0.3)
 
     local snapped = false
     if isRiftArenaActive() and monster.Parent and root.Parent then
