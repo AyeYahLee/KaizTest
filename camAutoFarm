@@ -3277,6 +3277,10 @@ riftPetCountAtStart = nil
 riftHealingInProgress = false
 riftRiftSearchPausedUntil = 0
 riftPostRiftTransition = false
+-- Strict Auto Rift state machine. Only SEARCHING may call findRift().
+riftPhase = "IDLE"
+-- Incrementing this invalidates every older Auto Rift loop instance.
+_G.NoxarRiftLoopGeneration = (_G.NoxarRiftLoopGeneration or 0) + 1
 
 -- Remove markers left by the temporary healing-pad diagnostic tool.
 do
@@ -3478,8 +3482,8 @@ end
 -- Finds an active, not-yet-entered rift portal in workspace.DynamicDungeon.
 -- Returns {instance, dungeonId, startTick, clickPart} or nil.
 function findRift()
-    -- Never scan/queue a new portal during healing or the post-Rift
-    -- transition window.
+    -- Never scan/queue a new portal outside the SEARCHING phase.
+    if riftPhase ~= "SEARCHING" then return nil end
     if riftHealingInProgress or riftPostRiftTransition then return nil end
 
     local dd = workspace:FindFirstChild("DynamicDungeon")
@@ -3553,6 +3557,36 @@ function riftLeaveArena()
     end)
 end
 
+function isCurrentRiftLoop(generation)
+    return riftRunning and generation ~= nil
+        and generation == _G.NoxarRiftLoopGeneration
+end
+
+function setRiftPhase(phase, generation)
+    if generation == nil or generation == _G.NoxarRiftLoopGeneration then
+        riftPhase = phase
+    end
+end
+
+function startRiftLoop()
+    _G.NoxarRiftLoopGeneration = (_G.NoxarRiftLoopGeneration or 0) + 1
+    local generation = _G.NoxarRiftLoopGeneration
+    riftPhase = "SEARCHING"
+    riftPostRiftTransition = false
+    spawnTracked("riftLoop", function()
+        riftLoop(generation)
+    end)
+end
+
+function stopRiftLoop()
+    _G.NoxarRiftLoopGeneration = (_G.NoxarRiftLoopGeneration or 0) + 1
+    riftPhase = "IDLE"
+    riftPostRiftTransition = false
+    riftHealingInProgress = false
+    riftRiftSearchPausedUntil = 0
+    cancelTracked("riftLoop")
+end
+
 -- SelfGUI contains only this player's pet health-bar objects. ClientPets
 -- includes pets belonging to other players, so it must not be used for the
 -- Auto Heal baseline/count.
@@ -3619,7 +3653,11 @@ function findRiftHealingPad()
     return nil
 end
 
-function maybeAutoHealAfterRift()
+function maybeAutoHealAfterRift(generation)
+    if generation and not isCurrentRiftLoop(generation) then
+        return false
+    end
+
     -- If another Rift loop instance reached this point, wait for the first
     -- one to finish healing instead of starting another search/teleport.
     if riftHealingInProgress then
@@ -3644,6 +3682,10 @@ function maybeAutoHealAfterRift()
     -- Give ArenaLeaveChannel a moment to finish moving the player back to
     -- the normal map before reading the pet folder and teleporting to Recover.
     task.wait(0.5)
+    if generation and not isCurrentRiftLoop(generation) then
+        riftHealingInProgress = false
+        return false
+    end
     local currentCount = getActiveRiftPetCount()
     local deadCount = math.max(0, originalCount - currentCount)
     local threshold = math.max(1, math.floor(tonumber(autoHealThreshold) or 1))
@@ -3667,7 +3709,12 @@ function maybeAutoHealAfterRift()
         riftHealingInProgress = false
         return false
     end
+    if generation and not isCurrentRiftLoop(generation) then
+        riftHealingInProgress = false
+        return false
+    end
 
+    setRiftPhase("HEALING", generation)
     RiftStatusLbl.Text = "\xf0\x9f\x92\x9a Auto Heal: " .. deadCount .. " pet(s) down \xe2\x80\x94 teleporting..."
     RiftStatusLbl.TextColor3 = C.gold
     root.CFrame = CFrame.new(healingPosition.X, healingPosition.Y + 3, healingPosition.Z)
@@ -3677,6 +3724,10 @@ function maybeAutoHealAfterRift()
     RiftStatusLbl.Text = "\xf0\x9f\x92\x9a Auto Heal: healing pets for 4 seconds..."
     RiftStatusLbl.TextColor3 = C.green
     task.wait(4)
+    if generation and not isCurrentRiftLoop(generation) then
+        riftHealingInProgress = false
+        return false
+    end
 
     -- Keep the search gate closed for one short scheduling tick after the
     -- four-second heal, then release it so the normal loop can queue the next
@@ -3750,9 +3801,9 @@ function findRiftMonster()
     return candidates[1].model
 end
 
-function waitForRiftMonster(maxWait)
+function waitForRiftMonster(maxWait, generation)
     local start = os.clock()
-    while riftRunning and os.clock() - start < maxWait do
+    while isCurrentRiftLoop(generation) and os.clock() - start < maxWait do
         if not isRiftArenaActive() then return nil end
         local monster = findRiftMonster()
         if monster then return monster end
@@ -3762,7 +3813,7 @@ function waitForRiftMonster(maxWait)
 end
 
 -- Exact BossLoop sequence requested for Auto Rift:
---   mount -> wait .3 -> snap to the Rift monster -> wait .3 -> unmount.
+--   mount -> wait .3 -> snap to the Rift monster -> wait .5 -> unmount.
 -- Uses the existing BossLoop mount helper and glueToTarget; no second mount
 -- implementation is created here.
 function mountSnapUnmountRiftMonster(monster)
@@ -3772,7 +3823,7 @@ function mountSnapUnmountRiftMonster(monster)
     if not root then return false end
 
     _G.NoxarSetBossMount(true)
-    task.wait(0.3)
+    task.wait(0.4)
 
     local snapped = false
     if isRiftArenaActive() and monster.Parent and root.Parent then
@@ -3782,7 +3833,7 @@ function mountSnapUnmountRiftMonster(monster)
         end)
     end
 
-    task.wait(0.3)
+    task.wait(0.5)
     _G.NoxarSetBossMount(false)
     return snapped
 end
@@ -3790,11 +3841,13 @@ end
 -- Main loop. Tracked via spawnTracked("riftLoop", ...) so re-toggling
 -- the feature off/on never stacks duplicate loops, and CloseBtn's
 -- cancelAllTrackedThreads() cleans this up along with everything else.
-function riftLoop()
-    while riftRunning do
-        -- Healing owns the loop until its four-second wait is complete.
-        -- This also protects against a stale/duplicate loop thread.
-        if riftHealingInProgress or riftPostRiftTransition then
+function riftLoop(myGeneration)
+    while isCurrentRiftLoop(myGeneration) do
+        -- Only SEARCHING may reach the portal scan. All other phases are
+        -- serialized and wait here until the owner advances the state.
+        if riftPhase ~= "SEARCHING"
+            or riftHealingInProgress
+            or riftPostRiftTransition then
             task.wait(0.1)
             continue
         end
@@ -3820,8 +3873,9 @@ function riftLoop()
             continue
         end
 
-        if not riftRunning then break end
+        if not isCurrentRiftLoop(myGeneration) then break end
 
+        setRiftPhase("ENTERING", myGeneration)
         RiftStatusLbl.Text = "\xf0\x9f\x93\x8d Found rift (" .. rift.instance.Name .. ") \xe2\x80\x94 teleporting..."
         riftTeleportTo(rift.clickPart)
         task.wait(0.3)
@@ -3853,7 +3907,7 @@ function riftLoop()
         local ok1 = riftCreateTeam(rift.dungeonId, rift.startTick)
         task.wait(0.3)
 
-        if not riftRunning then break end
+        if not isCurrentRiftLoop(myGeneration) then break end
 
         RiftStatusLbl.Text = "\xe2\x96\xb6 Entering rift arena..."
         -- Snapshot immediately before the server starts this Rift. The
@@ -3868,6 +3922,7 @@ function riftLoop()
             enteredRifts[rift.instance] = nil
             deactivateRiftArena()
             task.wait(3)
+            setRiftPhase("SEARCHING", myGeneration)
             continue
         end
 
@@ -3876,7 +3931,7 @@ function riftLoop()
         local enteredArena = false
         local verifyStart = os.clock()
 
-        while riftRunning and os.clock() - verifyStart < 6 do
+        while isCurrentRiftLoop(myGeneration) and os.clock() - verifyStart < 6 do
             root = getRoot()
             local currentDist = root and (root.Position - portalPos).Magnitude or 0
             if currentDist > 50 then
@@ -3892,10 +3947,11 @@ function riftLoop()
             enteredRifts[rift.instance] = nil
             deactivateRiftArena()
             task.wait(2)
+            setRiftPhase("SEARCHING", myGeneration)
             continue
         end
 
-        if not riftRunning then break end
+        if not isCurrentRiftLoop(myGeneration) then break end
 
         -- This is the per-arena entry edge. From here on, all monster
         -- searches are gated by isRiftArenaActive().
@@ -3905,23 +3961,29 @@ function riftLoop()
         riftArenaBossBarSeen = false
         riftArenaSnapDone = false
         riftArenaMonster = nil
+        setRiftPhase("FIGHTING", myGeneration)
 
         RiftStatusLbl.Text = "\xf0\x9f\x94\x8d Inside Rift arena \xe2\x80\x94 searching for monster..."
         RiftStatusLbl.TextColor3 = C.gold
-        local monster = waitForRiftMonster(12)
+        local monster = waitForRiftMonster(12, myGeneration)
 
         -- If the arena ended while the target was loading, do not scan again
         -- and do not attempt a teleport outside the arena.
-        if not riftRunning then break end
+        if not isCurrentRiftLoop(myGeneration) then break end
         if not isRiftArenaActive() then
             RiftStatusLbl.Text = "\xe2\x9a\xa0 Rift arena ended before target load"
             RiftStatusLbl.TextColor3 = C.red
+            setRiftPhase("LEAVING", myGeneration)
             riftPostRiftTransition = true
             deactivateRiftArena()
             riftLeaveArena()
-            maybeAutoHealAfterRift()
+            setRiftPhase("CHECKING_PETS", myGeneration)
+            maybeAutoHealAfterRift(myGeneration)
+            if not isCurrentRiftLoop(myGeneration) then break end
+            setRiftPhase("COOLDOWN", myGeneration)
             task.wait(2)
             riftPostRiftTransition = false
+            setRiftPhase("SEARCHING", myGeneration)
             continue
         end
 
@@ -3935,13 +3997,13 @@ function riftLoop()
             RiftStatusLbl.TextColor3 = C.red
         end
 
-        if not riftRunning then break end
+        if not isCurrentRiftLoop(myGeneration) then break end
 
         RiftStatusLbl.Text = "\xe2\x8f\xb3 Waiting for boss health bar to appear..."
         local uiAppeared = false
         local uiWaitStart = os.clock()
 
-        while riftRunning and isRiftArenaActive() and os.clock() - uiWaitStart < 12 do
+        while isCurrentRiftLoop(myGeneration) and isRiftArenaActive() and os.clock() - uiWaitStart < 12 do
             if isRiftBossAlive() then
                 uiAppeared = true
                 break
@@ -3952,19 +4014,24 @@ function riftLoop()
         if not uiAppeared then
             RiftStatusLbl.Text = "\xe2\x9a\xa0 Boss health bar never appeared \xe2\x80\x94 leaving..."
             RiftStatusLbl.TextColor3 = C.red
+            setRiftPhase("LEAVING", myGeneration)
             riftPostRiftTransition = true
             deactivateRiftArena()
             riftLeaveArena()
-            maybeAutoHealAfterRift()
+            setRiftPhase("CHECKING_PETS", myGeneration)
+            maybeAutoHealAfterRift(myGeneration)
+            if not isCurrentRiftLoop(myGeneration) then break end
+            setRiftPhase("COOLDOWN", myGeneration)
             task.wait(2)
             riftPostRiftTransition = false
+            setRiftPhase("SEARCHING", myGeneration)
             continue
         end
 
         -- If the monster streamed in after the first search, take the same
         -- one-time mount/snap/unmount action now, still inside the arena.
         if not riftArenaSnapDone and isRiftArenaActive() then
-            monster = waitForRiftMonster(3)
+            monster = waitForRiftMonster(3, myGeneration)
             if monster and isRiftArenaActive() then
                 riftArenaMonster = monster
                 RiftStatusLbl.Text = "\xf0\x9f\x90\x89 Mounting and snapping to Rift monster..."
@@ -3973,14 +4040,14 @@ function riftLoop()
             end
         end
 
-        if not riftRunning then break end
+        if not isCurrentRiftLoop(myGeneration) then break end
 
         RiftStatusLbl.Text = "\xe2\x9a\x94\xef\xb8\x8f Fighting rift boss..."
         RiftStatusLbl.TextColor3 = C.green
         local fightStart = os.clock()
         local MAX_FIGHT_SECONDS = 180
 
-        while riftRunning and isRiftArenaActive() and isRiftBossAlive() do
+        while isCurrentRiftLoop(myGeneration) and isRiftArenaActive() and isRiftBossAlive() do
             if os.clock() - fightStart > MAX_FIGHT_SECONDS then
                 RiftStatusLbl.Text = "\xe2\x9a\xa0 Fight timeout \xe2\x80\x94 leaving arena"
                 RiftStatusLbl.TextColor3 = C.red
@@ -3989,13 +4056,13 @@ function riftLoop()
             task.wait(0.15)
         end
 
-        if not riftRunning then break end
+        if not isCurrentRiftLoop(myGeneration) then break end
 
         -- Another loop may have already claimed the post-Rift cleanup.
         -- Wait for its leave/heal/return queue to finish instead of
         -- processing the same Rift a second time.
         if riftPostRiftTransition then
-            while riftPostRiftTransition and riftRunning do
+            while riftPostRiftTransition and isCurrentRiftLoop(myGeneration) do
                 task.wait(0.1)
             end
             continue
@@ -4007,6 +4074,7 @@ function riftLoop()
         local leaveDelay = tonumber(riftDelayBeforeLeave) or 1
         -- Hold the next-Rift queue closed through leaving, optional healing,
         -- and the short return cooldown.
+        setRiftPhase("LEAVING", myGeneration)
         riftPostRiftTransition = true
         RiftStatusLbl.Text = "\xe2\x9c\x85 Boss defeated \xe2\x80\x94 leaving in " .. leaveDelay .. "s..."
         RiftStatusLbl.TextColor3 = C.green
@@ -4016,17 +4084,25 @@ function riftLoop()
 
         -- Healing is deliberately done only after ArenaLeaveChannel. It
         -- never interrupts the active Rift fight or the leave delay.
-        maybeAutoHealAfterRift()
+        setRiftPhase("CHECKING_PETS", myGeneration)
+        maybeAutoHealAfterRift(myGeneration)
+        if not isCurrentRiftLoop(myGeneration) then break end
+        setRiftPhase("COOLDOWN", myGeneration)
 
         RiftStatusLbl.Text = "\xe2\x8f\xB1 Returned! Waiting 2s for next rift..."
         RiftStatusLbl.TextColor3 = C.sub
         task.wait(2)
         riftPostRiftTransition = false
+        setRiftPhase("SEARCHING", myGeneration)
     end
-    deactivateRiftArena()
-    _G.NoxarSetBossMount(false, true)
-    RiftStatusLbl.Text = "\xe2\x8f\xB9 Stopped."
-    RiftStatusLbl.TextColor3 = C.sub
+    -- An invalidated/older loop must not reset the state of a newer loop.
+    if myGeneration == _G.NoxarRiftLoopGeneration then
+        setRiftPhase("IDLE", myGeneration)
+        deactivateRiftArena()
+        _G.NoxarSetBossMount(false, true)
+        RiftStatusLbl.Text = "\xe2\x8f\xB9 Stopped."
+        RiftStatusLbl.TextColor3 = C.sub
+    end
 end
 
 -- ==========================================
@@ -4213,15 +4289,12 @@ RiftToggleBtn.MouseButton1Click:Connect(function()
         RiftToggleBtn.BackgroundColor3 = C.green
         RiftToggleBtn.TextColor3 = C.bg
         RiftToggleBtn.Text = "\xe2\x97\x8f AUTO RIFT: ON"
-        spawnTracked("riftLoop", riftLoop)
+        startRiftLoop()
     else
         RiftToggleBtn.BackgroundColor3 = C.red
         RiftToggleBtn.TextColor3 = C.text
         RiftToggleBtn.Text = "\xe2\x97\x8f AUTO RIFT: OFF"
-        cancelTracked("riftLoop")
-        riftHealingInProgress = false
-        riftRiftSearchPausedUntil = 0
-        riftPostRiftTransition = false
+        stopRiftLoop()
         deactivateRiftArena()
         _G.NoxarSetBossMount(false, true)
         RiftStatusLbl.Text = "\xe2\x8f\xb9 Stopped."
@@ -4233,7 +4306,7 @@ end)
 -- If Auto Rift was left ON from a previous session (rejoin persistence),
 -- resume the loop automatically once the UI exists.
 if riftRunning then
-    spawnTracked("riftLoop", riftLoop)
+    startRiftLoop()
 end
 
 
@@ -4298,6 +4371,9 @@ end)
 
 CloseBtn.MouseButton1Click:Connect(function()
     running = false
+    riftRunning = false
+    _G.NoxarRiftLoopGeneration = (_G.NoxarRiftLoopGeneration or 0) + 1
+    riftPhase = "IDLE"
     riftHealingInProgress = false
     riftRiftSearchPausedUntil = 0
     riftPostRiftTransition = false
