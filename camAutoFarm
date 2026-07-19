@@ -3743,6 +3743,14 @@ function maybeAutoHealAfterRift(generation)
     end
 
     setRiftPhase("HEALING", generation)
+    RiftStatusLbl.Text = "\xf0\x9f\x92\x9a Auto Heal: preparing teleport..."
+    RiftStatusLbl.TextColor3 = C.gold
+    task.wait(1)
+    if generation and not isCurrentRiftLoop(generation) then
+        riftHealingInProgress = false
+        return false
+    end
+
     RiftStatusLbl.Text = "\xf0\x9f\x92\x9a Auto Heal: " .. deadCount .. " pet(s) down \xe2\x80\x94 teleporting..."
     RiftStatusLbl.TextColor3 = C.gold
     root.CFrame = CFrame.new(healingPosition.X, healingPosition.Y + 3, healingPosition.Z)
@@ -3860,7 +3868,7 @@ function waitForRiftMonster(maxWait, generation)
 end
 
 -- Exact Auto Rift sequence:
---   mount -> find target -> snap immediately -> wait .5 -> unmount.
+--   mount -> find target -> wait .5 -> snap -> wait .5 -> unmount.
 -- Uses the existing BossLoop mount helper and glueToTarget; no second mount
 -- implementation is created here.
 function mountFindSnapUnmountRiftMonster(generation, maxWait)
@@ -3874,7 +3882,8 @@ function mountFindSnapUnmountRiftMonster(generation, maxWait)
     local snapped = false
 
     if monster and isCurrentRiftLoop(generation) and isRiftArenaActive() then
-        -- Snap immediately once the target is found.
+        -- Keep the player mounted for .5 seconds after finding the target.
+        task.wait(0.5)
         local root = monster:FindFirstChild("Root") or monster.PrimaryPart
         if root and root.Parent and isCurrentRiftLoop(generation) and isRiftArenaActive() then
             pcall(function()
