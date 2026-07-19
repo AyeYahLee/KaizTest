@@ -3859,30 +3859,36 @@ function waitForRiftMonster(maxWait, generation)
     return nil
 end
 
--- Exact BossLoop sequence requested for Auto Rift:
---   mount -> wait .3 -> snap to the Rift monster -> wait .5 -> unmount.
+-- Exact Auto Rift sequence:
+--   mount -> find target -> snap immediately -> wait .5 -> unmount.
 -- Uses the existing BossLoop mount helper and glueToTarget; no second mount
 -- implementation is created here.
-function mountSnapUnmountRiftMonster(monster)
-    if not monster or not isRiftArenaActive() then return false end
-
-    local root = monster:FindFirstChild("Root") or monster.PrimaryPart
-    if not root then return false end
-
-    _G.NoxarSetBossMount(true)
-    task.wait(0.3)
-
-    local snapped = false
-    if isRiftArenaActive() and monster.Parent and root.Parent then
-        pcall(function()
-            glueToTarget(root)
-            snapped = true
-        end)
+function mountFindSnapUnmountRiftMonster(generation, maxWait)
+    if not isCurrentRiftLoop(generation) or not isRiftArenaActive() then
+        return nil, false
     end
 
+    -- Mount before beginning the target search.
+    _G.NoxarSetBossMount(true)
+    local monster = waitForRiftMonster(maxWait or 12, generation)
+    local snapped = false
+
+    if monster and isCurrentRiftLoop(generation) and isRiftArenaActive() then
+        -- Snap immediately once the target is found.
+        local root = monster:FindFirstChild("Root") or monster.PrimaryPart
+        if root and root.Parent and isCurrentRiftLoop(generation) and isRiftArenaActive() then
+            pcall(function()
+                glueToTarget(root)
+                snapped = true
+            end)
+        end
+    end
+
+    -- Always give the snap/unmount sequence its post-snap delay, including
+    -- the no-target case, so a failed stream does not leave the player mounted.
     task.wait(0.5)
     _G.NoxarSetBossMount(false)
-    return snapped
+    return monster, snapped
 end
 
 -- Main loop. Tracked via spawnTracked("riftLoop", ...) so re-toggling
@@ -4010,9 +4016,11 @@ function riftLoop(myGeneration)
         riftArenaMonster = nil
         setRiftPhase("FIGHTING", myGeneration)
 
-        RiftStatusLbl.Text = "\xf0\x9f\x94\x8d Inside Rift arena \xe2\x80\x94 searching for monster..."
+        RiftStatusLbl.Text = "\xf0\x9f\x90\x89 Mounting, then finding Rift monster..."
         RiftStatusLbl.TextColor3 = C.gold
-        local monster = waitForRiftMonster(12, myGeneration)
+        local monster, snapped = mountFindSnapUnmountRiftMonster(myGeneration, 12)
+        riftArenaMonster = monster
+        riftArenaSnapDone = snapped
 
         -- If the arena ended while the target was loading, do not scan again
         -- and do not attempt a teleport outside the arena.
@@ -4036,14 +4044,12 @@ function riftLoop(myGeneration)
             continue
         end
 
-        if monster then
-            riftArenaMonster = monster
-            RiftStatusLbl.Text = "\xf0\x9f\x90\x89 Mounting and snapping to Rift monster..."
-            RiftStatusLbl.TextColor3 = C.gold
-            riftArenaSnapDone = mountSnapUnmountRiftMonster(monster)
-        else
-            RiftStatusLbl.Text = "\xe2\x9a\xa0 Rift monster not found; waiting for arena boss bar..."
+        if not riftArenaSnapDone then
+            RiftStatusLbl.Text = "\xe2\x9a\xa0 Rift monster not found yet; waiting for boss bar..."
             RiftStatusLbl.TextColor3 = C.red
+        else
+            RiftStatusLbl.Text = "\xf0\x9f\x90\x89 Snapped to Rift monster; fighting..."
+            RiftStatusLbl.TextColor3 = C.green
         end
 
         if not isCurrentRiftLoop(myGeneration) then break end
@@ -4079,16 +4085,14 @@ function riftLoop(myGeneration)
             continue
         end
 
-        -- If the monster streamed in after the first search, take the same
-        -- one-time mount/snap/unmount action now, still inside the arena.
+        -- If the monster streamed in after the first mounted search, retry
+        -- the same mount -> find -> .5 -> snap -> .5 -> unmount sequence.
         if not riftArenaSnapDone and isRiftArenaActive() then
-            monster = waitForRiftMonster(3, myGeneration)
-            if monster and isRiftArenaActive() then
-                riftArenaMonster = monster
-                RiftStatusLbl.Text = "\xf0\x9f\x90\x89 Mounting and snapping to Rift monster..."
-                RiftStatusLbl.TextColor3 = C.gold
-                riftArenaSnapDone = mountSnapUnmountRiftMonster(monster)
-            end
+            RiftStatusLbl.Text = "\xf0\x9f\x90\x89 Retrying mount and target search..."
+            RiftStatusLbl.TextColor3 = C.gold
+            local retryMonster, retrySnapped = mountFindSnapUnmountRiftMonster(myGeneration, 3)
+            if retryMonster then riftArenaMonster = retryMonster end
+            riftArenaSnapDone = retrySnapped
         end
 
         if not isCurrentRiftLoop(myGeneration) then break end
