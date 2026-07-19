@@ -393,7 +393,8 @@ function saveConfig()
             riftRunning = riftRunning,
             riftDelayBeforeLeave = riftDelayBeforeLeave,
             autoHealEnabled = autoHealEnabled,
-            autoHealThreshold = autoHealThreshold
+            autoHealThreshold = autoHealThreshold,
+            autoUseRiftItemEnabled = autoUseRiftItemEnabled
         }
         pcall(function()
             writefile(configFileName, HttpService:JSONEncode(data))
@@ -433,6 +434,7 @@ function loadConfig()
             if data.riftDelayBeforeLeave ~= nil then riftDelayBeforeLeave = data.riftDelayBeforeLeave end
             if data.autoHealEnabled ~= nil then autoHealEnabled = data.autoHealEnabled end
             if data.autoHealThreshold ~= nil then autoHealThreshold = data.autoHealThreshold end
+            if data.autoUseRiftItemEnabled ~= nil then autoUseRiftItemEnabled = data.autoUseRiftItemEnabled end
         end)
     end
 end
@@ -3271,6 +3273,7 @@ riftKillCount = riftKillCount or 0
 
 autoHealEnabled = autoHealEnabled or false
 autoHealThreshold = math.max(1, math.floor(tonumber(autoHealThreshold) or 1))
+autoUseRiftItemEnabled = autoUseRiftItemEnabled or false
 -- Captured when a Rift run starts; compared only after that Rift is over.
 riftPetCountAtStart = nil
 -- Mutex/queue gate: no Rift search may start while Auto Heal is active.
@@ -3762,6 +3765,25 @@ function maybeAutoHealAfterRift(generation)
     return true
 end
 
+function useAutoRiftItem(generation)
+    if not autoUseRiftItemEnabled then return false end
+    if generation and not isCurrentRiftLoop(generation) then return false end
+
+    setRiftPhase("USING_ITEM", generation)
+    RiftStatusLbl.Text = "Using Rift item..."
+    RiftStatusLbl.TextColor3 = C.gold
+
+    local ok = pcall(function()
+        DataPullFunc:InvokeServer("CommonItemUseChannel", 11010)
+    end)
+
+    -- Give the server call a small amount of time to register before the
+    -- next portal scan begins.
+    task.wait(0.2)
+    if generation and not isCurrentRiftLoop(generation) then return false end
+    return ok
+end
+
 -- Every call to this function is made only after isRiftArenaActive() has
 -- passed. It never searches ClientMonsters while outside the arena.
 function findRiftMonster()
@@ -4005,6 +4027,8 @@ function riftLoop(myGeneration)
             setRiftPhase("CHECKING_PETS", myGeneration)
             maybeAutoHealAfterRift(myGeneration)
             if not isCurrentRiftLoop(myGeneration) then break end
+            useAutoRiftItem(myGeneration)
+            if not isCurrentRiftLoop(myGeneration) then break end
             setRiftPhase("COOLDOWN", myGeneration)
             task.wait(2)
             riftPostRiftTransition = false
@@ -4045,6 +4069,8 @@ function riftLoop(myGeneration)
             riftLeaveArena()
             setRiftPhase("CHECKING_PETS", myGeneration)
             maybeAutoHealAfterRift(myGeneration)
+            if not isCurrentRiftLoop(myGeneration) then break end
+            useAutoRiftItem(myGeneration)
             if not isCurrentRiftLoop(myGeneration) then break end
             setRiftPhase("COOLDOWN", myGeneration)
             task.wait(2)
@@ -4111,6 +4137,8 @@ function riftLoop(myGeneration)
         -- never interrupts the active Rift fight or the leave delay.
         setRiftPhase("CHECKING_PETS", myGeneration)
         maybeAutoHealAfterRift(myGeneration)
+        if not isCurrentRiftLoop(myGeneration) then break end
+        useAutoRiftItem(myGeneration)
         if not isCurrentRiftLoop(myGeneration) then break end
         setRiftPhase("COOLDOWN", myGeneration)
 
@@ -4297,6 +4325,36 @@ AutoHealThresholdBox.FocusLost:Connect(function()
     saveConfig()
 end)
 
+-- Optional item use runs after the post-Rift pet check/heal and before the
+-- cooldown that unlocks the next Rift search.
+AutoUseRiftTitleLbl = Instance.new("TextLabel", RiftTab)
+AutoUseRiftTitleLbl.Size = UDim2.new(1, -20, 0, 14)
+AutoUseRiftTitleLbl.BackgroundTransparency = 1
+AutoUseRiftTitleLbl.Text = "Auto Use Rift Item"
+AutoUseRiftTitleLbl.TextColor3 = C.accent
+AutoUseRiftTitleLbl.Font = Enum.Font.GothamBold
+AutoUseRiftTitleLbl.TextSize = 11
+AutoUseRiftTitleLbl.TextXAlignment = Enum.TextXAlignment.Left
+AutoUseRiftTitleLbl.LayoutOrder = 7
+
+AutoUseRiftBtn = Instance.new("TextButton", RiftTab)
+AutoUseRiftBtn.Size = UDim2.new(1, -20, 0, 30)
+AutoUseRiftBtn.BackgroundColor3 = autoUseRiftItemEnabled and C.green or C.red
+AutoUseRiftBtn.TextColor3 = autoUseRiftItemEnabled and C.bg or C.text
+AutoUseRiftBtn.Text = autoUseRiftItemEnabled and "AUTO USE ITEM 11010: ON" or "AUTO USE ITEM 11010: OFF"
+AutoUseRiftBtn.Font = Enum.Font.GothamBold
+AutoUseRiftBtn.TextSize = 10
+AutoUseRiftBtn.LayoutOrder = 8
+Instance.new("UICorner", AutoUseRiftBtn).CornerRadius = UDim.new(0, 9)
+
+AutoUseRiftBtn.MouseButton1Click:Connect(function()
+    autoUseRiftItemEnabled = not autoUseRiftItemEnabled
+    AutoUseRiftBtn.BackgroundColor3 = autoUseRiftItemEnabled and C.green or C.red
+    AutoUseRiftBtn.TextColor3 = autoUseRiftItemEnabled and C.bg or C.text
+    AutoUseRiftBtn.Text = autoUseRiftItemEnabled and "AUTO USE ITEM 11010: ON" or "AUTO USE ITEM 11010: OFF"
+    saveConfig()
+end)
+
 -- Main toggle
 RiftToggleBtn = Instance.new("TextButton", RiftTab)
 RiftToggleBtn.Size = UDim2.new(1, -20, 0, 34)
@@ -4305,7 +4363,7 @@ RiftToggleBtn.TextColor3 = riftRunning and C.bg or C.text
 RiftToggleBtn.Font = Enum.Font.GothamBold
 RiftToggleBtn.TextSize = 12
 RiftToggleBtn.Text = riftRunning and "\xe2\x97\x8f AUTO RIFT: ON" or "\xe2\x97\x8f AUTO RIFT: OFF"
-RiftToggleBtn.LayoutOrder = 7
+RiftToggleBtn.LayoutOrder = 9
 Instance.new("UICorner", RiftToggleBtn).CornerRadius = UDim.new(0, 9)
 
 RiftToggleBtn.MouseButton1Click:Connect(function()
