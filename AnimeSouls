@@ -36,7 +36,7 @@ end
 
 -- ══════════════════════════════════════════════════════════════════
 -- AutoFarm – Anime Souls (Native PathTool + Universal BigNum High-HP Engine)
--- Version: Optimized 0.09 (Sticky Highest-Health Target Lock + Native PathTool)
+-- Version: Optimized 0.09 (Priority Target Mode + Highest-HP Engine)
 -- ══════════════════════════════════════════════════════════════════
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
@@ -52,9 +52,11 @@ local SETTINGS_FILE = "AnimeSouls_NoxarSave.json"
 -- Farm State
 local farmRunning = false
 local farmThread = nil
-local targetNames = {}
-local targetMode = "Highest Health" -- Options: "Highest Health", "Nearest Distance", "Lowest Health"
-local lockedTarget = nil  -- Sticky lock: holds current target for "Highest Health" mode until it dies/disappears
+-- targetNames: ordered list for Priority mode + fast lookup set
+-- e.g. targetNames.ordered = {"super jinwo", "madara", "naruto"}
+--      targetNames.lookup  = {["super jinwo"]=true, ["madara"]=true, ...}
+local targetNames = { ordered = {}, lookup = {} }
+local targetMode = "Highest Health" -- Options: "Highest Health", "Nearest Distance", "Lowest Health", "Priority"
 
 -- ── Background thread registry ──
 if _G.AnimeSoulsThreads then
@@ -130,7 +132,7 @@ local function saveSettings()
     if not writefile then return end
 
     local targetsList = {}
-    for name, _ in pairs(targetNames) do table.insert(targetsList, name) end
+    for _, name in ipairs(targetNames.ordered) do table.insert(targetsList, name) end
 
     local spinList = {}
     for key, on in pairs(selectedSpins) do
@@ -167,8 +169,12 @@ local function loadSettings()
     if ok and data then
         farmRunning = data.farmRunning or false
         if data.selectedMonsters then
+            targetNames.ordered = {}
+            targetNames.lookup = {}
             for _, name in ipairs(data.selectedMonsters) do
-                targetNames[name:lower()] = true
+                local lower = name:lower()
+                targetNames.lookup[lower] = true
+                table.insert(targetNames.ordered, lower)
             end
         end
 
@@ -198,7 +204,6 @@ _G.StopNoxarFarm = function()
     farmRunning = false
     autoSpinEnabled = false
     gambleEnabled = false
-    lockedTarget = nil  -- clear sticky lock on stop
     if farmThread then pcall(function() task.cancel(farmThread) end) end
     cancelAllTrackedThreads()
     disconnectAllTrackedConnections()
@@ -531,35 +536,28 @@ local function isAlive(m)
     return true
 end
 
--- Check if a locked target is still valid (alive, in workspace, selected name)
-local function isLockedTargetValid()
-    if not lockedTarget then return false end
-    if not lockedTarget.Parent then return false end  -- removed from workspace
-    if not isAlive(lockedTarget) then return false end  -- dead
-    local name = getMonsterName(lockedTarget)
-    if not name or not targetNames[name:lower()] then return false end  -- no longer selected
-    local r = lockedTarget:FindFirstChild("Root")
-    if not r or not root then return false end  -- no root to teleport to
-    return true
-end
-
 -- Select best target monster based on `targetMode` priority
--- "Highest Health" mode uses sticky lock: once a target is chosen, it stays locked until dead/invalid
 local function getTargetMonster()
     local cm = workspace:FindFirstChild("ClientMonsters")
-    if not cm then
-        lockedTarget = nil
-        return nil
-    end
+    if not cm then return nil end
     local guiFolder = workspace:FindFirstChild("SelfGUI")
     
-    -- ── Sticky lock check for "Highest Health" ──
-    if targetMode == "Highest Health" and lockedTarget then
-        if isLockedTargetValid() then
-            return lockedTarget  -- keep attacking the same target
-        else
-            lockedTarget = nil  -- target died or became invalid, pick a new one
+    -- ── Priority Mode: follow selection order (first selected = highest priority) ──
+    if targetMode == "Priority" then
+        for _, prioName in ipairs(targetNames.ordered) do
+            for _, m in pairs(cm:GetChildren()) do
+                if m:IsA("Model") then
+                    local name = getMonsterName(m, guiFolder)
+                    if name and name:lower() == prioName and isAlive(m) then
+                        local r = m:FindFirstChild("Root")
+                        if r and root then
+                            return m  -- instant switch to highest-priority alive monster
+                        end
+                    end
+                end
+            end
         end
+        return nil  -- nothing alive in our priority list
     end
     
     local bestMonster = nil
@@ -569,7 +567,7 @@ local function getTargetMonster()
     for _, m in pairs(cm:GetChildren()) do
         if m:IsA("Model") then
             local name = getMonsterName(m, guiFolder)
-            if name and targetNames[name:lower()] and isAlive(m) then
+            if name and targetNames.lookup[name:lower()] and isAlive(m) then
                 local r = m:FindFirstChild("Root")
                 if r and root then
                     local dist = (root.Position - r.Position).Magnitude
@@ -608,12 +606,6 @@ local function getTargetMonster()
             end
         end
     end
-    
-    -- Lock the chosen target (sticky) for "Highest Health" mode
-    if targetMode == "Highest Health" and bestMonster then
-        lockedTarget = bestMonster
-    end
-    
     return bestMonster
 end
 
@@ -808,7 +800,7 @@ local subtitle = Instance.new("TextLabel", header)
 subtitle.Size = UDim2.new(1, -100, 0, 14)
 subtitle.Position = UDim2.new(0, 46, 1, -17)
 subtitle.BackgroundTransparency = 1
-subtitle.Text = "NoxarK — Sticky Highest-HP Engine v0.09"
+subtitle.Text = "NoxarK — Priority + HP Engine v0.09"
 subtitle.TextColor3 = C.accentDim
 subtitle.Font = Enum.Font.Gotham
 subtitle.TextSize = 10
@@ -948,17 +940,21 @@ corner(6, targetModeBtn)
 
 local function updateTargetModeUI()
     if targetMode == "Highest Health" then
-        targetModeBtn.Text = "Highest Health ⭐"
+        targetModeBtn.Text = "Highest HP ⭐"
         targetModeBtn.TextColor3 = C.glow
         tween(targetModeBtn, 0.15, {BackgroundColor3 = C.btnOn})
     elseif targetMode == "Nearest Distance" then
-        targetModeBtn.Text = "Nearest Distance 📍"
+        targetModeBtn.Text = "Nearest 📍"
         targetModeBtn.TextColor3 = C.green
         tween(targetModeBtn, 0.15, {BackgroundColor3 = Color3.fromRGB(20, 60, 40)})
-    else
-        targetModeBtn.Text = "Lowest Health 🗡️"
+    elseif targetMode == "Lowest Health" then
+        targetModeBtn.Text = "Lowest HP 🗡️"
         targetModeBtn.TextColor3 = Color3.fromRGB(255, 180, 100)
         tween(targetModeBtn, 0.15, {BackgroundColor3 = Color3.fromRGB(65, 35, 15)})
+    else -- "Priority"
+        targetModeBtn.Text = "Priority 📋"
+        targetModeBtn.TextColor3 = Color3.fromRGB(100, 200, 255)
+        tween(targetModeBtn, 0.15, {BackgroundColor3 = Color3.fromRGB(15, 45, 65)})
     end
 end
 
@@ -967,10 +963,15 @@ targetModeBtn.MouseButton1Click:Connect(function()
         targetMode = "Nearest Distance"
     elseif targetMode == "Nearest Distance" then
         targetMode = "Lowest Health"
+    elseif targetMode == "Lowest Health" then
+        targetMode = "Priority"
     else
         targetMode = "Highest Health"
     end
     updateTargetModeUI()
+    sectionLbl.Text = targetMode == "Priority" and "▸ SELECT MONSTERS (click order = priority)" or "▸ SELECT MONSTERS"
+    -- Refresh monster list display to show/hide priority numbers
+    scanMonsters()
     saveSettings()
 end)
 
@@ -981,7 +982,7 @@ local sectionLbl = Instance.new("TextLabel", frame)
 sectionLbl.Size = UDim2.new(1, -24, 0, 16)
 sectionLbl.Position = UDim2.new(0, 12, 0, HEADER_H + TAB_H + 98)
 sectionLbl.BackgroundTransparency = 1
-sectionLbl.Text = "▸ SELECT MONSTERS"
+    sectionLbl.Text = targetMode == "Priority" and "▸ SELECT MONSTERS (click order = priority)" or "▸ SELECT MONSTERS"
 sectionLbl.TextColor3 = C.textLabel
 sectionLbl.Font = Enum.Font.GothamBold
 sectionLbl.TextSize = 11
@@ -1001,6 +1002,35 @@ local listLayout = Instance.new("UIListLayout", scroll)
 listLayout.Padding = UDim.new(0, 5)
 
 local checkboxes = {}
+local checkboxOrder = {}  -- tracks original display order of monster names
+
+-- Get priority number for a monster name (1-based index in targetNames.ordered)
+local function getPriorityIndex(monLower)
+    for i, name in ipairs(targetNames.ordered) do
+        if name == monLower then return i end
+    end
+    return nil
+end
+
+-- Refresh all checkbox labels (updates priority numbers when mode changes)
+local function refreshAllCheckboxLabels()
+    for _, entry in ipairs(checkboxOrder) do
+        local btn = entry.btn
+        local monLower = entry.monLower
+        local monName = entry.monName
+        local sel = targetNames.lookup[monLower] == true
+        if sel then
+            if targetMode == "Priority" then
+                local prio = getPriorityIndex(monLower)
+                btn.Text = (prio and (" #" .. prio .. " ● ") or " ● ") .. monName
+            else
+                btn.Text = " ● " .. monName
+            end
+        else
+            btn.Text = " ○ " .. monName
+        end
+    end
+end
 
 local function makeCheckbox(monName, index)
     local btn = Instance.new("TextButton", scroll)
@@ -1015,12 +1045,17 @@ local function makeCheckbox(monName, index)
     btn.TextXAlignment = Enum.TextXAlignment.Left
 
     local monLower = monName:lower()
-    local sel = targetNames[monLower] == true
+    local sel = targetNames.lookup[monLower] == true
 
     if sel then
         btn.BackgroundColor3 = C.btnOn
         btn.TextColor3 = C.glow
-        btn.Text = " ● " .. monName
+        if targetMode == "Priority" then
+            local prio = getPriorityIndex(monLower)
+            btn.Text = (prio and (" #" .. prio .. " ● ") or " ● ") .. monName
+        else
+            btn.Text = " ● " .. monName
+        end
     else
         btn.BackgroundColor3 = C.btnOff
         btn.TextColor3 = C.textDim
@@ -1045,17 +1080,26 @@ local function makeCheckbox(monName, index)
     btn.MouseButton1Click:Connect(function()
         sel = not sel
         if sel then
-            targetNames[monLower] = true
+            -- Add to ordered list (at end = lowest priority)
+            targetNames.lookup[monLower] = true
+            table.insert(targetNames.ordered, monLower)
             tween(btn, 0.15, {BackgroundColor3 = C.btnOn})
             btn.TextColor3 = C.glow
-            btn.Text = " ● " .. monName
         else
-            targetNames[monLower] = nil
+            -- Remove from ordered list and lookup
+            targetNames.lookup[monLower] = nil
+            for i = #targetNames.ordered, 1, -1 do
+                if targetNames.ordered[i] == monLower then
+                    table.remove(targetNames.ordered, i)
+                    break
+                end
+            end
             tween(btn, 0.15, {BackgroundColor3 = C.btnOff})
             btn.TextColor3 = C.textDim
-            btn.Text = " ○ " .. monName
         end
 
+        -- Update all labels to reflect new priority numbers
+        refreshAllCheckboxLabels()
         saveSettings()
 
         TweenService:Create(btnScale, TweenInfo.new(0.08), {Scale = 0.96}):Play()
@@ -1065,6 +1109,7 @@ local function makeCheckbox(monName, index)
     end)
 
     checkboxes[monName] = btn
+    table.insert(checkboxOrder, {btn = btn, monLower = monLower, monName = monName})
 end
 
 local SCAN_Y = HEADER_H + TAB_H + 216
@@ -1125,6 +1170,7 @@ end
 local function scanMonsters()
     for _, c in pairs(checkboxes) do c:Destroy() end
     checkboxes = {}
+    checkboxOrder = {}
 
     local found = {}
     local guiFolder = workspace:FindFirstChild("SelfGUI")
@@ -1182,7 +1228,7 @@ end)
 local function setFarmState(state)
     farmRunning = state
     if farmRunning then
-        if next(targetNames) == nil then
+        if #targetNames.ordered == 0 then
             setStatus("⚠ Select at least one monster!", false)
             tween(startBtn, 0.1, {BackgroundColor3 = C.red})
             task.delay(0.5, function()
@@ -1197,7 +1243,7 @@ local function setFarmState(state)
         startBtn.Text = "⏹ Stop Farming"
 
         local names = {}
-        for n in pairs(targetNames) do table.insert(names, n) end
+        for _, n in ipairs(targetNames.ordered) do table.insert(names, n) end
         setStatus("Farming (" .. targetMode .. "): " .. table.concat(names, ", "), true)
 
         if farmThread then task.cancel(farmThread) end
@@ -1205,7 +1251,6 @@ local function setFarmState(state)
     else
         if farmThread then task.cancel(farmThread) end
         farmThread = nil
-        lockedTarget = nil  -- clear sticky lock when stop button pressed
 
         tween(startBtn, 0.2, {BackgroundColor3 = C.accentDim})
         startBtn.Text = "▶ Start Farming (" .. targetMode .. ")"
@@ -1839,4 +1884,4 @@ spinTabBtn.MouseButton1Click:Connect(function() showTab("spin") end)
 
 showTab("farm")
 
-print("[AutoFarm] Loaded — Anime UI v0.09 ready with Sticky Highest-HP Target Lock + Native _G.PathTool.")
+print("[AutoFarm] Loaded — Anime UI v0.09 ready with Priority Mode + Highest-HP + Native _G.PathTool.")
