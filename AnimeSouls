@@ -36,7 +36,7 @@ end
 
 -- ══════════════════════════════════════════════════════════════════
 -- AutoFarm – Anime Souls (Native PathTool + Universal BigNum High-HP Engine)
--- Version: Optimized 0.08 (Direct _G.PathTool Integration for 1ai / 5ah / Bosses)
+-- Version: Optimized 0.09 (Sticky Highest-Health Target Lock + Native PathTool)
 -- ══════════════════════════════════════════════════════════════════
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
@@ -54,6 +54,7 @@ local farmRunning = false
 local farmThread = nil
 local targetNames = {}
 local targetMode = "Highest Health" -- Options: "Highest Health", "Nearest Distance", "Lowest Health"
+local lockedTarget = nil  -- Sticky lock: holds current target for "Highest Health" mode until it dies/disappears
 
 -- ── Background thread registry ──
 if _G.AnimeSoulsThreads then
@@ -197,6 +198,7 @@ _G.StopNoxarFarm = function()
     farmRunning = false
     autoSpinEnabled = false
     gambleEnabled = false
+    lockedTarget = nil  -- clear sticky lock on stop
     if farmThread then pcall(function() task.cancel(farmThread) end) end
     cancelAllTrackedThreads()
     disconnectAllTrackedConnections()
@@ -529,11 +531,36 @@ local function isAlive(m)
     return true
 end
 
+-- Check if a locked target is still valid (alive, in workspace, selected name)
+local function isLockedTargetValid()
+    if not lockedTarget then return false end
+    if not lockedTarget.Parent then return false end  -- removed from workspace
+    if not isAlive(lockedTarget) then return false end  -- dead
+    local name = getMonsterName(lockedTarget)
+    if not name or not targetNames[name:lower()] then return false end  -- no longer selected
+    local r = lockedTarget:FindFirstChild("Root")
+    if not r or not root then return false end  -- no root to teleport to
+    return true
+end
+
 -- Select best target monster based on `targetMode` priority
+-- "Highest Health" mode uses sticky lock: once a target is chosen, it stays locked until dead/invalid
 local function getTargetMonster()
     local cm = workspace:FindFirstChild("ClientMonsters")
-    if not cm then return nil end
+    if not cm then
+        lockedTarget = nil
+        return nil
+    end
     local guiFolder = workspace:FindFirstChild("SelfGUI")
+    
+    -- ── Sticky lock check for "Highest Health" ──
+    if targetMode == "Highest Health" and lockedTarget then
+        if isLockedTargetValid() then
+            return lockedTarget  -- keep attacking the same target
+        else
+            lockedTarget = nil  -- target died or became invalid, pick a new one
+        end
+    end
     
     local bestMonster = nil
     local bestVal = (targetMode == "Lowest Health" or targetMode == "Nearest Distance") and math.huge or -math.huge
@@ -581,6 +608,12 @@ local function getTargetMonster()
             end
         end
     end
+    
+    -- Lock the chosen target (sticky) for "Highest Health" mode
+    if targetMode == "Highest Health" and bestMonster then
+        lockedTarget = bestMonster
+    end
+    
     return bestMonster
 end
 
@@ -775,7 +808,7 @@ local subtitle = Instance.new("TextLabel", header)
 subtitle.Size = UDim2.new(1, -100, 0, 14)
 subtitle.Position = UDim2.new(0, 46, 1, -17)
 subtitle.BackgroundTransparency = 1
-subtitle.Text = "NoxarK — Native PathTool Engine v0.08"
+subtitle.Text = "NoxarK — Sticky Highest-HP Engine v0.09"
 subtitle.TextColor3 = C.accentDim
 subtitle.Font = Enum.Font.Gotham
 subtitle.TextSize = 10
@@ -1172,6 +1205,7 @@ local function setFarmState(state)
     else
         if farmThread then task.cancel(farmThread) end
         farmThread = nil
+        lockedTarget = nil  -- clear sticky lock when stop button pressed
 
         tween(startBtn, 0.2, {BackgroundColor3 = C.accentDim})
         startBtn.Text = "▶ Start Farming (" .. targetMode .. ")"
@@ -1805,4 +1839,4 @@ spinTabBtn.MouseButton1Click:Connect(function() showTab("spin") end)
 
 showTab("farm")
 
-print("[AutoFarm] Loaded — Anime UI v0.08 ready with Native _G.PathTool BigNum High-HP Targeting.")
+print("[AutoFarm] Loaded — Anime UI v0.09 ready with Sticky Highest-HP Target Lock + Native _G.PathTool.")
