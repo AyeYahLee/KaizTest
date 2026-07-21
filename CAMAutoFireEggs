@@ -1,11 +1,13 @@
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
 local LP = Players.LocalPlayer
 
 local DataPullFunc = RS.CommonLibrary.Tool.RemoteManager.Funcs.DataPullFunc
 local AreaPickUp = workspace:WaitForChild("AreaPickUp")
 
-local FIRE_EGG_TMPL = 201
+local DEFAULT_EGG_TMPL = 201 -- Fire Egg (original default, kept so it still works with no setup)
+local selectedEggIds = {[DEFAULT_EGG_TMPL] = true} -- set of TmplId -> true
 local COLLECT_DELAY = 0.2
 local LOOP_DELAY = 2
 local TP_OFFSET = Vector3.new(0, 3, 0)
@@ -13,6 +15,56 @@ local TP_OFFSET = Vector3.new(0, 3, 0)
 local running = false
 local runId = 0
 local savedPos = nil  -- saved return position
+local MIN_EGGS = 4  -- minimum eggs before starting a collect run
+
+-- ── Save / Load (survives rejoins, since writefile persists to disk) ───────────
+local SETTINGS_FILE = "AutoFireEgg_NoxarSave.json"
+
+local function saveSettings()
+    if not writefile then return end
+
+    local idsList = {}
+    for id in pairs(selectedEggIds) do table.insert(idsList, id) end
+
+    local data = {
+        selectedEggIds = idsList,
+        loopDelay = LOOP_DELAY,
+        minEggs = MIN_EGGS,
+        running = running,
+        savedPos = savedPos and {savedPos.X, savedPos.Y, savedPos.Z} or nil,
+    }
+
+    pcall(function()
+        writefile(SETTINGS_FILE, HttpService:JSONEncode(data))
+    end)
+end
+
+local function loadSettings()
+    if not (isfile and readfile and isfile(SETTINGS_FILE)) then return end
+
+    local ok, data = pcall(function()
+        return HttpService:JSONDecode(readfile(SETTINGS_FILE))
+    end)
+    if not (ok and data) then return end
+
+    if data.selectedEggIds and #data.selectedEggIds > 0 then
+        local newSet = {}
+        for _, id in ipairs(data.selectedEggIds) do
+            if tonumber(id) then newSet[tonumber(id)] = true end
+        end
+        if next(newSet) then selectedEggIds = newSet end
+    end
+
+    LOOP_DELAY = tonumber(data.loopDelay) or LOOP_DELAY
+    MIN_EGGS = tonumber(data.minEggs) or MIN_EGGS
+    running = data.running or false
+
+    if data.savedPos and #data.savedPos == 3 then
+        savedPos = Vector3.new(data.savedPos[1], data.savedPos[2], data.savedPos[3])
+    end
+end
+
+loadSettings()
 
 -- ── Helpers ───────────────────────────────────────────────────────────────────
 local function teleportTo(pos)
@@ -24,12 +76,12 @@ local function teleportTo(pos)
     task.wait(0.1)
 end
 
-local function getFireEggs()
+local function getSelectedEggs()
     local eggs = {}
     for _, part in ipairs(AreaPickUp:GetChildren()) do
         if part:IsA("BasePart") then
             local tmpl = part:GetAttribute("TmplId")
-            if tmpl == FIRE_EGG_TMPL then
+            if tmpl and selectedEggIds[tmpl] then
                 local id = tonumber(part.Name)
                 if id then
                     table.insert(eggs, {id = id, pos = part.Position, part = part})
@@ -38,6 +90,25 @@ local function getFireEggs()
         end
     end
     return eggs
+end
+
+-- Scans every pickup currently in AreaPickUp and counts them by TmplId,
+-- regardless of what's currently selected -- this is how you discover
+-- what egg IDs exist nearby before typing them into the ID box.
+local function scanEggTypes()
+    local counts = {}
+    for _, part in ipairs(AreaPickUp:GetChildren()) do
+        if part:IsA("BasePart") then
+            local tmpl = part:GetAttribute("TmplId")
+            if tmpl then
+                counts[tmpl] = (counts[tmpl] or 0) + 1
+            end
+        end
+    end
+    local sortedIds = {}
+    for tmpl in pairs(counts) do table.insert(sortedIds, tmpl) end
+    table.sort(sortedIds)
+    return counts, sortedIds
 end
 
 local function collectEgg(egg, statusLbl)
@@ -51,20 +122,27 @@ local function collectEgg(egg, statusLbl)
     task.wait(COLLECT_DELAY)
 end
 
-local MIN_EGGS = 4  -- minimum eggs before starting a collect run
-
 local function returnToSaved(statusLbl)
-    if savedPos then
-        statusLbl.Text = "🏠 Returning to saved pos..."
-        teleportTo(savedPos)
+    if not savedPos then return end
+
+    local char = LP.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    -- Don't teleport if we're already at the saved position
+    if (root.Position - savedPos).Magnitude <= 5 then
+        return
     end
+
+    statusLbl.Text = "🏠 Returning to saved pos..."
+    teleportTo(savedPos)
 end
 
 local function startCollecting(statusLbl)
     local myId = runId
     local total = 0
     while running and runId == myId do
-        local eggs = getFireEggs()
+        local eggs = getSelectedEggs()
 
         if #eggs < MIN_EGGS then
             -- Not enough eggs yet — return to saved pos and wait
@@ -103,18 +181,30 @@ local sg = Instance.new("ScreenGui")
 sg.Name = "FireEggGui"; sg.ResetOnSpawn = false; sg.Parent = LP.PlayerGui
 
 local frame = Instance.new("Frame", sg)
-frame.Size = UDim2.new(0, 220, 0, 220)
-frame.Position = UDim2.new(0.5, -110, 0, 100)
+frame.Size = UDim2.new(0, 220, 0, 260)
+frame.Position = UDim2.new(0.5, -110, 0.5, -130)
 frame.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
 frame.BorderSizePixel = 0
+frame.ClipsDescendants = true
 Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 12)
 
--- Drag
+local FULL_HEIGHT = 260
+
+-- Title bar (fixed, not part of the scroll) — used for dragging and
+-- holds the minimize button.
+local titleBar = Instance.new("Frame", frame)
+titleBar.Size = UDim2.new(1, 0, 0, 32)
+titleBar.Position = UDim2.new(0, 0, 0, 0)
+titleBar.BackgroundTransparency = 1
+titleBar.BorderSizePixel = 0
+
+-- Drag (moved to titleBar instead of the whole frame, so dragging
+-- doesn't fight with scrolling the content below it)
 local dragging, dragStart, dragOrigin = false, nil, nil
-frame.InputBegan:Connect(function(i)
+titleBar.InputBegan:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
         dragging = true; dragStart = i.Position; dragOrigin = frame.Position end end)
-frame.InputEnded:Connect(function(i)
+titleBar.InputEnded:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
         dragging = false end end)
 UIS.InputChanged:Connect(function(i)
@@ -124,35 +214,80 @@ UIS.InputChanged:Connect(function(i)
     end end)
 
 -- Title
-local title = Instance.new("TextLabel", frame)
-title.Size = UDim2.new(1, 0, 0, 32)
+local title = Instance.new("TextLabel", titleBar)
+title.Size = UDim2.new(1, -40, 1, 0)
+title.Position = UDim2.new(0, 8, 0, 0)
 title.BackgroundTransparency = 1
-title.Text = "🔥 Auto Fire Eggs"
+title.Text = "🔥 Auto Egg Farm"
 title.TextColor3 = Color3.fromRGB(255, 160, 50)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 14
+title.TextXAlignment = Enum.TextXAlignment.Left
+
+-- Minimize button
+local minBtn = Instance.new("TextButton", titleBar)
+minBtn.Size = UDim2.new(0, 26, 0, 26)
+minBtn.Position = UDim2.new(1, -30, 0.5, -13)
+minBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+minBtn.TextColor3 = Color3.fromRGB(220, 220, 220)
+minBtn.Font = Enum.Font.GothamBold
+minBtn.TextSize = 14
+minBtn.Text = "—"
+minBtn.BorderSizePixel = 0
+Instance.new("UICorner", minBtn).CornerRadius = UDim.new(0, 6)
+
+-- Scrollable content area — everything below the title bar lives in
+-- here now, so the panel itself can stay short while still fitting all
+-- the controls; scroll instead of overflowing off-screen.
+local scroll = Instance.new("ScrollingFrame", frame)
+scroll.Size = UDim2.new(1, 0, 1, -32)
+scroll.Position = UDim2.new(0, 0, 0, 32)
+scroll.BackgroundTransparency = 1
+scroll.BorderSizePixel = 0
+scroll.ScrollBarThickness = 4
+scroll.ScrollBarImageColor3 = Color3.fromRGB(255, 160, 50)
+scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+
+local listLayout = Instance.new("UIListLayout", scroll)
+listLayout.Padding = UDim.new(0, 6)
+listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+local scrollPad = Instance.new("UIPadding", scroll)
+scrollPad.PaddingLeft = UDim.new(0, 8)
+scrollPad.PaddingRight = UDim.new(0, 8)
+scrollPad.PaddingTop = UDim.new(0, 4)
+scrollPad.PaddingBottom = UDim.new(0, 8)
+
+-- Minimize toggle — shrinks the whole panel down to just the title bar
+minBtn.MouseButton1Click:Connect(function()
+    local minimized = not scroll.Visible
+    scroll.Visible = minimized
+    frame.Size = minimized and UDim2.new(0, 220, 0, FULL_HEIGHT) or UDim2.new(0, 220, 0, 32)
+    minBtn.Text = minimized and "—" or "▢"
+end)
 
 -- Egg count
-local countLbl = Instance.new("TextLabel", frame)
-countLbl.Size = UDim2.new(1, -16, 0, 24)
-countLbl.Position = UDim2.new(0, 8, 0, 34)
+local countLbl = Instance.new("TextLabel", scroll)
+countLbl.LayoutOrder = 1
+countLbl.Size = UDim2.new(1, 0, 0, 24)
 countLbl.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
 countLbl.BorderSizePixel = 0
 countLbl.TextColor3 = Color3.fromRGB(180, 180, 180)
 countLbl.Font = Enum.Font.Gotham
 countLbl.TextSize = 11
-countLbl.Text = "Fire eggs found: "..#getFireEggs()
+countLbl.Text = "Selected eggs found: "..#getSelectedEggs()
 Instance.new("UICorner", countLbl).CornerRadius = UDim.new(0, 6)
 task.spawn(function()
     while task.wait(2) do
-        countLbl.Text = "Fire eggs found: "..#getFireEggs()
+        countLbl.Text = "Selected eggs found: "..#getSelectedEggs()
     end
 end)
 
 -- Status
-local statusLbl = Instance.new("TextLabel", frame)
-statusLbl.Size = UDim2.new(1, -16, 0, 40)
-statusLbl.Position = UDim2.new(0, 8, 0, 64)
+local statusLbl = Instance.new("TextLabel", scroll)
+statusLbl.LayoutOrder = 2
+statusLbl.Size = UDim2.new(1, 0, 0, 40)
 statusLbl.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
 statusLbl.BorderSizePixel = 0
 statusLbl.Text = "Press Start to begin"
@@ -163,9 +298,9 @@ statusLbl.TextWrapped = true
 Instance.new("UICorner", statusLbl).CornerRadius = UDim.new(0, 8)
 
 -- Delay row
-local delayRow = Instance.new("Frame", frame)
-delayRow.Size = UDim2.new(1, -16, 0, 26)
-delayRow.Position = UDim2.new(0, 8, 0, 110)
+local delayRow = Instance.new("Frame", scroll)
+delayRow.LayoutOrder = 3
+delayRow.Size = UDim2.new(1, 0, 0, 26)
 delayRow.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
 delayRow.BorderSizePixel = 0
 Instance.new("UICorner", delayRow).CornerRadius = UDim.new(0, 6)
@@ -180,12 +315,132 @@ dbox.BackgroundColor3 = Color3.fromRGB(40, 40, 40); dbox.Text = tostring(LOOP_DE
 dbox.TextColor3 = Color3.fromRGB(255, 255, 255); dbox.Font = Enum.Font.GothamBold
 dbox.TextSize = 11; dbox.BorderSizePixel = 0; dbox.ClearTextOnFocus = false
 Instance.new("UICorner", dbox).CornerRadius = UDim.new(0, 4)
-dbox.FocusLost:Connect(function() LOOP_DELAY = tonumber(dbox.Text) or 2; dbox.Text = tostring(LOOP_DELAY) end)
+dbox.FocusLost:Connect(function() LOOP_DELAY = tonumber(dbox.Text) or 2; dbox.Text = tostring(LOOP_DELAY); saveSettings() end)
+
+-- Scan button — reveals what egg TmplIds actually exist in AreaPickUp
+-- right now, so you know what to type into the ID box below instead of
+-- guessing.
+local scanBtn = Instance.new("TextButton", scroll)
+scanBtn.LayoutOrder = 4
+scanBtn.Size = UDim2.new(1, 0, 0, 26)
+scanBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+scanBtn.TextColor3 = Color3.fromRGB(255, 220, 150)
+scanBtn.Font = Enum.Font.GothamBold
+scanBtn.TextSize = 11
+scanBtn.Text = "🔍 Scan Egg Types"
+scanBtn.BorderSizePixel = 0
+Instance.new("UICorner", scanBtn).CornerRadius = UDim.new(0, 6)
+
+local eggTypesLbl = Instance.new("TextLabel", scroll)
+eggTypesLbl.LayoutOrder = 5
+eggTypesLbl.Size = UDim2.new(1, 0, 0, 38)
+eggTypesLbl.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+eggTypesLbl.BorderSizePixel = 0
+eggTypesLbl.Text = "Tap Scan to see nearby egg IDs"
+eggTypesLbl.TextColor3 = Color3.fromRGB(160, 160, 160)
+eggTypesLbl.Font = Enum.Font.Gotham
+eggTypesLbl.TextSize = 10
+eggTypesLbl.TextWrapped = true
+eggTypesLbl.TextXAlignment = Enum.TextXAlignment.Left
+eggTypesLbl.TextYAlignment = Enum.TextYAlignment.Top
+Instance.new("UICorner", eggTypesLbl).CornerRadius = UDim.new(0, 6)
+
+scanBtn.MouseButton1Click:Connect(function()
+    local counts, sortedIds = scanEggTypes()
+    if #sortedIds == 0 then
+        eggTypesLbl.Text = "No pickups found nearby."
+        return
+    end
+    local parts = {}
+    for _, tmpl in ipairs(sortedIds) do
+        local marker = selectedEggIds[tmpl] and " ✅" or ""
+        table.insert(parts, tostring(tmpl)..": "..counts[tmpl]..marker)
+    end
+    eggTypesLbl.Text = table.concat(parts, "   ")
+end)
+
+-- Egg ID(s) row — type one or more TmplIds (comma-separated) to switch
+-- what this farms. Whatever's found here (from the scan above) is what
+-- you type in, e.g. "201,305,87". Leaving it as the default keeps
+-- farming the original Fire Egg TmplId with no setup needed.
+local idRow = Instance.new("Frame", scroll)
+idRow.LayoutOrder = 6
+idRow.Size = UDim2.new(1, 0, 0, 26)
+idRow.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+idRow.BorderSizePixel = 0
+Instance.new("UICorner", idRow).CornerRadius = UDim.new(0, 6)
+local idlbl = Instance.new("TextLabel", idRow)
+idlbl.Size = UDim2.new(0.4, 0, 1, 0); idlbl.Position = UDim2.new(0, 8, 0, 0)
+idlbl.BackgroundTransparency = 1; idlbl.Text = "Egg IDs:"
+idlbl.TextColor3 = Color3.fromRGB(150, 150, 150); idlbl.Font = Enum.Font.Gotham
+idlbl.TextSize = 10; idlbl.TextXAlignment = Enum.TextXAlignment.Left
+local idBox = Instance.new("TextBox", idRow)
+idBox.Size = UDim2.new(0.55, 0, 0, 20); idBox.Position = UDim2.new(0.42, 0, 0.5, -10)
+local function currentEggIdsText()
+    local ids = {}
+    for id in pairs(selectedEggIds) do table.insert(ids, id) end
+    table.sort(ids)
+    return table.concat(ids, ",")
+end
+
+idBox.BackgroundColor3 = Color3.fromRGB(40, 40, 40); idBox.Text = currentEggIdsText()
+idBox.TextColor3 = Color3.fromRGB(255, 255, 255); idBox.Font = Enum.Font.GothamBold
+idBox.TextSize = 10; idBox.BorderSizePixel = 0; idBox.ClearTextOnFocus = false
+Instance.new("UICorner", idBox).CornerRadius = UDim.new(0, 4)
+
+idBox.FocusLost:Connect(function()
+    local newSet = {}
+    for numStr in idBox.Text:gmatch("%d+") do
+        local n = tonumber(numStr)
+        if n then newSet[n] = true end
+    end
+    -- Only replace the selection if at least one valid number was typed --
+    -- an empty/garbled box just keeps whatever was selected before,
+    -- instead of silently farming nothing.
+    if next(newSet) then
+        selectedEggIds = newSet
+    end
+    idBox.Text = currentEggIdsText()
+    saveSettings()
+end)
+
+-- Minimum eggs row — was previously a hardcoded MIN_EGGS = 4 with no
+-- way to change it; now editable the same way the loop delay is.
+local minRow = Instance.new("Frame", scroll)
+minRow.LayoutOrder = 7
+minRow.Size = UDim2.new(1, 0, 0, 26)
+minRow.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+minRow.BorderSizePixel = 0
+Instance.new("UICorner", minRow).CornerRadius = UDim.new(0, 6)
+local minlbl = Instance.new("TextLabel", minRow)
+minlbl.Size = UDim2.new(0.55, 0, 1, 0); minlbl.Position = UDim2.new(0, 8, 0, 0)
+minlbl.BackgroundTransparency = 1; minlbl.Text = "Min eggs to start:"
+minlbl.TextColor3 = Color3.fromRGB(150, 150, 150); minlbl.Font = Enum.Font.Gotham
+minlbl.TextSize = 10; minlbl.TextXAlignment = Enum.TextXAlignment.Left
+local minBox = Instance.new("TextBox", minRow)
+minBox.Size = UDim2.new(0.35, 0, 0, 20); minBox.Position = UDim2.new(0.62, 0, 0.5, -10)
+minBox.BackgroundColor3 = Color3.fromRGB(40, 40, 40); minBox.Text = tostring(MIN_EGGS)
+minBox.TextColor3 = Color3.fromRGB(255, 255, 255); minBox.Font = Enum.Font.GothamBold
+minBox.TextSize = 11; minBox.BorderSizePixel = 0; minBox.ClearTextOnFocus = false
+Instance.new("UICorner", minBox).CornerRadius = UDim.new(0, 4)
+minBox.FocusLost:Connect(function()
+    local n = tonumber(minBox.Text)
+    if n and n >= 1 then
+        MIN_EGGS = math.floor(n)
+    end
+    minBox.Text = tostring(MIN_EGGS)
+    saveSettings()
+end)
 
 -- Save position row (two buttons side by side)
-local savePosBtn = Instance.new("TextButton", frame)
-savePosBtn.Size = UDim2.new(0.58, -4, 0, 30)
-savePosBtn.Position = UDim2.new(0, 8, 0, 142)
+local posRow = Instance.new("Frame", scroll)
+posRow.LayoutOrder = 8
+posRow.Size = UDim2.new(1, 0, 0, 30)
+posRow.BackgroundTransparency = 1
+
+local savePosBtn = Instance.new("TextButton", posRow)
+savePosBtn.Size = UDim2.new(0.58, -4, 1, 0)
+savePosBtn.Position = UDim2.new(0, 0, 0, 0)
 savePosBtn.BackgroundColor3 = Color3.fromRGB(40, 80, 160)
 savePosBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 savePosBtn.Font = Enum.Font.GothamBold
@@ -194,9 +449,9 @@ savePosBtn.Text = "📍 Save Position"
 savePosBtn.BorderSizePixel = 0
 Instance.new("UICorner", savePosBtn).CornerRadius = UDim.new(0, 8)
 
-local clearPosBtn = Instance.new("TextButton", frame)
-clearPosBtn.Size = UDim2.new(0.42, -12, 0, 30)
-clearPosBtn.Position = UDim2.new(0.58, 4, 0, 142)
+local clearPosBtn = Instance.new("TextButton", posRow)
+clearPosBtn.Size = UDim2.new(0.42, -4, 1, 0)
+clearPosBtn.Position = UDim2.new(0.58, 4, 0, 0)
 clearPosBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
 clearPosBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
 clearPosBtn.Font = Enum.Font.GothamBold
@@ -205,13 +460,19 @@ clearPosBtn.Text = "❌ Clear"
 clearPosBtn.BorderSizePixel = 0
 Instance.new("UICorner", clearPosBtn).CornerRadius = UDim.new(0, 8)
 
--- Saved pos label
-local posLbl = Instance.new("TextLabel", frame)
-posLbl.Size = UDim2.new(1, -16, 0, 20)
-posLbl.Position = UDim2.new(0, 8, 0, 176)
+-- Saved pos label -- reflects a loaded position from a previous session
+-- if one exists, instead of always showing "No position saved"
+local posLbl = Instance.new("TextLabel", scroll)
+posLbl.LayoutOrder = 9
+posLbl.Size = UDim2.new(1, 0, 0, 20)
 posLbl.BackgroundTransparency = 1
-posLbl.Text = "No position saved"
-posLbl.TextColor3 = Color3.fromRGB(120, 120, 120)
+if savedPos then
+    posLbl.Text = string.format("📍 %.0f, %.0f, %.0f", savedPos.X, savedPos.Y, savedPos.Z)
+    posLbl.TextColor3 = Color3.fromRGB(100, 220, 100)
+else
+    posLbl.Text = "No position saved"
+    posLbl.TextColor3 = Color3.fromRGB(120, 120, 120)
+end
 posLbl.Font = Enum.Font.Gotham
 posLbl.TextSize = 10
 posLbl.TextXAlignment = Enum.TextXAlignment.Left
@@ -226,6 +487,7 @@ savePosBtn.MouseButton1Click:Connect(function()
         savePosBtn.BackgroundColor3 = Color3.fromRGB(30, 120, 60)
         savePosBtn.Text = "📍 Saved!"
         task.delay(1.5, function() savePosBtn.Text = "📍 Save Position"; savePosBtn.BackgroundColor3 = Color3.fromRGB(40, 80, 160) end)
+        saveSettings()
     end
 end)
 
@@ -233,22 +495,24 @@ clearPosBtn.MouseButton1Click:Connect(function()
     savedPos = nil
     posLbl.Text = "No position saved"
     posLbl.TextColor3 = Color3.fromRGB(120, 120, 120)
+    saveSettings()
 end)
 
--- Start/Stop
-local btn = Instance.new("TextButton", frame)
-btn.Size = UDim2.new(1, -16, 0, 36)
-btn.Position = UDim2.new(0, 8, 0, 180)
-btn.BackgroundColor3 = Color3.fromRGB(200, 80, 20)
+-- Start/Stop -- initial color/text reflects a loaded running state
+-- (actual thread resume happens in the delayed block further down)
+local btn = Instance.new("TextButton", scroll)
+btn.LayoutOrder = 10
+btn.Size = UDim2.new(1, 0, 0, 36)
+btn.BackgroundColor3 = running and Color3.fromRGB(160, 30, 10) or Color3.fromRGB(200, 80, 20)
 btn.TextColor3 = Color3.fromRGB(255, 255, 255)
 btn.Font = Enum.Font.GothamBold
 btn.TextSize = 14
-btn.Text = "▶ Start"
+btn.Text = running and "⏹ Stop" or "▶ Start"
 btn.BorderSizePixel = 0
 Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 10)
 
-btn.MouseButton1Click:Connect(function()
-    running = not running
+local function setRunningState(state)
+    running = state
     if running then
         runId += 1
         btn.BackgroundColor3 = Color3.fromRGB(160, 30, 10)
@@ -260,6 +524,20 @@ btn.MouseButton1Click:Connect(function()
         btn.Text = "▶ Start"
         statusLbl.Text = "Stopping..."
     end
+    saveSettings()
+end
+
+btn.MouseButton1Click:Connect(function()
+    setRunningState(not running)
 end)
 
-print("[FireEggs] Ready! Found "..#getFireEggs().." fire eggs.")
+print("[FireEggs] Ready! Found "..#getSelectedEggs().." matching eggs.")
+
+-- Auto-resume farming if it was running when settings were last saved
+-- (e.g. right before a rejoin), so it picks back up without needing to
+-- manually hit Start again. Small delay to let things settle first.
+if running then
+    task.delay(1, function()
+        setRunningState(true)
+    end)
+end
