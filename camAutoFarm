@@ -4418,8 +4418,12 @@ end)
 -- Only fires once per win (restartFiredForSyncKey guard), waits for
 -- RestartInfo to become available before calling, and backs off safely.
 spawnTracked("autoReplayLoop", function()
+    -- State machine: watches for RestartInfo to appear (win), fires once,
+    -- then waits for RestartInfo to DISAPPEAR (restart processing) before
+    -- re-arming. This correctly handles replaying the same Abyss instance
+    -- where the AbyssSyncKey stays the same.
     local lastSyncKey = nil
-    local restartFiredForSyncKey = false
+    local waitingForRestartInfoToClear = false -- true after we've fired; waiting for the restart to process
 
     while task.wait(1) do
         if not autoReplayEnabled then continue end
@@ -4427,10 +4431,10 @@ spawnTracked("autoReplayLoop", function()
         local ok, syncKey = pcall(function() return LP:GetAttribute("AbyssSyncKey") end)
         if not ok then syncKey = nil end
 
-        -- Detect entering a new Abyss (sync key changed)
+        -- Sync key changed = entered a new Abyss or left entirely
         if syncKey ~= lastSyncKey then
             lastSyncKey = syncKey
-            restartFiredForSyncKey = false
+            waitingForRestartInfoToClear = false
             if syncKey then
                 AutoReplayStatusLbl.Text = "In Abyss — monitoring..."
                 AutoReplayStatusLbl.TextColor3 = C.sub
@@ -4440,27 +4444,19 @@ spawnTracked("autoReplayLoop", function()
             end
         end
 
-        -- Not in an Abyss, nothing to do
+        -- Not in an Abyss
         if not syncKey then continue end
 
-        -- Already fired for this Abyss instance, wait for next one
-        if restartFiredForSyncKey then continue end
-
-        -- Check if restart is available via the game's DataSyncUtil
+        -- Check current RestartInfo state
         local hasRestartInfo = false
         local restartAvailable = false
         pcall(function()
-            local PT = _G.PathTool
-            if not PT then
-                PT = getPathToolSafe()
-            end
+            local PT = _G.PathTool or getPathToolSafe()
             local DSU = PT and PT.DataSyncUtil
             if DSU and DSU.GetValue then
                 local restartInfo = DSU.GetValue(syncKey, {"RestartInfo"})
                 if restartInfo then
                     hasRestartInfo = true
-                    -- PlayerId == 0 means no one has pressed restart yet
-                    -- (the BtRestart button is visible in the game UI)
                     if restartInfo.PlayerId == 0 then
                         restartAvailable = true
                     end
@@ -4468,16 +4464,27 @@ spawnTracked("autoReplayLoop", function()
             end
         end)
 
+        -- After firing, wait for RestartInfo to CLEAR (restart is processing)
+        -- before re-arming. This is the key fix: on replay, the sync key
+        -- doesn't change, so we wait for the actual state transition instead.
+        if waitingForRestartInfoToClear then
+            if not hasRestartInfo then
+                -- RestartInfo gone — restart is processing, re-arm for next win
+                waitingForRestartInfoToClear = false
+                AutoReplayStatusLbl.Text = "Restart processing — ready for next win..."
+                AutoReplayStatusLbl.TextColor3 = C.sub
+            end
+            continue
+        end
+
+        -- Armed: waiting for a win screen with restart available
         if hasRestartInfo and restartAvailable then
             AutoReplayStatusLbl.Text = "Restarting Abyss..."
             AutoReplayStatusLbl.TextColor3 = C.gold
 
             local success = false
             pcall(function()
-                local PT = _G.PathTool
-                if not PT then
-                    PT = getPathToolSafe()
-                end
+                local PT = _G.PathTool or getPathToolSafe()
                 if PT and PT.AbyssSystem and PT.AbyssSystem.ClientRestartAbyss then
                     PT.AbyssSystem.ClientRestartAbyss()
                     success = true
@@ -4485,18 +4492,16 @@ spawnTracked("autoReplayLoop", function()
             end)
 
             if success then
-                restartFiredForSyncKey = true
+                waitingForRestartInfoToClear = true
                 AutoReplayStatusLbl.Text = "Replay sent!"
                 AutoReplayStatusLbl.TextColor3 = C.green
-                -- Wait a bit before monitoring again to avoid double-fire
-                task.wait(5)
             else
                 AutoReplayStatusLbl.Text = "Restart call failed — retrying..."
                 AutoReplayStatusLbl.TextColor3 = C.red
                 task.wait(3)
             end
         elseif hasRestartInfo then
-            -- RestartInfo exists but PlayerId != 0 (waiting/pending)
+            -- RestartInfo exists but PlayerId != 0 (someone else already pressed it)
             AutoReplayStatusLbl.Text = "Restart pending..."
             AutoReplayStatusLbl.TextColor3 = C.sub
         end
