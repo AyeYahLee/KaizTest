@@ -4825,21 +4825,20 @@ function autoAbyssLoop(myGen)
                 lastStage = stage
 
                 if lastChosenRoomType == 4 then
-                    -- Rest room: teleport to talent, select it, then pick next door
-                    AbyssStatusLbl.Text = "Rest room - finding talent..."
+                    -- Rest room: if talent exists, teleport to it and select, then pick next door
+                    AbyssStatusLbl.Text = "Rest room..."
                     AbyssStatusLbl.TextColor3 = C.accent
 
-                    -- Teleport to talent model (jitan2)
-                    teleportToTalentModel()
-                    task.wait(0.5)
-
-                    -- Try to select talent if available
+                    -- Check if this Rest room has a talent selection
                     local restTalentInfo = getAbyssSyncValue(syncKey, {"TalentInfo"})
                     if restTalentInfo and restTalentInfo.Seed then
                         local restPlayerSelect = restTalentInfo.PlayerSelect
                         local restAlreadySelected = restPlayerSelect and restPlayerSelect[tostring(LP.UserId)]
                         if not restAlreadySelected and autoSelectTalent then
+                            -- Talent exists and not yet selected - teleport to it
                             AbyssStatusLbl.Text = "Rest room - selecting talent..."
+                            teleportToTalentModel()
+                            task.wait(0.5)
                             tryAutoSelectTalent(syncKey)
                             task.wait(1)
 
