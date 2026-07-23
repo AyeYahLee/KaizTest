@@ -3288,10 +3288,10 @@ autoSelectTalent = true -- always auto-select highest quality talent
 
 -- Available Abyss difficulties from CfgAbyss.Tmpls
 local ABYSS_DIFFICULTIES = {
-    {id = 1001, name = "Cinderclaw Castle (Easy)"},
-    {id = 1002, name = "Cinderclaw Castle (Normal)"},
-    {id = 1003, name = "Cinderclaw Castle (Hard)"},
-    {id = 1004, name = "Cinderclaw Castle (Expert)"},
+    {id = 1001, name = "Cinderclaw Castle (Normal)"},
+    {id = 1002, name = "Cinderclaw Castle (Hard)"},
+    {id = 1003, name = "Cinderclaw Castle (Nightmare)"},
+    {id = 1004, name = "Cinderclaw Castle (Inferno)"},
     {id = 1005, name = "Treasure Vault (Coin)"},
     {id = 1006, name = "Treasure Vault (EXP)"},
     {id = 1007, name = "Treasure Vault (Mark)"},
@@ -4797,6 +4797,36 @@ function teleportToTalentModel()
     return false
 end
 
+-- Finds the closest room in SpaceModels to the player right now.
+-- Returns (centerCFrame, distance) or (nil, nil) if nothing found.
+-- Shared by both the initial floor-change centering and the periodic
+-- drift-check below, so there's one copy of this logic instead of two.
+local function getClosestRoomCenter()
+    local root = getRoot()
+    if not root then return nil, nil end
+
+    local closestRoom = nil
+    local closestDist = math.huge
+    local spaceModels = workspace:FindFirstChild("SpaceModels")
+    if spaceModels then
+        for _, room in ipairs(spaceModels:GetChildren()) do
+            local roomRoot = room:FindFirstChild("Root")
+            if roomRoot then
+                local dist = (root.Position - roomRoot.Position).Magnitude
+                if dist < closestDist then
+                    closestDist = dist
+                    closestRoom = room
+                end
+            end
+        end
+    end
+
+    if closestRoom and closestRoom:FindFirstChild("Root") then
+        return closestRoom.Root.CFrame, closestDist
+    end
+    return nil, nil
+end
+
 function autoAbyssLoop(myGen)
     local function stillRunning()
         return autoAbyssEnabled and myGen == _G.NoxarAbyssLoopGeneration
@@ -4881,28 +4911,11 @@ function autoAbyssLoop(myGen)
                     AbyssStatusLbl.TextColor3 = C.accent
 
                     local root = getRoot()
-                    if root then
-                        -- Find the closest room in SpaceModels and teleport to its Root
-                        local closestRoom = nil
-                        local closestDist = math.huge
-                        local spaceModels = workspace:FindFirstChild("SpaceModels")
-                        if spaceModels then
-                            for _, room in ipairs(spaceModels:GetChildren()) do
-                                local roomRoot = room:FindFirstChild("Root")
-                                if roomRoot then
-                                    local dist = (root.Position - roomRoot.Position).Magnitude
-                                    if dist < closestDist then
-                                        closestDist = dist
-                                        closestRoom = room
-                                    end
-                                end
-                            end
-                        end
-                        if closestRoom and closestRoom:FindFirstChild("Root") then
-                            root.CFrame = closestRoom.Root.CFrame + Vector3.new(0, 3, 0)
-                            root.AssemblyLinearVelocity = Vector3.zero
-                            root.AssemblyAngularVelocity = Vector3.zero
-                        end
+                    local centerCFrame = getClosestRoomCenter()
+                    if root and centerCFrame then
+                        root.CFrame = centerCFrame + Vector3.new(0, 3, 0)
+                        root.AssemblyLinearVelocity = Vector3.zero
+                        root.AssemblyAngularVelocity = Vector3.zero
                     end
                     task.wait(0.5) -- brief settle after teleport
                 end
@@ -5041,6 +5054,25 @@ function autoAbyssLoop(myGen)
             end
 
             -- No boss bar, check if monsters exist
+            -- Drift check: sometimes floor spawn lands you away from the
+            -- actual room center (rare, but happens). Only re-center here
+            -- -- while genuinely fighting, not during doors/talent/rest/
+            -- restart/boss-fights -- and only if actually far away, so
+            -- this doesn't fight against normal in-combat movement.
+            local ABYSS_DRIFT_THRESHOLD = 20
+            local driftCenter, driftDist = getClosestRoomCenter()
+            if driftCenter and driftDist and driftDist > ABYSS_DRIFT_THRESHOLD then
+                local driftRoot = getRoot()
+                if driftRoot then
+                    AbyssStatusLbl.Text = "📍 Floor " .. tostring(stage or "?") .. " — re-centering (drifted)..."
+                    AbyssStatusLbl.TextColor3 = C.accent
+                    driftRoot.CFrame = driftCenter + Vector3.new(0, 3, 0)
+                    driftRoot.AssemblyLinearVelocity = Vector3.zero
+                    driftRoot.AssemblyAngularVelocity = Vector3.zero
+                    task.wait(0.3)
+                end
+            end
+
             if #clientMonsters:GetChildren() > 0 then
                 -- Auto-attack: call the game's attack function on every alive monster
                 for _, m in ipairs(clientMonsters:GetChildren()) do
