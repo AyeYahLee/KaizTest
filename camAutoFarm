@@ -395,7 +395,9 @@ function saveConfig()
             autoHealEnabled = autoHealEnabled,
             autoHealThreshold = autoHealThreshold,
             autoUseRiftItemEnabled = autoUseRiftItemEnabled,
-            autoReplayEnabled = autoReplayEnabled
+            -- Auto Abyss
+            autoAbyssEnabled = autoAbyssEnabled,
+            selectedAbyssTmplId = selectedAbyssTmplId
         }
         pcall(function()
             writefile(configFileName, HttpService:JSONEncode(data))
@@ -436,7 +438,9 @@ function loadConfig()
             if data.autoHealEnabled ~= nil then autoHealEnabled = data.autoHealEnabled end
             if data.autoHealThreshold ~= nil then autoHealThreshold = data.autoHealThreshold end
             if data.autoUseRiftItemEnabled ~= nil then autoUseRiftItemEnabled = data.autoUseRiftItemEnabled end
-            if data.autoReplayEnabled ~= nil then autoReplayEnabled = data.autoReplayEnabled end
+            -- Auto Abyss restore
+            if data.autoAbyssEnabled ~= nil then autoAbyssEnabled = data.autoAbyssEnabled end
+            if data.selectedAbyssTmplId ~= nil then selectedAbyssTmplId = data.selectedAbyssTmplId end
         end)
     end
 end
@@ -1044,7 +1048,7 @@ NoxarUI.nav(TabAreaFarmBtn, false)
 TabRiftBtn = Instance.new("TextButton", TabBar)
 TabRiftBtn.Size = UDim2.new(1, -12, 0, 36)
 TabRiftBtn.Position = UDim2.new(0, 7, 0, 94)
-TabRiftBtn.Text = "  Rift"
+TabRiftBtn.Text = "  Abyss"
 NoxarUI.nav(TabRiftBtn, false)
 
 -- Page area
@@ -3276,7 +3280,32 @@ riftKillCount = riftKillCount or 0
 autoHealEnabled = autoHealEnabled or false
 autoHealThreshold = math.max(1, math.floor(tonumber(autoHealThreshold) or 1))
 autoUseRiftItemEnabled = autoUseRiftItemEnabled or false
-autoReplayEnabled = autoReplayEnabled or false
+
+-- Auto Abyss States
+autoAbyssEnabled = autoAbyssEnabled or false
+selectedAbyssTmplId = selectedAbyssTmplId or 1001 -- default: Easy (Cinderclaw Castle)
+autoSelectTalent = true -- always auto-select highest quality talent
+
+-- Available Abyss difficulties from CfgAbyss.Tmpls
+local ABYSS_DIFFICULTIES = {
+    {id = 1001, name = "Cinderclaw Castle (Easy)"},
+    {id = 1002, name = "Cinderclaw Castle (Normal)"},
+    {id = 1003, name = "Cinderclaw Castle (Hard)"},
+    {id = 1004, name = "Cinderclaw Castle (Expert)"},
+    {id = 1005, name = "Treasure Vault (Coin)"},
+    {id = 1006, name = "Treasure Vault (EXP)"},
+    {id = 1007, name = "Treasure Vault (Mark)"},
+    {id = 1008, name = "Treasure Vault"},
+    {id = 1009, name = "Six Day Only"},
+}
+
+-- Room type names for display
+local ROOM_TYPE_NAMES = {
+    [1] = "Combat",
+    [2] = "Elite",
+    [3] = "Boss",
+    [4] = "Rest",
+}
 -- Captured when a Rift run starts; compared only after that Rift is over.
 riftPetCountAtStart = nil
 -- Mutex/queue gate: no Rift search may start while Auto Heal is active.
@@ -4185,15 +4214,22 @@ RiftTabPadding = Instance.new("UIPadding", RiftTab)
 RiftTabPadding.PaddingTop = UDim.new(0, 6)
 RiftTabPadding.PaddingBottom = UDim.new(0, 34)
 
+-- Divider before Rift section
+RiftSectionDivider = Instance.new("Frame", RiftTab)
+RiftSectionDivider.Size = UDim2.new(1, -20, 0, 1)
+RiftSectionDivider.BackgroundColor3 = C.border
+RiftSectionDivider.BorderSizePixel = 0
+RiftSectionDivider.LayoutOrder = 22
+
 RiftHeaderLbl = Instance.new("TextLabel", RiftTab)
 RiftHeaderLbl.Size = UDim2.new(1, -20, 0, 14)
 RiftHeaderLbl.BackgroundTransparency = 1
 RiftHeaderLbl.Text = "Auto Rift"
-RiftHeaderLbl.TextColor3 = C.accent
+RiftHeaderLbl.TextColor3 = C.gold
 RiftHeaderLbl.Font = Enum.Font.GothamBold
 RiftHeaderLbl.TextSize = 11
 RiftHeaderLbl.TextXAlignment = Enum.TextXAlignment.Left
-RiftHeaderLbl.LayoutOrder = 1
+RiftHeaderLbl.LayoutOrder = 23
 
 -- Status card: shows exactly what the loop is doing right now (scanning,
 -- teleporting, fighting, leaving, etc.)
@@ -4201,7 +4237,7 @@ RiftStatusCard = Instance.new("Frame", RiftTab)
 RiftStatusCard.Size = UDim2.new(1, -20, 0, 54)
 RiftStatusCard.BackgroundColor3 = C.surface
 RiftStatusCard.BorderSizePixel = 0
-RiftStatusCard.LayoutOrder = 2
+RiftStatusCard.LayoutOrder = 24
 Instance.new("UICorner", RiftStatusCard).CornerRadius = UDim.new(0, 9)
 
 RiftStatusLbl = Instance.new("TextLabel", RiftStatusCard)
@@ -4232,17 +4268,17 @@ RiftDelayLbl = Instance.new("TextLabel", RiftTab)
 RiftDelayLbl.Size = UDim2.new(1, -20, 0, 14)
 RiftDelayLbl.BackgroundTransparency = 1
 RiftDelayLbl.Text = "Delay Before Leaving Arena"
-RiftDelayLbl.TextColor3 = C.accent
+RiftDelayLbl.TextColor3 = C.gold
 RiftDelayLbl.Font = Enum.Font.GothamBold
 RiftDelayLbl.TextSize = 11
 RiftDelayLbl.TextXAlignment = Enum.TextXAlignment.Left
-RiftDelayLbl.LayoutOrder = 3
+RiftDelayLbl.LayoutOrder = 25
 
 RiftDelayRow = Instance.new("Frame", RiftTab)
 RiftDelayRow.Size = UDim2.new(1, -20, 0, 26)
 RiftDelayRow.BackgroundColor3 = C.surface
 RiftDelayRow.BorderSizePixel = 0
-RiftDelayRow.LayoutOrder = 4
+RiftDelayRow.LayoutOrder = 26
 Instance.new("UICorner", RiftDelayRow).CornerRadius = UDim.new(0, 9)
 
 RiftDelayBox = Instance.new("TextBox", RiftDelayRow)
@@ -4280,17 +4316,17 @@ AutoHealTitleLbl = Instance.new("TextLabel", RiftTab)
 AutoHealTitleLbl.Size = UDim2.new(1, -20, 0, 14)
 AutoHealTitleLbl.BackgroundTransparency = 1
 AutoHealTitleLbl.Text = "Auto Heal"
-AutoHealTitleLbl.TextColor3 = C.accent
+AutoHealTitleLbl.TextColor3 = C.gold
 AutoHealTitleLbl.Font = Enum.Font.GothamBold
 AutoHealTitleLbl.TextSize = 11
 AutoHealTitleLbl.TextXAlignment = Enum.TextXAlignment.Left
-AutoHealTitleLbl.LayoutOrder = 5
+AutoHealTitleLbl.LayoutOrder = 27
 
 AutoHealRow = Instance.new("Frame", RiftTab)
 AutoHealRow.Size = UDim2.new(1, -20, 0, 30)
 AutoHealRow.BackgroundColor3 = C.surface
 AutoHealRow.BorderSizePixel = 0
-AutoHealRow.LayoutOrder = 6
+AutoHealRow.LayoutOrder = 28
 Instance.new("UICorner", AutoHealRow).CornerRadius = UDim.new(0, 9)
 
 AutoHealToggleBtn = Instance.new("TextButton", AutoHealRow)
@@ -4347,11 +4383,11 @@ AutoUseRiftTitleLbl = Instance.new("TextLabel", RiftTab)
 AutoUseRiftTitleLbl.Size = UDim2.new(1, -20, 0, 14)
 AutoUseRiftTitleLbl.BackgroundTransparency = 1
 AutoUseRiftTitleLbl.Text = "Auto Use Rift Item"
-AutoUseRiftTitleLbl.TextColor3 = C.accent
+AutoUseRiftTitleLbl.TextColor3 = C.gold
 AutoUseRiftTitleLbl.Font = Enum.Font.GothamBold
 AutoUseRiftTitleLbl.TextSize = 11
 AutoUseRiftTitleLbl.TextXAlignment = Enum.TextXAlignment.Left
-AutoUseRiftTitleLbl.LayoutOrder = 7
+AutoUseRiftTitleLbl.LayoutOrder = 29
 
 AutoUseRiftBtn = Instance.new("TextButton", RiftTab)
 AutoUseRiftBtn.Size = UDim2.new(1, -20, 0, 30)
@@ -4360,7 +4396,7 @@ AutoUseRiftBtn.TextColor3 = autoUseRiftItemEnabled and C.bg or C.text
 AutoUseRiftBtn.Text = autoUseRiftItemEnabled and "AUTO USE ITEM 11010: ON" or "AUTO USE ITEM 11010: OFF"
 AutoUseRiftBtn.Font = Enum.Font.GothamBold
 AutoUseRiftBtn.TextSize = 10
-AutoUseRiftBtn.LayoutOrder = 8
+AutoUseRiftBtn.LayoutOrder = 30
 Instance.new("UICorner", AutoUseRiftBtn).CornerRadius = UDim.new(0, 9)
 
 AutoUseRiftBtn.MouseButton1Click:Connect(function()
@@ -4371,142 +4407,715 @@ AutoUseRiftBtn.MouseButton1Click:Connect(function()
     saveConfig()
 end)
 
--- Auto Replay: automatically restarts the Abyss when the win/replay screen
--- appears. Detects restart availability via RestartInfo.PlayerId == 0 using
--- the player's AbyssSyncKey and the game's own DataSyncUtil, then fires
--- _G.PathTool.AbyssSystem.ClientRestartAbyss() once per win (no spam).
-AutoReplayTitleLbl = Instance.new("TextLabel", RiftTab)
-AutoReplayTitleLbl.Size = UDim2.new(1, -20, 0, 14)
-AutoReplayTitleLbl.BackgroundTransparency = 1
-AutoReplayTitleLbl.Text = "Auto Abyss Replay"
-AutoReplayTitleLbl.TextColor3 = C.accent
-AutoReplayTitleLbl.Font = Enum.Font.GothamBold
-AutoReplayTitleLbl.TextSize = 11
-AutoReplayTitleLbl.TextXAlignment = Enum.TextXAlignment.Left
-AutoReplayTitleLbl.LayoutOrder = 10
+-- ══════════════════════════════════════════════════════════════════
+-- AUTO ABYSS (UI)
+-- ══════════════════════════════════════════════════════════════════
+AbyssSectionDivider2 = Instance.new("Frame", RiftTab)
+AbyssSectionDivider2.Size = UDim2.new(1, -20, 0, 1)
+AbyssSectionDivider2.BackgroundColor3 = C.border
+AbyssSectionDivider2.BorderSizePixel = 0
+AbyssSectionDivider2.LayoutOrder = 9
 
-AutoReplayBtn = Instance.new("TextButton", RiftTab)
-AutoReplayBtn.Size = UDim2.new(1, -20, 0, 30)
-AutoReplayBtn.BackgroundColor3 = autoReplayEnabled and C.green or C.red
-AutoReplayBtn.TextColor3 = autoReplayEnabled and C.bg or C.text
-AutoReplayBtn.Text = autoReplayEnabled and "AUTO REPLAY: ON" or "AUTO REPLAY: OFF"
-AutoReplayBtn.Font = Enum.Font.GothamBold
-AutoReplayBtn.TextSize = 10
-AutoReplayBtn.LayoutOrder = 11
-Instance.new("UICorner", AutoReplayBtn).CornerRadius = UDim.new(0, 9)
+AbyssTitleLbl = Instance.new("TextLabel", RiftTab)
+AbyssTitleLbl.Size = UDim2.new(1, -20, 0, 14)
+AbyssTitleLbl.BackgroundTransparency = 1
+AbyssTitleLbl.Text = "Auto Abyss"
+AbyssTitleLbl.TextColor3 = C.gold
+AbyssTitleLbl.Font = Enum.Font.GothamBlack
+AbyssTitleLbl.TextSize = 12
+AbyssTitleLbl.TextXAlignment = Enum.TextXAlignment.Left
+AbyssTitleLbl.LayoutOrder = 10
 
-AutoReplayStatusLbl = Instance.new("TextLabel", RiftTab)
-AutoReplayStatusLbl.Size = UDim2.new(1, -20, 0, 14)
-AutoReplayStatusLbl.BackgroundTransparency = 1
-AutoReplayStatusLbl.Text = autoReplayEnabled and "Monitoring..." or "Disabled"
-AutoReplayStatusLbl.TextColor3 = autoReplayEnabled and C.sub or C.sub
-AutoReplayStatusLbl.Font = Enum.Font.GothamSemibold
-AutoReplayStatusLbl.TextSize = 10
-AutoReplayStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
-AutoReplayStatusLbl.LayoutOrder = 12
+-- Difficulty selector
+AbyssDiffLbl = Instance.new("TextLabel", RiftTab)
+AbyssDiffLbl.Size = UDim2.new(1, -20, 0, 14)
+AbyssDiffLbl.BackgroundTransparency = 1
+AbyssDiffLbl.Text = "Difficulty"
+AbyssDiffLbl.TextColor3 = C.gold
+AbyssDiffLbl.Font = Enum.Font.GothamBold
+AbyssDiffLbl.TextSize = 11
+AbyssDiffLbl.TextXAlignment = Enum.TextXAlignment.Left
+AbyssDiffLbl.LayoutOrder = 11
 
-AutoReplayBtn.MouseButton1Click:Connect(function()
-    autoReplayEnabled = not autoReplayEnabled
-    AutoReplayBtn.BackgroundColor3 = autoReplayEnabled and C.green or C.red
-    AutoReplayBtn.TextColor3 = autoReplayEnabled and C.bg or C.text
-    AutoReplayBtn.Text = autoReplayEnabled and "AUTO REPLAY: ON" or "AUTO REPLAY: OFF"
-    AutoReplayStatusLbl.Text = autoReplayEnabled and "Monitoring..." or "Disabled"
+AbyssDiffBtn = Instance.new("TextButton", RiftTab)
+AbyssDiffBtn.Size = UDim2.new(1, -20, 0, 26)
+AbyssDiffBtn.BackgroundColor3 = C.card2
+AbyssDiffBtn.TextColor3 = C.text
+AbyssDiffBtn.Font = Enum.Font.GothamSemibold
+AbyssDiffBtn.TextSize = 10
+AbyssDiffBtn.TextXAlignment = Enum.TextXAlignment.Left
+NoxarUI.drop(AbyssDiffBtn)
+AbyssDiffBtn.LayoutOrder = 12
+
+-- Update difficulty button text
+local function updateAbyssDiffBtnText()
+    for _, diff in ipairs(ABYSS_DIFFICULTIES) do
+        if diff.id == selectedAbyssTmplId then
+            AbyssDiffBtn.Text = "  ▼  " .. diff.name
+            return
+        end
+    end
+    AbyssDiffBtn.Text = "  ▼  ID: " .. tostring(selectedAbyssTmplId)
+end
+updateAbyssDiffBtnText()
+
+-- Difficulty dropdown list
+AbyssDiffScroll = Instance.new("ScrollingFrame", RiftTab)
+AbyssDiffScroll.Size = UDim2.new(1, -20, 0, 0)
+AbyssDiffScroll.BackgroundColor3 = C.surface
+AbyssDiffScroll.ScrollBarThickness = 3
+AbyssDiffScroll.ScrollBarImageColor3 = C.accent
+AbyssDiffScroll.BorderSizePixel = 0
+AbyssDiffScroll.Visible = false
+AbyssDiffScroll.ClipsDescendants = true
+AbyssDiffScroll.LayoutOrder = 13
+Instance.new("UICorner", AbyssDiffScroll).CornerRadius = UDim.new(0, 9)
+AbyssDiffScrollList = Instance.new("UIListLayout", AbyssDiffScroll)
+AbyssDiffScrollList.Padding = UDim.new(0, 2)
+Instance.new("UIPadding", AbyssDiffScroll).PaddingTop = UDim.new(0, 3)
+
+for _, diff in ipairs(ABYSS_DIFFICULTIES) do
+    local diffBtn = NoxarUI.choiceRow(AbyssDiffScroll, diff.name, "ID " .. tostring(diff.id), selectedAbyssTmplId == diff.id)
+    diffBtn.MouseButton1Click:Connect(function()
+        selectedAbyssTmplId = diff.id
+        updateAbyssDiffBtnText()
+        NoxarUI.animateDrop(AbyssDiffScroll, false, 120)
+        saveConfig()
+    end)
+end
+
+AbyssDiffBtn.MouseButton1Click:Connect(function()
+    local open = not AbyssDiffScroll.Visible
+    AbyssDiffBtn.Text = open and "  ▲  Close" or ("  ▼  " .. (function()
+        for _, d in ipairs(ABYSS_DIFFICULTIES) do if d.id == selectedAbyssTmplId then return d.name end end
+        return "ID " .. tostring(selectedAbyssTmplId)
+    end)())
+    NoxarUI.animateDrop(AbyssDiffScroll, open, 120)
+end)
+
+-- Room preference display
+AbyssRoomPrefLbl = Instance.new("TextLabel", RiftTab)
+AbyssRoomPrefLbl.Size = UDim2.new(1, -20, 0, 14)
+AbyssRoomPrefLbl.BackgroundTransparency = 1
+AbyssRoomPrefLbl.Text = "Uses your in-game Reward Priority settings"
+AbyssRoomPrefLbl.TextColor3 = C.sub
+AbyssRoomPrefLbl.Font = Enum.Font.Gotham
+AbyssRoomPrefLbl.TextSize = 9
+AbyssRoomPrefLbl.TextXAlignment = Enum.TextXAlignment.Left
+AbyssRoomPrefLbl.LayoutOrder = 14
+
+-- Status
+AbyssStatusLbl = Instance.new("TextLabel", RiftTab)
+AbyssStatusLbl.Size = UDim2.new(1, -20, 0, 22)
+AbyssStatusLbl.BackgroundColor3 = C.surface
+AbyssStatusLbl.Text = autoAbyssEnabled and "Waiting to start..." or "Disabled"
+AbyssStatusLbl.TextColor3 = C.sub
+AbyssStatusLbl.Font = Enum.Font.GothamSemibold
+AbyssStatusLbl.TextSize = 10
+Instance.new("UICorner", AbyssStatusLbl).CornerRadius = UDim.new(0, 9)
+AbyssStatusLbl.LayoutOrder = 15
+
+-- Toggle
+AbyssToggleBtn = Instance.new("TextButton", RiftTab)
+AbyssToggleBtn.Size = UDim2.new(1, -20, 0, 30)
+AbyssToggleBtn.BackgroundColor3 = autoAbyssEnabled and C.green or C.red
+AbyssToggleBtn.TextColor3 = autoAbyssEnabled and C.bg or C.text
+AbyssToggleBtn.Text = autoAbyssEnabled and "● AUTO ABYSS: ON" or "● AUTO ABYSS: OFF"
+AbyssToggleBtn.Font = Enum.Font.GothamBold
+AbyssToggleBtn.TextSize = 11
+AbyssToggleBtn.LayoutOrder = 16
+Instance.new("UICorner", AbyssToggleBtn).CornerRadius = UDim.new(0, 9)
+
+AbyssToggleBtn.MouseButton1Click:Connect(function()
+    autoAbyssEnabled = not autoAbyssEnabled
+    if autoAbyssEnabled then
+        AbyssToggleBtn.BackgroundColor3 = C.green
+        AbyssToggleBtn.TextColor3 = C.bg
+        AbyssToggleBtn.Text = "● AUTO ABYSS: ON"
+        startAutoAbyss()
+    else
+        AbyssToggleBtn.BackgroundColor3 = C.red
+        AbyssToggleBtn.TextColor3 = C.text
+        AbyssToggleBtn.Text = "● AUTO ABYSS: OFF"
+        stopAutoAbyss()
+    end
     saveConfig()
 end)
 
--- Background loop: monitors AbyssSyncKey for restart availability.
--- Only fires once per win (restartFiredForSyncKey guard), waits for
--- RestartInfo to become available before calling, and backs off safely.
-spawnTracked("autoReplayLoop", function()
     -- State machine: watches for RestartInfo to appear (win), fires once,
-    -- then waits for RestartInfo to DISAPPEAR (restart processing) before
-    -- re-arming. This correctly handles replaying the same Abyss instance
-    -- where the AbyssSyncKey stays the same.
-    local lastSyncKey = nil
-    local waitingForRestartInfoToClear = false -- true after we've fired; waiting for the restart to process
+-- ══════════════════════════════════════════════════════════════════
+-- AUTO ABYSS — full automation: create team, fight rooms, select
+-- talents, pick doors by room type preference, win → restart loop.
+-- ══════════════════════════════════════════════════════════════════
+_G.NoxarAbyssLoopGeneration = (_G.NoxarAbyssLoopGeneration or 0) + 1
 
-    while task.wait(1) do
-        if not autoReplayEnabled then continue end
+-- Check if player is currently inside an Abyss area
+local function isInAbyssArea()
+    local ok, areaId = pcall(function()
+        local PT = _G.PathTool or getPathToolSafe()
+        return PT and PT.AreaUtil and PT.AreaUtil.GetLocalPlayerAreaId()
+    end)
+    if not ok or not areaId then return false, nil end
 
-        local ok, syncKey = pcall(function() return LP:GetAttribute("AbyssSyncKey") end)
-        if not ok then syncKey = nil end
+    local isAbyss = false
+    pcall(function()
+        local PT = _G.PathTool or getPathToolSafe()
+        isAbyss = PT and PT.CfgGlobal and PT.CfgGlobal.AreaIdIsAbyss(areaId)
+    end)
+    return isAbyss, areaId
+end
 
-        -- Sync key changed = entered a new Abyss or left entirely
-        if syncKey ~= lastSyncKey then
-            lastSyncKey = syncKey
-            waitingForRestartInfoToClear = false
-            if syncKey then
-                AutoReplayStatusLbl.Text = "In Abyss — monitoring..."
-                AutoReplayStatusLbl.TextColor3 = C.sub
-            else
-                AutoReplayStatusLbl.Text = "Monitoring..."
-                AutoReplayStatusLbl.TextColor3 = C.sub
+-- Get the current Abyss sync key (nil if not in Abyss)
+local function getAbyssSyncKey()
+    local ok, key = pcall(function() return LP:GetAttribute("AbyssSyncKey") end)
+    return ok and key or nil
+end
+
+-- Safely read a DataSyncUtil value
+local function getAbyssSyncValue(syncKey, path)
+    local ok, val = pcall(function()
+        local PT = _G.PathTool or getPathToolSafe()
+        local DSU = PT and PT.DataSyncUtil
+        if DSU and DSU.GetValue then
+            return DSU.GetValue(syncKey, path)
+        end
+        return nil
+    end)
+    return ok and val or nil
+end
+
+-- Pick the best door from DoorInfos based on room type preference
+-- Get the actual reward key for a door using its ExtraWinRewardSeed
+-- This replicates exactly what the game does to determine each door's reward
+local function getDoorRewardKey(door, PT)
+    local roomTmpls = PT.CfgAbyss and PT.CfgAbyss.RoomTmpls
+    local roomTypes = PT.CfgAbyss and PT.CfgAbyss.RoomTypes
+    if not roomTmpls or not roomTypes then return nil end
+
+    local tmpl = roomTmpls[door.RoomId]
+    if not tmpl then return nil end
+
+    local rtCfg = roomTypes[tmpl.RoomType]
+    if not rtCfg then return "Tp_" .. tostring(tmpl.RoomType) end
+
+    -- Try seed-based reward generation (same as the game uses)
+    if door.ExtraWinRewardSeed and rtCfg.ExtraWinReward then
+        local ok, rewardList = pcall(function()
+            local applied = PT.CfgAbyssUtil.ApplyExtraWinReward(rtCfg.ExtraWinReward, tmpl)
+            local result = {}
+            PT.RewardSystem.__DoRewardGroup(nil, applied, result, Random.new(door.ExtraWinRewardSeed), false, true)
+            return result
+        end)
+        if ok and rewardList and #rewardList > 0 then
+            local reward = rewardList[1]
+            if reward.RewardRes == "CommonItem" then
+                return "Rwd_CommonItem_" .. tostring(reward.TmplId)
+            elseif reward.RewardRes == "Value" then
+                return "Rwd_Value_" .. tostring(reward.ValueType)
+            elseif reward.RewardRes == "PetExpItem" then
+                return "Rwd_PetExpItem_" .. tostring(reward.TmplId)
             end
         end
+    end
 
-        -- Not in an Abyss
-        if not syncKey then continue end
+    -- Fallback: room type key
+    return "Tp_" .. tostring(tmpl.RoomType)
+end
 
-        -- Check current RestartInfo state
-        local hasRestartInfo = false
-        local restartAvailable = false
-        pcall(function()
-            local PT = _G.PathTool or getPathToolSafe()
-            local DSU = PT and PT.DataSyncUtil
-            if DSU and DSU.GetValue then
-                local restartInfo = DSU.GetValue(syncKey, {"RestartInfo"})
-                if restartInfo then
-                    hasRestartInfo = true
-                    if restartInfo.PlayerId == 0 then
-                        restartAvailable = true
+-- Pick the best door using the game's saved Reward Priority
+local function pickPreferredDoor(doorInfos)
+    if not doorInfos or #doorInfos == 0 then return nil end
+
+    local PT = _G.PathTool or getPathToolSafe()
+    if not PT then
+        for _, door in ipairs(doorInfos) do
+            if door.Opened then return door end
+        end
+        return nil
+    end
+
+    local gp = getGamePlayer()
+    local abyssPlayer = gp and gp.abyss
+
+    local bestDoor = nil
+    local bestPriority = -math.huge
+
+    for _, door in ipairs(doorInfos) do
+        if door.Opened then
+            local roomKey = getDoorRewardKey(door, PT)
+            local priority = 0
+
+            if roomKey and abyssPlayer then
+                local savedPri = abyssPlayer:GetRoomPriority(roomKey)
+                if savedPri and savedPri ~= 0 then
+                    priority = savedPri
+                elseif PT.AbyssSystem.GetDefaultRoomPriority then
+                    local defPri = PT.AbyssSystem.GetDefaultRoomPriority(roomKey)
+                    if defPri then priority = defPri end
+                end
+            end
+
+            if priority > bestPriority then
+                bestPriority = priority
+                bestDoor = door
+            end
+        end
+    end
+
+    -- Fallback: pick first opened door
+    if not bestDoor then
+        for _, door in ipairs(doorInfos) do
+            if door.Opened then return door end
+        end
+    end
+
+    return bestDoor
+end
+
+-- Walk to a door and click it
+local function walkToDoorAndClick(door)
+    if not door or not door.CFrame then return false end
+
+    local root = getRoot()
+    if not root then return false end
+
+    local doorPos = door.CFrame.Position
+    root.CFrame = CFrame.new(doorPos.X, doorPos.Y + 3, doorPos.Z)
+    root.AssemblyLinearVelocity = Vector3.zero
+    root.AssemblyAngularVelocity = Vector3.zero
+    task.wait(0.3)
+
+    -- Find and click the door model in AbyssClientModel
+    local abyssModelFolder = workspace:FindFirstChild("AbyssClientModel")
+    if abyssModelFolder then
+        for _, model in ipairs(abyssModelFolder:GetChildren()) do
+            local pp = model.PrimaryPart or model:FindFirstChild("Root")
+            if pp and (pp.Position - doorPos).Magnitude < 15 then
+                local cd = pp:FindFirstChildOfClass("ClickDetector")
+                if cd then
+                    pcall(function() fireclickdetector(cd) end)
+                    return true
+                end
+                -- Try clicking via the model itself
+                for _, desc in ipairs(model:GetDescendants()) do
+                    if desc:IsA("ClickDetector") then
+                        pcall(function() fireclickdetector(desc) end)
+                        return true
                     end
                 end
             end
-        end)
-
-        -- After firing, wait for RestartInfo to CLEAR (restart is processing)
-        -- before re-arming. This is the key fix: on replay, the sync key
-        -- doesn't change, so we wait for the actual state transition instead.
-        if waitingForRestartInfoToClear then
-            if not hasRestartInfo then
-                -- RestartInfo gone — restart is processing, re-arm for next win
-                waitingForRestartInfoToClear = false
-                AutoReplayStatusLbl.Text = "Restart processing — ready for next win..."
-                AutoReplayStatusLbl.TextColor3 = C.sub
-            end
-            continue
-        end
-
-        -- Armed: waiting for a win screen with restart available
-        if hasRestartInfo and restartAvailable then
-            AutoReplayStatusLbl.Text = "Restarting Abyss..."
-            AutoReplayStatusLbl.TextColor3 = C.gold
-
-            local success = false
-            pcall(function()
-                local PT = _G.PathTool or getPathToolSafe()
-                if PT and PT.AbyssSystem and PT.AbyssSystem.ClientRestartAbyss then
-                    PT.AbyssSystem.ClientRestartAbyss()
-                    success = true
-                end
-            end)
-
-            if success then
-                waitingForRestartInfoToClear = true
-                AutoReplayStatusLbl.Text = "Replay sent!"
-                AutoReplayStatusLbl.TextColor3 = C.green
-            else
-                AutoReplayStatusLbl.Text = "Restart call failed — retrying..."
-                AutoReplayStatusLbl.TextColor3 = C.red
-                task.wait(3)
-            end
-        elseif hasRestartInfo then
-            -- RestartInfo exists but PlayerId != 0 (someone else already pressed it)
-            AutoReplayStatusLbl.Text = "Restart pending..."
-            AutoReplayStatusLbl.TextColor3 = C.sub
         end
     end
-end)
+
+    -- Fallback: try clicking any ClickDetector near the door position
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("ClickDetector") and obj.Parent and obj.Parent:IsA("BasePart") then
+            if (obj.Parent.Position - doorPos).Magnitude < 10 then
+                pcall(function() fireclickdetector(obj) end)
+                return true
+            end
+        end
+    end
+
+    return false
+end
+
+-- Auto-select talent when available
+local function tryAutoSelectTalent(syncKey)
+    local talentInfo = getAbyssSyncValue(syncKey, {"TalentInfo"})
+    if not talentInfo or not talentInfo.Seed then return false end
+
+    local PT = _G.PathTool or getPathToolSafe()
+    if not PT or not PT.AbyssSystem then return false end
+
+    local abyssId = getAbyssSyncValue(syncKey, {"AbyssId"})
+    if not abyssId then return false end
+
+    -- Check if we already selected
+    local playerSelect = talentInfo.PlayerSelect
+    if playerSelect and playerSelect[tostring(LP.UserId)] then
+        return false -- already selected
+    end
+
+    -- Generate selectable talents and pick the highest quality one
+    local ok, talents = pcall(function()
+        return PT.AbyssSystem.GenerateSelectableTalents(talentInfo.Seed, getGamePlayer(), abyssId)
+    end)
+    if ok and talents and #talents > 0 then
+        local bestIdx = 1
+        local bestQuality = -1
+
+        -- Quality enum from CfgAbyss: Blue < Purple < Gold etc.
+        -- Higher numeric value = better tier
+        for i, talent in ipairs(talents) do
+            local q = talent.TalentTmpl and talent.TalentTmpl.Quality or 0
+            if type(q) == "number" and q > bestQuality then
+                bestQuality = q
+                bestIdx = i
+            elseif type(q) ~= "number" then
+                -- Quality might be an enum userdata — try to convert
+                local qNum = tonumber(q) or 0
+                if qNum > bestQuality then
+                    bestQuality = qNum
+                    bestIdx = i
+                end
+            end
+        end
+
+        local selectOk = pcall(function()
+            PT.AbyssSystem.ClientSelectTalent(bestIdx)
+        end)
+        return selectOk
+    end
+
+    return false
+end
+
+-- Main Auto Abyss loop
+function autoAbyssLoop(myGen)
+    local function stillRunning()
+        return autoAbyssEnabled and myGen == _G.NoxarAbyssLoopGeneration
+    end
+
+    local lastStage = nil -- track floor changes for auto-center teleport
+    local lastChosenRoomType = nil -- track if last door was Rest (type 4) for fast-forward
+
+    while stillRunning() do
+        -- Phase 1: Check if we're in an Abyss
+        local inAbyss, _ = isInAbyssArea()
+        local syncKey = getAbyssSyncKey()
+
+        if inAbyss and syncKey then
+            -- We're in an Abyss — monitor and act
+            AbyssStatusLbl.Text = "⚔ In Abyss — monitoring floor..."
+            AbyssStatusLbl.TextColor3 = C.gold
+
+            local stage = getAbyssSyncValue(syncKey, {"Stage"})
+            local doorInfos = getAbyssSyncValue(syncKey, {"DoorInfos"})
+            local restartInfo = getAbyssSyncValue(syncKey, {"RestartInfo"})
+
+            -- Auto-center: when floor changes, teleport to room center
+            -- Skip for Rest rooms (type 4) — no combat, just talent + next door
+            if stage and stage ~= lastStage then
+                lastStage = stage
+
+                if lastChosenRoomType == 4 then
+                    -- Rest room: check talent immediately, then look for next door
+                    AbyssStatusLbl.Text = "🍵 Rest room — checking talent..."
+                    AbyssStatusLbl.TextColor3 = C.accent
+
+                    -- Auto-select talent if available
+                    local restTalentInfo = getAbyssSyncValue(syncKey, {"TalentInfo"})
+                    if restTalentInfo and restTalentInfo.Seed then
+                        local restPlayerSelect = restTalentInfo.PlayerSelect
+                        local restAlreadySelected = restPlayerSelect and restPlayerSelect[tostring(LP.UserId)]
+                        if not restAlreadySelected and autoSelectTalent then
+                            tryAutoSelectTalent(syncKey)
+                            task.wait(0.5)
+                        end
+                    end
+
+                    -- Immediately look for next door (no centering, no waiting)
+                    local restDoors = getAbyssSyncValue(syncKey, {"DoorInfos"})
+                    if restDoors and #restDoors > 0 then
+                        local nextDoor = pickPreferredDoor(restDoors)
+                        if nextDoor then
+                            walkToDoorAndClick(nextDoor)
+                            task.wait(1.5)
+                            continue
+                        end
+                    end
+
+                    -- No doors yet, brief wait then continue to normal flow
+                    task.wait(0.5)
+                else
+                    -- Normal room: center and prepare for combat
+                    AbyssStatusLbl.Text = "📍 Floor " .. tostring(stage) .. " — centering..."
+                    AbyssStatusLbl.TextColor3 = C.accent
+
+                    local root = getRoot()
+                    if root then
+                        -- Find the closest room in SpaceModels and teleport to its Root
+                        local closestRoom = nil
+                        local closestDist = math.huge
+                        local spaceModels = workspace:FindFirstChild("SpaceModels")
+                        if spaceModels then
+                            for _, room in ipairs(spaceModels:GetChildren()) do
+                                local roomRoot = room:FindFirstChild("Root")
+                                if roomRoot then
+                                    local dist = (root.Position - roomRoot.Position).Magnitude
+                                    if dist < closestDist then
+                                        closestDist = dist
+                                        closestRoom = room
+                                    end
+                                end
+                            end
+                        end
+                        if closestRoom and closestRoom:FindFirstChild("Root") then
+                            root.CFrame = closestRoom.Root.CFrame + Vector3.new(0, 3, 0)
+                            root.AssemblyLinearVelocity = Vector3.zero
+                            root.AssemblyAngularVelocity = Vector3.zero
+                        end
+                    end
+                    task.wait(0.5) -- brief settle after teleport
+                end
+
+                lastChosenRoomType = nil -- reset after processing
+            end
+
+            -- Check for win screen — handle restart directly (self-contained, no separate toggle)
+            if restartInfo then
+                AbyssStatusLbl.Text = "🏆 Abyss complete! Restarting..."
+                AbyssStatusLbl.TextColor3 = C.green
+
+                -- Wait for restart to become available (PlayerId == 0)
+                local restartAttempts = 0
+                while stillRunning() and restartAttempts < 20 do
+                    local ri = getAbyssSyncValue(syncKey, {"RestartInfo"})
+                    if ri and ri.PlayerId == 0 then
+                        pcall(function()
+                            local rpt = _G.PathTool or getPathToolSafe()
+                            if rpt and rpt.AbyssSystem and rpt.AbyssSystem.ClientRestartAbyss then
+                                rpt.AbyssSystem.ClientRestartAbyss()
+                            end
+                        end)
+                        AbyssStatusLbl.Text = "🏆 Replay sent!"
+                        break
+                    elseif not ri then
+                        break
+                    end
+                    restartAttempts = restartAttempts + 1
+                    task.wait(0.5)
+                end
+
+                -- Wait for restart to process (RestartInfo disappears then reappears next win)
+                local waitCount = 0
+                while stillRunning() and waitCount < 20 do
+                    local ri2 = getAbyssSyncValue(syncKey, {"RestartInfo"})
+                    if not ri2 then break end
+                    waitCount = waitCount + 1
+                    task.wait(0.5)
+                end
+
+                lastStage = nil -- reset so next entry triggers centering
+                lastChosenRoomType = nil
+                task.wait(1)
+                continue
+            end
+
+            -- Check for talent selection
+            local talentInfo = getAbyssSyncValue(syncKey, {"TalentInfo"})
+            if talentInfo and talentInfo.Seed then
+                local playerSelect = talentInfo.PlayerSelect
+                local alreadySelected = playerSelect and playerSelect[tostring(LP.UserId)]
+                if not alreadySelected and autoSelectTalent then
+                    AbyssStatusLbl.Text = "✨ Selecting talent..."
+                    AbyssStatusLbl.TextColor3 = C.accent
+                    tryAutoSelectTalent(syncKey)
+                    task.wait(1)
+                    continue
+                end
+            end
+
+            -- Check for door selection
+            if doorInfos and #doorInfos > 0 then
+                local door = pickPreferredDoor(doorInfos)
+                if door then
+                    -- Show the room type name in status
+                    local roomTypeName = "Unknown"
+                    local PT2 = _G.PathTool or getPathToolSafe()
+                    local roomTmpls2 = PT2 and PT2.CfgAbyss and PT2.CfgAbyss.RoomTmpls
+                    if roomTmpls2 and roomTmpls2[door.RoomId] then
+                        local rt = roomTmpls2[door.RoomId].RoomType
+                        roomTypeName = ROOM_TYPE_NAMES[rt] or ("Type " .. tostring(rt))
+                    end
+
+                    AbyssStatusLbl.Text = "🚪 Floor " .. tostring(stage or "?") .. " — choosing " .. roomTypeName .. " room..."
+                    AbyssStatusLbl.TextColor3 = C.accent
+
+                    -- Track room type for Rest room fast-forward
+                    local PT3 = _G.PathTool or getPathToolSafe()
+                    local roomTmpls3 = PT3 and PT3.CfgAbyss and PT3.CfgAbyss.RoomTmpls
+                    if roomTmpls3 and roomTmpls3[door.RoomId] then
+                        lastChosenRoomType = roomTmpls3[door.RoomId].RoomType
+                    end
+
+                    walkToDoorAndClick(door)
+                    task.wait(2) -- wait for room transition
+                    continue
+                end
+            end
+
+            -- No doors, no talent, no win — we're fighting. Just wait.
+            AbyssStatusLbl.Text = "⚔ Floor " .. tostring(stage or "?") .. " — fighting..."
+            AbyssStatusLbl.TextColor3 = C.gold
+
+            -- Check boss bar for fight state
+            local _, bossBarVisible = getRiftBossBarState()
+            if bossBarVisible then
+                -- Boss fight in progress — wait for it to end
+                AbyssStatusLbl.Text = "⚔ Floor " .. tostring(stage or "?") .. " — boss fight..."
+                AbyssStatusLbl.TextColor3 = C.gold
+                while stillRunning() do
+                    local _, stillVisible = getRiftBossBarState()
+                    if not stillVisible then break end
+                    task.wait(0.5)
+                end
+                task.wait(1)
+                continue
+            end
+
+            -- No boss bar, check if monsters exist
+            if #clientMonsters:GetChildren() > 0 then
+                -- Auto-attack: call the game's attack function on every alive monster
+                for _, m in ipairs(clientMonsters:GetChildren()) do
+                    local monsterId = tonumber(m.Name:match("Monster_(%d+)"))
+                        or tonumber(m:GetAttribute("MonsterId"))
+                    if monsterId then
+                        pcall(function()
+                            local PT = _G.PathTool or getPathToolSafe()
+                            if PT and PT.MonsterSystem and PT.MonsterSystem.ClientAttackMonsterOnHasAlivePet then
+                                PT.MonsterSystem.ClientAttackMonsterOnHasAlivePet(monsterId)
+                            end
+                        end)
+                    end
+                end
+            end
+
+            task.wait(0.5)
+
+        else
+            -- Not in an Abyss — teleport to entrance, create team, and start
+            lastStage = nil
+            lastChosenRoomType = nil
+
+            -- Step 1: Teleport to Abyss entrance
+            AbyssStatusLbl.Text = "Teleporting to Abyss entrance..."
+            AbyssStatusLbl.TextColor3 = C.gold
+
+            local root = getRoot()
+            if not root then
+                task.wait(1)
+                continue
+            end
+
+            local abyssEntrance = nil
+            pcall(function()
+                abyssEntrance = workspace
+                    :WaitForChild("Area", 5)
+                    :WaitForChild("center", 5)
+                    :WaitForChild("Area", 5)
+                    :WaitForChild("Abyss", 5)
+                    :WaitForChild("Abyss_1", 5)
+            end)
+
+            if not abyssEntrance then
+                AbyssStatusLbl.Text = "Abyss entrance not found - retrying..."
+                AbyssStatusLbl.TextColor3 = C.red
+                task.wait(3)
+                continue
+            end
+
+            -- Find the target part to teleport to
+            local targetPart = nil
+            if abyssEntrance:IsA("BasePart") then
+                targetPart = abyssEntrance
+            elseif abyssEntrance.PrimaryPart then
+                targetPart = abyssEntrance.PrimaryPart
+            else
+                targetPart = abyssEntrance:FindFirstChildWhichIsA("BasePart", true)
+            end
+
+            if not targetPart then
+                AbyssStatusLbl.Text = "No teleportable part at Abyss entrance"
+                AbyssStatusLbl.TextColor3 = C.red
+                task.wait(3)
+                continue
+            end
+
+            -- Teleport
+            root.CFrame = targetPart.CFrame + Vector3.new(0, 3, 0)
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+            task.wait(2) -- wait for area to stream in
+
+            -- Step 2: Verify we're near the entrance
+            root = getRoot()
+            if root and targetPart and targetPart.Parent then
+                local dist = (root.Position - targetPart.Position).Magnitude
+                if dist > 50 then
+                    root.CFrame = targetPart.CFrame + Vector3.new(0, 3, 0)
+                    task.wait(1.5)
+                end
+            end
+
+            if not stillRunning() then break end
+
+            -- Step 3: Cancel any previous preparation
+            AbyssStatusLbl.Text = "Preparing team..."
+            AbyssStatusLbl.TextColor3 = C.sub
+            pcall(function()
+                DataPullFunc:InvokeServer("AbyssTeamCreatePrepareCancelChannel", 1)
+            end)
+            task.wait(0.5)
+
+            -- Step 4: Prepare team
+            pcall(function()
+                DataPullFunc:InvokeServer("AbyssTeamCreatePrepareChannel", 1)
+            end)
+            task.wait(0.5)
+
+            if not stillRunning() then break end
+
+            -- Step 5: Create team (showId=1, abyssTmplId, playerCount=4)
+            -- Using playerCount=4 to match the max PlayerAmountLimit
+            AbyssStatusLbl.Text = "Creating team..."
+            AbyssStatusLbl.TextColor3 = C.gold
+            local createOk = false
+            pcall(function()
+                DataPullFunc:InvokeServer("AbyssCreateTeamChannel", 1, selectedAbyssTmplId, 4)
+                createOk = true
+            end)
+            task.wait(0.5)
+
+            if not stillRunning() then break end
+
+            -- Step 6: Start Abyss
+            if createOk then
+                AbyssStatusLbl.Text = "Starting Abyss..."
+                AbyssStatusLbl.TextColor3 = C.green
+                pcall(function()
+                    DataPullFunc:InvokeServer("AbyssStartChannel")
+                end)
+                task.wait(2)
+            else
+                AbyssStatusLbl.Text = "Team creation failed - retrying in 5s..."
+                AbyssStatusLbl.TextColor3 = C.red
+                task.wait(5)
+            end
+        end
+
+        task.wait(0.5)
+    end
+
+    if myGen == _G.NoxarAbyssLoopGeneration then
+        AbyssStatusLbl.Text = "⏹ Stopped."
+        AbyssStatusLbl.TextColor3 = C.sub
+    end
+end
+
+function startAutoAbyss()
+    _G.NoxarAbyssLoopGeneration = (_G.NoxarAbyssLoopGeneration or 0) + 1
+    local gen = _G.NoxarAbyssLoopGeneration
+    spawnTracked("autoAbyssLoop", function()
+        autoAbyssLoop(gen)
+    end)
+end
+
+function stopAutoAbyss()
+    _G.NoxarAbyssLoopGeneration = (_G.NoxarAbyssLoopGeneration or 0) + 1
+    cancelTracked("autoAbyssLoop")
+end
 
 -- Main toggle
 RiftToggleBtn = Instance.new("TextButton", RiftTab)
@@ -4516,7 +5125,7 @@ RiftToggleBtn.TextColor3 = riftRunning and C.bg or C.text
 RiftToggleBtn.Font = Enum.Font.GothamBold
 RiftToggleBtn.TextSize = 12
 RiftToggleBtn.Text = riftRunning and "\xe2\x97\x8f AUTO RIFT: ON" or "\xe2\x97\x8f AUTO RIFT: OFF"
-RiftToggleBtn.LayoutOrder = 13
+RiftToggleBtn.LayoutOrder = 31
 Instance.new("UICorner", RiftToggleBtn).CornerRadius = UDim.new(0, 9)
 
 RiftToggleBtn.MouseButton1Click:Connect(function()
@@ -4543,6 +5152,11 @@ end)
 -- resume the loop automatically once the UI exists.
 if riftRunning then
     startRiftLoop()
+end
+
+-- If Auto Abyss was left ON from a previous session, resume automatically.
+if autoAbyssEnabled then
+    startAutoAbyss()
 end
 
 
@@ -4608,7 +5222,9 @@ end)
 CloseBtn.MouseButton1Click:Connect(function()
     running = false
     riftRunning = false
+    autoAbyssEnabled = false
     _G.NoxarRiftLoopGeneration = (_G.NoxarRiftLoopGeneration or 0) + 1
+    _G.NoxarAbyssLoopGeneration = (_G.NoxarAbyssLoopGeneration or 0) + 1
     riftPhase = "IDLE"
     riftHealingInProgress = false
     riftRiftSearchPausedUntil = 0
