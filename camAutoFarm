@@ -4820,6 +4820,16 @@ function autoAbyssLoop(myGen)
                     if restDoors and #restDoors > 0 then
                         local nextDoor = pickPreferredDoor(restDoors)
                         if nextDoor then
+                            -- Update lastChosenRoomType to the NEW door's type
+                            -- so the next room triggers center teleport
+                            local pt4 = _G.PathTool or getPathToolSafe()
+                            local mt4 = pt4 and pt4.CfgAbyss and pt4.CfgAbyss.RoomTmpls
+                            if mt4 and mt4[nextDoor.RoomId] then
+                                lastChosenRoomType = mt4[nextDoor.RoomId].RoomType
+                            else
+                                lastChosenRoomType = nil
+                            end
+
                             walkToDoorAndClick(nextDoor)
                             task.wait(1.5)
                             continue
