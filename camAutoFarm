@@ -4772,6 +4772,31 @@ local function tryAutoSelectTalent(syncKey)
 end
 
 -- Main Auto Abyss loop
+
+-- Find and teleport to the talent selection model in AbyssClientModel.
+-- The talent model has a "jitan2" subchild (doors have "haomen").
+function teleportToTalentModel()
+    local root = getRoot()
+    if not root then return false end
+
+    local abyssFolder = workspace:FindFirstChild("AbyssClientModel")
+    if not abyssFolder then return false end
+
+    for _, child in ipairs(abyssFolder:GetChildren()) do
+        local jitan = child:FindFirstChild("jitan2", true)
+        if jitan then
+            local rootPart = child:FindFirstChild("Root", true) or child:FindFirstChildWhichIsA("BasePart", true)
+            if rootPart then
+                root.CFrame = rootPart.CFrame + Vector3.new(0, 3, 0)
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+                return true
+            end
+        end
+    end
+    return false
+end
+
 function autoAbyssLoop(myGen)
     local function stillRunning()
         return autoAbyssEnabled and myGen == _G.NoxarAbyssLoopGeneration
@@ -4913,20 +4938,48 @@ function autoAbyssLoop(myGen)
                 continue
             end
 
-            -- Check for talent selection
+                        -- Check for talent selection (with jitan2 teleport safety)
             local talentInfo = getAbyssSyncValue(syncKey, {"TalentInfo"})
             if talentInfo and talentInfo.Seed then
                 local playerSelect = talentInfo.PlayerSelect
                 local alreadySelected = playerSelect and playerSelect[tostring(LP.UserId)]
                 if not alreadySelected and autoSelectTalent then
-                    AbyssStatusLbl.Text = "✨ Selecting talent..."
+                    AbyssStatusLbl.Text = "Selecting talent..."
                     AbyssStatusLbl.TextColor3 = C.accent
+                    local talentStartTime = os.clock()
+
+                    -- Try selecting talent
                     tryAutoSelectTalent(syncKey)
                     task.wait(1)
+
+                    -- Check if still not selected after 1s
+                    local ti2 = getAbyssSyncValue(syncKey, {"TalentInfo"})
+                    local ps2 = ti2 and ti2.PlayerSelect
+                    local stillPending = ti2 and ti2.Seed and (not ps2 or not ps2[tostring(LP.UserId)])
+
+                    if stillPending and os.clock() - talentStartTime < 3 then
+                        -- Still pending - teleport to talent model (jitan2) to get in range
+                        AbyssStatusLbl.Text = "Talent: teleporting to model..."
+                        AbyssStatusLbl.TextColor3 = C.gold
+                        teleportToTalentModel()
+                        task.wait(0.5)
+                        tryAutoSelectTalent(syncKey)
+                        task.wait(1)
+                    end
+
+                    -- If STILL not selected after 3+ seconds, give up and move on
+                    local ti3 = getAbyssSyncValue(syncKey, {"TalentInfo"})
+                    local ps3 = ti3 and ti3.PlayerSelect
+                    local finalCheck = ti3 and ti3.Seed and (not ps3 or not ps3[tostring(LP.UserId)])
+                    if finalCheck then
+                        AbyssStatusLbl.Text = "Talent: skipping (timed out)"
+                        AbyssStatusLbl.TextColor3 = C.red
+                        task.wait(0.5)
+                    end
+
                     continue
                 end
             end
-
             -- Check for door selection
             if doorInfos and #doorInfos > 0 then
                 local door = pickPreferredDoor(doorInfos)
