@@ -4840,14 +4840,14 @@ function autoAbyssLoop(myGen)
                             teleportToTalentModel()
                             task.wait(0.5)
                             tryAutoSelectTalent(syncKey)
-                            task.wait(1)
+                            task.wait(0.3)
 
                             -- Retry once if still not selected
                             local rt2 = getAbyssSyncValue(syncKey, {"TalentInfo"})
                             local rp2 = rt2 and rt2.PlayerSelect
                             if rt2 and rt2.Seed and (not rp2 or not rp2[tostring(LP.UserId)]) then
                                 tryAutoSelectTalent(syncKey)
-                                task.wait(0.5)
+                                task.wait(0.3)
                             end
                         end
                     end
@@ -4867,7 +4867,6 @@ function autoAbyssLoop(myGen)
                                 lastChosenRoomType = nil
                             end
 
-                            awaitingRoomTransition = true
                             walkToDoorAndClick(nextDoor)
                             task.wait(1.5)
                             continue
@@ -4963,7 +4962,7 @@ function autoAbyssLoop(myGen)
 
                     -- Try selecting talent
                     tryAutoSelectTalent(syncKey)
-                    task.wait(1)
+                    task.wait(0.3)
 
                     -- Check if still not selected after 1s
                     local ti2 = getAbyssSyncValue(syncKey, {"TalentInfo"})
@@ -4975,9 +4974,9 @@ function autoAbyssLoop(myGen)
                         AbyssStatusLbl.Text = "Talent: teleporting to model..."
                         AbyssStatusLbl.TextColor3 = C.gold
                         teleportToTalentModel()
-                        task.wait(0.5)
+                        task.wait(0.3)
                         tryAutoSelectTalent(syncKey)
-                        task.wait(1)
+                        task.wait(0.3)
                     end
 
                     -- If STILL not selected after 3+ seconds, give up and move on
