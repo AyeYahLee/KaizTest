@@ -3307,6 +3307,7 @@ talentMaxCopies = talentMaxCopies or {
 }
 talentPickHistory = {} -- tracks picks per Abyss run, auto-resets on new run
 talentLastAbyssKey = nil -- detect new Abyss run for auto-reset
+talentSawRestartInfo = false -- tracks win screen for replay detection
 
 -- Map talent names to categories
 local TALENT_NAME_TO_CATEGORY = {
@@ -5009,10 +5010,20 @@ local function tryAutoSelectTalent(syncKey)
         return false
     end
 
-    -- Auto-reset pick history on new Abyss run
+    -- Auto-reset pick history on new Abyss run or replay
+    -- Detect: new sync key = different Abyss, OR RestartInfo disappeared = replay
+    local restartInfoNow = getAbyssSyncValue(syncKey, {"RestartInfo"})
     if syncKey ~= talentLastAbyssKey then
         talentLastAbyssKey = syncKey
         talentPickHistory = {}
+        talentSawRestartInfo = false
+    elseif talentSawRestartInfo and not restartInfoNow then
+        -- RestartInfo was present (win screen) then disappeared (replay processing)
+        talentPickHistory = {}
+        talentSawRestartInfo = false
+    end
+    if restartInfoNow then
+        talentSawRestartInfo = true
     end
 
     local ok, talents = pcall(function()
