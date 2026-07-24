@@ -5036,19 +5036,23 @@ local function tryAutoSelectTalent(syncKey)
     local bestIdx = nil
     local bestScore = -math.huge
 
-    -- Two-pass scoring: first with all restrictions, then fallback ignoring max copies
-    -- Blacklist is NEVER ignored
-    for pass = 1, 2 do
+    -- Three-pass scoring:
+    -- Pass 1: respect blacklist + max copies (normal)
+    -- Pass 2: respect blacklist only (ignore max copies)
+    -- Pass 3: ignore everything (pick best available, last resort)
+    for pass = 1, 3 do
         for i, talent in ipairs(talents) do
             local tmpl = talent.TalentTmpl
             local name = tmpl and tmpl.Name or ""
             local cat = getTalentCategory(name)
 
-            if not isTalentBlacklisted(name) then
-                local maxCopies = talentMaxCopies[cat] or 99
-                local currentCopies = talentPickHistory[cat] or 0
-                -- Pass 1: respect max copies. Pass 2: ignore max copies.
-                if pass == 2 or currentCopies < maxCopies then
+        local blacklisted = isTalentBlacklisted(name)
+        -- Pass 3 ignores blacklist as last resort
+        if not blacklisted or pass == 3 then
+            local maxCopies = talentMaxCopies[cat] or 99
+            local currentCopies = talentPickHistory[cat] or 0
+            -- Pass 1: respect max copies. Pass 2-3: ignore max copies.
+            if pass >= 2 or currentCopies < maxCopies then
                     local q = tmpl and tmpl.Quality or 0
                     local qNum = type(q) == "number" and q or (tonumber(q) or 0)
                     local v = (tmpl and tmpl.PlayerProperty and tmpl.PlayerProperty.Value) or 0
