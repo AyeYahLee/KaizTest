@@ -5036,33 +5036,41 @@ local function tryAutoSelectTalent(syncKey)
     local bestIdx = nil
     local bestScore = -math.huge
 
-    for i, talent in ipairs(talents) do
-        local tmpl = talent.TalentTmpl
-        local name = tmpl and tmpl.Name or ""
-        local cat = getTalentCategory(name)
+    -- Two-pass scoring: first with all restrictions, then fallback ignoring max copies
+    -- Blacklist is NEVER ignored
+    for pass = 1, 2 do
+        for i, talent in ipairs(talents) do
+            local tmpl = talent.TalentTmpl
+            local name = tmpl and tmpl.Name or ""
+            local cat = getTalentCategory(name)
 
-        if not isTalentBlacklisted(name) then
-            local maxCopies = talentMaxCopies[cat] or 99
-            local currentCopies = talentPickHistory[cat] or 0
-            if currentCopies < maxCopies then
-                local q = tmpl and tmpl.Quality or 0
-                local qNum = type(q) == "number" and q or (tonumber(q) or 0)
-                local v = (tmpl and tmpl.PlayerProperty and tmpl.PlayerProperty.Value) or 0
-                local wlRank = getWhitelistRank(name)
+            if not isTalentBlacklisted(name) then
+                local maxCopies = talentMaxCopies[cat] or 99
+                local currentCopies = talentPickHistory[cat] or 0
+                -- Pass 1: respect max copies. Pass 2: ignore max copies.
+                if pass == 2 or currentCopies < maxCopies then
+                    local q = tmpl and tmpl.Quality or 0
+                    local qNum = type(q) == "number" and q or (tonumber(q) or 0)
+                    local v = (tmpl and tmpl.PlayerProperty and tmpl.PlayerProperty.Value) or 0
+                    local wlRank = getWhitelistRank(name)
 
-                local score = 0
-                if wlRank <= #talentWhitelist then
-                    score = 10000 + (qNum * 100) + (v * 10) - wlRank
-                else
-                    score = (qNum * 100) + (v * 10)
-                end
+                    local score = 0
+                    if wlRank <= #talentWhitelist then
+                        score = 10000 + (qNum * 100) + (v * 10) - wlRank
+                    else
+                        score = (qNum * 100) + (v * 10)
+                    end
+                    -- Pass 2 (fallback) gets a penalty so it only wins if pass 1 found nothing
+                    if pass == 2 then score = score - 100000 end
 
-                if score > bestScore then
-                    bestScore = score
-                    bestIdx = i
+                    if score > bestScore then
+                        bestScore = score
+                        bestIdx = i
+                    end
                 end
             end
         end
+        if bestIdx then break end -- found a valid talent, no need for fallback
     end
 
     if not bestIdx then return false end
