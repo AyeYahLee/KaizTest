@@ -397,7 +397,10 @@ function saveConfig()
             autoUseRiftItemEnabled = autoUseRiftItemEnabled,
             -- Auto Abyss
             autoAbyssEnabled = autoAbyssEnabled,
-            selectedAbyssTmplId = selectedAbyssTmplId
+            selectedAbyssTmplId = selectedAbyssTmplId,
+            talentWhitelist = talentWhitelist,
+            talentBlacklist = talentBlacklist,
+            talentMaxCopies = talentMaxCopies
         }
         pcall(function()
             writefile(configFileName, HttpService:JSONEncode(data))
@@ -441,6 +444,9 @@ function loadConfig()
             -- Auto Abyss restore
             if data.autoAbyssEnabled ~= nil then autoAbyssEnabled = data.autoAbyssEnabled end
             if data.selectedAbyssTmplId ~= nil then selectedAbyssTmplId = data.selectedAbyssTmplId end
+            if data.talentWhitelist ~= nil then talentWhitelist = data.talentWhitelist end
+            if data.talentBlacklist ~= nil then talentBlacklist = data.talentBlacklist end
+            if data.talentMaxCopies ~= nil then talentMaxCopies = data.talentMaxCopies end
         end)
     end
 end
@@ -1808,7 +1814,7 @@ function refreshPositionsList()
     for i, posData in ipairs(savedPositions) do
         local row = Instance.new("Frame", ScrollPos)
         row.Size = UDim2.new(1, -10, 0, 26)
-        row.BackgroundColor3 = C.card
+        row.BackgroundColor3 = Color3.fromRGB(28, 33, 48)
         Instance.new("UICorner", row).CornerRadius = UDim.new(0, 7)
         
         local nameBox = Instance.new("TextBox", row)
@@ -3286,12 +3292,67 @@ autoAbyssEnabled = autoAbyssEnabled or false
 selectedAbyssTmplId = selectedAbyssTmplId or 1001 -- default: Easy (Cinderclaw Castle)
 autoSelectTalent = true -- always auto-select highest quality talent
 
+-- Talent selection config (whitelist = priority order, blacklist = never pick, maxCopies = per-run limit)
+talentWhitelist = talentWhitelist or {}
+talentBlacklist = talentBlacklist or {}
+talentMaxCopies = talentMaxCopies or {
+    ["Attack"] = 99,
+    ["HP Boost"] = 99,
+    ["Critical"] = 99,
+    ["Critical Damage"] = 99,
+    ["Shield Effect"] = 99,
+    ["Reflect Damage"] = 99,
+    ["Stun Immunity"] = 99,
+    ["Emergency Bandage"] = 99,
+}
+talentPickHistory = {} -- tracks picks per Abyss run, auto-resets on new run
+talentLastAbyssKey = nil -- detect new Abyss run for auto-reset
+
+-- Map talent names to categories
+local TALENT_NAME_TO_CATEGORY = {
+    ["Attack I"] = "Attack", ["Attack II"] = "Attack", ["Attack III"] = "Attack",
+    ["Attack IV"] = "Attack", ["Attack V"] = "Attack",
+    ["HP Boost I"] = "HP Boost", ["HP Boost II"] = "HP Boost", ["HP Boost III"] = "HP Boost",
+    ["HP Boost IV"] = "HP Boost", ["HP Boost V"] = "HP Boost",
+    ["Critical I"] = "Critical", ["Critical II"] = "Critical", ["Critical III"] = "Critical",
+    ["Critical IV"] = "Critical", ["Critical V"] = "Critical",
+    ["Critical Damage I"] = "Critical Damage", ["Critical Damage II"] = "Critical Damage",
+    ["Critical Damage III"] = "Critical Damage", ["Critical Damage IV"] = "Critical Damage",
+    ["Critical Damage V"] = "Critical Damage",
+    ["Shield Effect I"] = "Shield Effect", ["Shield Effect II"] = "Shield Effect",
+    ["Shield Effect III"] = "Shield Effect", ["Shield Effect IV"] = "Shield Effect",
+    ["Shield Effect V"] = "Shield Effect",
+    ["Reflect damage"] = "Reflect Damage",
+    ["Stun Immunity"] = "Stun Immunity",
+    ["Emergency Bandage"] = "Emergency Bandage",
+}
+
+local function getTalentCategory(talentName)
+    return TALENT_NAME_TO_CATEGORY[talentName] or "Other"
+end
+
+local function isTalentBlacklisted(talentName)
+    local cat = getTalentCategory(talentName)
+    for _, bl in ipairs(talentBlacklist) do
+        if bl == cat then return true end
+    end
+    return false
+end
+
+local function getWhitelistRank(talentName)
+    local cat = getTalentCategory(talentName)
+    for i, wl in ipairs(talentWhitelist) do
+        if wl == cat then return i end
+    end
+    return 999 -- not on whitelist
+end
+
 -- Available Abyss difficulties from CfgAbyss.Tmpls
 local ABYSS_DIFFICULTIES = {
-    {id = 1001, name = "Cinderclaw Castle (Normal)"},
-    {id = 1002, name = "Cinderclaw Castle (Hard)"},
-    {id = 1003, name = "Cinderclaw Castle (Nightmare)"},
-    {id = 1004, name = "Cinderclaw Castle (Inferno)"},
+    {id = 1001, name = "Cinderclaw Castle (Easy)"},
+    {id = 1002, name = "Cinderclaw Castle (Normal)"},
+    {id = 1003, name = "Cinderclaw Castle (Hard)"},
+    {id = 1004, name = "Cinderclaw Castle (Expert)"},
     {id = 1005, name = "Treasure Vault (Coin)"},
     {id = 1006, name = "Treasure Vault (EXP)"},
     {id = 1007, name = "Treasure Vault (Mark)"},
@@ -4219,7 +4280,7 @@ RiftSectionDivider = Instance.new("Frame", RiftTab)
 RiftSectionDivider.Size = UDim2.new(1, -20, 0, 1)
 RiftSectionDivider.BackgroundColor3 = C.border
 RiftSectionDivider.BorderSizePixel = 0
-RiftSectionDivider.LayoutOrder = 22
+RiftSectionDivider.LayoutOrder = 24
 
 RiftHeaderLbl = Instance.new("TextLabel", RiftTab)
 RiftHeaderLbl.Size = UDim2.new(1, -20, 0, 14)
@@ -4229,7 +4290,7 @@ RiftHeaderLbl.TextColor3 = C.gold
 RiftHeaderLbl.Font = Enum.Font.GothamBold
 RiftHeaderLbl.TextSize = 11
 RiftHeaderLbl.TextXAlignment = Enum.TextXAlignment.Left
-RiftHeaderLbl.LayoutOrder = 23
+RiftHeaderLbl.LayoutOrder = 25
 
 -- Status card: shows exactly what the loop is doing right now (scanning,
 -- teleporting, fighting, leaving, etc.)
@@ -4237,7 +4298,7 @@ RiftStatusCard = Instance.new("Frame", RiftTab)
 RiftStatusCard.Size = UDim2.new(1, -20, 0, 54)
 RiftStatusCard.BackgroundColor3 = C.surface
 RiftStatusCard.BorderSizePixel = 0
-RiftStatusCard.LayoutOrder = 24
+RiftStatusCard.LayoutOrder = 26
 Instance.new("UICorner", RiftStatusCard).CornerRadius = UDim.new(0, 9)
 
 RiftStatusLbl = Instance.new("TextLabel", RiftStatusCard)
@@ -4272,13 +4333,13 @@ RiftDelayLbl.TextColor3 = C.gold
 RiftDelayLbl.Font = Enum.Font.GothamBold
 RiftDelayLbl.TextSize = 11
 RiftDelayLbl.TextXAlignment = Enum.TextXAlignment.Left
-RiftDelayLbl.LayoutOrder = 25
+RiftDelayLbl.LayoutOrder = 27
 
 RiftDelayRow = Instance.new("Frame", RiftTab)
 RiftDelayRow.Size = UDim2.new(1, -20, 0, 26)
 RiftDelayRow.BackgroundColor3 = C.surface
 RiftDelayRow.BorderSizePixel = 0
-RiftDelayRow.LayoutOrder = 26
+RiftDelayRow.LayoutOrder = 28
 Instance.new("UICorner", RiftDelayRow).CornerRadius = UDim.new(0, 9)
 
 RiftDelayBox = Instance.new("TextBox", RiftDelayRow)
@@ -4320,13 +4381,13 @@ AutoHealTitleLbl.TextColor3 = C.gold
 AutoHealTitleLbl.Font = Enum.Font.GothamBold
 AutoHealTitleLbl.TextSize = 11
 AutoHealTitleLbl.TextXAlignment = Enum.TextXAlignment.Left
-AutoHealTitleLbl.LayoutOrder = 27
+AutoHealTitleLbl.LayoutOrder = 29
 
 AutoHealRow = Instance.new("Frame", RiftTab)
 AutoHealRow.Size = UDim2.new(1, -20, 0, 30)
 AutoHealRow.BackgroundColor3 = C.surface
 AutoHealRow.BorderSizePixel = 0
-AutoHealRow.LayoutOrder = 28
+AutoHealRow.LayoutOrder = 30
 Instance.new("UICorner", AutoHealRow).CornerRadius = UDim.new(0, 9)
 
 AutoHealToggleBtn = Instance.new("TextButton", AutoHealRow)
@@ -4387,7 +4448,7 @@ AutoUseRiftTitleLbl.TextColor3 = C.gold
 AutoUseRiftTitleLbl.Font = Enum.Font.GothamBold
 AutoUseRiftTitleLbl.TextSize = 11
 AutoUseRiftTitleLbl.TextXAlignment = Enum.TextXAlignment.Left
-AutoUseRiftTitleLbl.LayoutOrder = 29
+AutoUseRiftTitleLbl.LayoutOrder = 31
 
 AutoUseRiftBtn = Instance.new("TextButton", RiftTab)
 AutoUseRiftBtn.Size = UDim2.new(1, -20, 0, 30)
@@ -4396,7 +4457,7 @@ AutoUseRiftBtn.TextColor3 = autoUseRiftItemEnabled and C.bg or C.text
 AutoUseRiftBtn.Text = autoUseRiftItemEnabled and "AUTO USE ITEM 11010: ON" or "AUTO USE ITEM 11010: OFF"
 AutoUseRiftBtn.Font = Enum.Font.GothamBold
 AutoUseRiftBtn.TextSize = 10
-AutoUseRiftBtn.LayoutOrder = 30
+AutoUseRiftBtn.LayoutOrder = 32
 Instance.new("UICorner", AutoUseRiftBtn).CornerRadius = UDim.new(0, 9)
 
 AutoUseRiftBtn.MouseButton1Click:Connect(function()
@@ -4513,7 +4574,7 @@ AbyssStatusLbl.TextColor3 = C.sub
 AbyssStatusLbl.Font = Enum.Font.GothamSemibold
 AbyssStatusLbl.TextSize = 10
 Instance.new("UICorner", AbyssStatusLbl).CornerRadius = UDim.new(0, 9)
-AbyssStatusLbl.LayoutOrder = 15
+AbyssStatusLbl.LayoutOrder = 18
 
 -- Toggle
 AbyssToggleBtn = Instance.new("TextButton", RiftTab)
@@ -4523,7 +4584,7 @@ AbyssToggleBtn.TextColor3 = autoAbyssEnabled and C.bg or C.text
 AbyssToggleBtn.Text = autoAbyssEnabled and "● AUTO ABYSS: ON" or "● AUTO ABYSS: OFF"
 AbyssToggleBtn.Font = Enum.Font.GothamBold
 AbyssToggleBtn.TextSize = 11
-AbyssToggleBtn.LayoutOrder = 16
+AbyssToggleBtn.LayoutOrder = 19
 Instance.new("UICorner", AbyssToggleBtn).CornerRadius = UDim.new(0, 9)
 
 AbyssToggleBtn.MouseButton1Click:Connect(function()
@@ -4542,7 +4603,219 @@ AbyssToggleBtn.MouseButton1Click:Connect(function()
     saveConfig()
 end)
 
-    -- State machine: watches for RestartInfo to appear (win), fires once,
+-- ══════════════════════════════════════════════════════════════════
+-- TALENT CONFIG UI — Whitelist, Blacklist, Max Copies
+-- ══════════════════════════════════════════════════════════════════
+local ALL_TALENT_CATS = {"Attack", "HP Boost", "Critical", "Critical Damage", "Shield Effect", "Reflect Damage", "Stun Immunity", "Emergency Bandage"}
+
+local function isCatInList(cat, list)
+    for _, c in ipairs(list) do
+        if c == cat then return true end
+    end
+    return false
+end
+
+local function getWhitelistIndex(cat)
+    for i, c in ipairs(talentWhitelist) do
+        if c == cat then return i end
+    end
+    return nil
+end
+
+-- Description
+TalentConfigDesc = Instance.new("TextLabel", RiftTab)
+TalentConfigDesc.Size = UDim2.new(1, -20, 0, 28)
+TalentConfigDesc.BackgroundTransparency = 1
+TalentConfigDesc.Text = "Numbered = whitelist priority. BL = blacklist. x = max copies/run. Higher quality always wins. Auto-resets each run."
+TalentConfigDesc.TextColor3 = Color3.fromRGB(180, 190, 220)
+TalentConfigDesc.Font = Enum.Font.Gotham
+TalentConfigDesc.TextSize = 9
+TalentConfigDesc.TextWrapped = true
+TalentConfigDesc.TextXAlignment = Enum.TextXAlignment.Left
+TalentConfigDesc.TextYAlignment = Enum.TextYAlignment.Top
+TalentConfigDesc.LayoutOrder = 17
+
+-- Dropdown button (matches AbyssDiffBtn style)
+TalentConfigDropBtn = Instance.new("TextButton", RiftTab)
+TalentConfigDropBtn.Size = UDim2.new(1, -20, 0, 26)
+TalentConfigDropBtn.BackgroundColor3 = C.card2
+TalentConfigDropBtn.TextColor3 = C.text
+TalentConfigDropBtn.Font = Enum.Font.GothamSemibold
+TalentConfigDropBtn.TextSize = 10
+TalentConfigDropBtn.TextXAlignment = Enum.TextXAlignment.Left
+NoxarUI.drop(TalentConfigDropBtn)
+TalentConfigDropBtn.LayoutOrder = 15
+
+local function updateTalentDropText()
+    local wlCount = #talentWhitelist
+    local blCount = #talentBlacklist
+    local open = TalentConfigScroll and TalentConfigScroll.Visible
+    if open then
+        TalentConfigDropBtn.Text = "  ▲  Close talent config"
+    else
+        TalentConfigDropBtn.Text = "  ▼  Talent Config (WL:" .. wlCount .. " BL:" .. blCount .. ")"
+    end
+end
+updateTalentDropText()
+
+-- Scrollable list (matches AbyssDiffScroll style)
+TalentConfigScroll = Instance.new("ScrollingFrame", RiftTab)
+TalentConfigScroll.Size = UDim2.new(1, -20, 0, 0)
+TalentConfigScroll.BackgroundColor3 = C.surface
+TalentConfigScroll.ScrollBarThickness = 3
+TalentConfigScroll.ScrollBarImageColor3 = C.accent
+TalentConfigScroll.BorderSizePixel = 0
+TalentConfigScroll.Visible = false
+TalentConfigScroll.ClipsDescendants = true
+TalentConfigScroll.LayoutOrder = 16
+Instance.new("UICorner", TalentConfigScroll).CornerRadius = UDim.new(0, 9)
+local tcLayout = Instance.new("UIListLayout", TalentConfigScroll)
+tcLayout.Padding = UDim.new(0, 3)
+Instance.new("UIPadding", TalentConfigScroll).PaddingTop = UDim.new(0, 3)
+Instance.new("UIPadding", TalentConfigScroll).PaddingLeft = UDim.new(0, 4)
+
+local function rebuildTalentConfigList()
+    for _, c in ipairs(TalentConfigScroll:GetChildren()) do
+        if c:IsA("Frame") then c:Destroy() end
+    end
+
+    for _, cat in ipairs(ALL_TALENT_CATS) do
+        local row = Instance.new("Frame", TalentConfigScroll)
+        row.Size = UDim2.new(1, -8, 0, 28)
+        row.BackgroundColor3 = C.card
+        row.BorderSizePixel = 0
+        Instance.new("UICorner", row).CornerRadius = UDim.new(0, 7)
+
+        -- Whitelist badge (number if whitelisted, + if not)
+        local wlBadge = Instance.new("TextButton", row)
+        wlBadge.Size = UDim2.new(0, 22, 0, 18)
+        wlBadge.Position = UDim2.new(0, 4, 0.5, -9)
+        wlBadge.BorderSizePixel = 0
+        wlBadge.Font = Enum.Font.GothamBold
+        wlBadge.TextSize = 9
+        Instance.new("UICorner", wlBadge).CornerRadius = UDim.new(0, 6)
+
+        local wlIdx = getWhitelistIndex(cat)
+        if wlIdx then
+            wlBadge.BackgroundColor3 = C.accent
+            wlBadge.TextColor3 = C.text
+            wlBadge.Text = tostring(wlIdx)
+        else
+            wlBadge.BackgroundColor3 = Color3.fromRGB(40, 45, 65)
+            wlBadge.TextColor3 = Color3.fromRGB(180, 190, 220)
+            wlBadge.Text = "+"
+        end
+
+        wlBadge.MouseButton1Click:Connect(function()
+            local idx = getWhitelistIndex(cat)
+            if idx then
+                table.remove(talentWhitelist, idx)
+            else
+                table.insert(talentWhitelist, cat)
+            end
+            rebuildTalentConfigList()
+            updateTalentDropText()
+            saveConfig()
+        end)
+
+        -- Name label
+        local nameLabel = Instance.new("TextLabel", row)
+        nameLabel.Size = UDim2.new(0, 95, 1, 0)
+        nameLabel.Position = UDim2.new(0, 30, 0, 0)
+        nameLabel.BackgroundTransparency = 1
+        nameLabel.Text = cat
+        nameLabel.TextColor3 = C.text
+        nameLabel.Font = Enum.Font.Gotham
+        nameLabel.TextSize = 10
+        nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+        -- Blacklist toggle
+        local blBtn = Instance.new("TextButton", row)
+        blBtn.Size = UDim2.new(0, 22, 0, 18)
+        blBtn.Position = UDim2.new(1, -98, 0.5, -9)
+        blBtn.BorderSizePixel = 0
+        blBtn.Font = Enum.Font.GothamBold
+        blBtn.TextSize = 8
+        Instance.new("UICorner", blBtn).CornerRadius = UDim.new(0, 6)
+
+        local isBlacklisted = isCatInList(cat, talentBlacklist)
+        if isBlacklisted then
+            blBtn.BackgroundColor3 = C.red
+            blBtn.TextColor3 = C.text
+        else
+            blBtn.BackgroundColor3 = Color3.fromRGB(40, 45, 65)
+            blBtn.TextColor3 = Color3.fromRGB(180, 190, 220)
+        end
+        blBtn.Text = "BL"
+
+        blBtn.MouseButton1Click:Connect(function()
+            local idx = nil
+            for i, c in ipairs(talentBlacklist) do
+                if c == cat then idx = i; break end
+            end
+            if idx then
+                table.remove(talentBlacklist, idx)
+            else
+                table.insert(talentBlacklist, cat)
+                local wlI = getWhitelistIndex(cat)
+                if wlI then table.remove(talentWhitelist, wlI) end
+            end
+            rebuildTalentConfigList()
+            updateTalentDropText()
+            saveConfig()
+        end)
+
+        -- Max copies label
+        local maxLbl = Instance.new("TextLabel", row)
+        maxLbl.Size = UDim2.new(0, 20, 0, 14)
+        maxLbl.Position = UDim2.new(1, -72, 0, 0)
+        maxLbl.BackgroundTransparency = 1
+        maxLbl.Text = "x"
+        maxLbl.TextColor3 = Color3.fromRGB(180, 190, 220)
+        maxLbl.Font = Enum.Font.Gotham
+        maxLbl.TextSize = 9
+
+        -- Max copies input
+        local maxBox = Instance.new("TextBox", row)
+        maxBox.Size = UDim2.new(0, 40, 0, 18)
+        maxBox.Position = UDim2.new(1, -50, 0.5, -9)
+        maxBox.BackgroundColor3 = C.card2
+        maxBox.TextColor3 = C.text
+        maxBox.Font = Enum.Font.GothamBold
+        maxBox.TextSize = 10
+        maxBox.ClearTextOnFocus = false
+        maxBox.TextXAlignment = Enum.TextXAlignment.Center
+        maxBox.Text = tostring(talentMaxCopies[cat] or 99)
+        Instance.new("UICorner", maxBox).CornerRadius = UDim.new(0, 6)
+
+        maxBox.FocusLost:Connect(function()
+            local v = tonumber(maxBox.Text)
+            if v and v >= 1 then
+                talentMaxCopies[cat] = math.floor(v)
+            else
+                talentMaxCopies[cat] = 99
+                maxBox.Text = "99"
+            end
+            saveConfig()
+        end)
+    end
+
+    TalentConfigScroll.CanvasSize = UDim2.new(0, 0, 0, #ALL_TALENT_CATS * 31 + 6)
+end
+
+TalentConfigDropBtn.MouseButton1Click:Connect(function()
+    local open = not TalentConfigScroll.Visible
+    if open then rebuildTalentConfigList() end
+    NoxarUI.animateDrop(TalentConfigScroll, open, math.min(#ALL_TALENT_CATS * 31 + 6, 200))
+    if open then
+        TalentConfigDropBtn.Text = "  ▲  Close talent config"
+    else
+        local wlCount = #talentWhitelist
+        local blCount = #talentBlacklist
+        TalentConfigDropBtn.Text = "  ▼  Talent Config (WL:" .. wlCount .. " BL:" .. blCount .. ")"
+    end
+end)
+
 -- ══════════════════════════════════════════════════════════════════
 -- AUTO ABYSS — full automation: create team, fight rooms, select
 -- talents, pick doors by room type preference, win → restart loop.
@@ -4731,44 +5004,65 @@ local function tryAutoSelectTalent(syncKey)
     local abyssId = getAbyssSyncValue(syncKey, {"AbyssId"})
     if not abyssId then return false end
 
-    -- Check if we already selected
     local playerSelect = talentInfo.PlayerSelect
     if playerSelect and playerSelect[tostring(LP.UserId)] then
-        return false -- already selected
+        return false
     end
 
-    -- Generate selectable talents and pick the highest quality one
+    -- Auto-reset pick history on new Abyss run
+    if syncKey ~= talentLastAbyssKey then
+        talentLastAbyssKey = syncKey
+        talentPickHistory = {}
+    end
+
     local ok, talents = pcall(function()
         return PT.AbyssSystem.GenerateSelectableTalents(talentInfo.Seed, getGamePlayer(), abyssId)
     end)
-    if ok and talents and #talents > 0 then
-        local bestIdx = 1
-        local bestQuality = -1
+    if not ok or not talents or #talents == 0 then return false end
 
-        -- Quality enum from CfgAbyss: Blue < Purple < Gold etc.
-        -- Higher numeric value = better tier
-        for i, talent in ipairs(talents) do
-            local q = talent.TalentTmpl and talent.TalentTmpl.Quality or 0
-            if type(q) == "number" and q > bestQuality then
-                bestQuality = q
-                bestIdx = i
-            elseif type(q) ~= "number" then
-                -- Quality might be an enum userdata — try to convert
-                local qNum = tonumber(q) or 0
-                if qNum > bestQuality then
-                    bestQuality = qNum
+    local bestIdx = nil
+    local bestScore = -math.huge
+
+    for i, talent in ipairs(talents) do
+        local tmpl = talent.TalentTmpl
+        local name = tmpl and tmpl.Name or ""
+        local cat = getTalentCategory(name)
+
+        if not isTalentBlacklisted(name) then
+            local maxCopies = talentMaxCopies[cat] or 99
+            local currentCopies = talentPickHistory[cat] or 0
+            if currentCopies < maxCopies then
+                local q = tmpl and tmpl.Quality or 0
+                local qNum = type(q) == "number" and q or (tonumber(q) or 0)
+                local v = (tmpl and tmpl.PlayerProperty and tmpl.PlayerProperty.Value) or 0
+                local wlRank = getWhitelistRank(name)
+
+                local score = 0
+                if wlRank <= #talentWhitelist then
+                    score = 10000 + (qNum * 100) + (v * 10) - wlRank
+                else
+                    score = (qNum * 100) + (v * 10)
+                end
+
+                if score > bestScore then
+                    bestScore = score
                     bestIdx = i
                 end
             end
         end
-
-        local selectOk = pcall(function()
-            PT.AbyssSystem.ClientSelectTalent(bestIdx)
-        end)
-        return selectOk
     end
 
-    return false
+    if not bestIdx then return false end
+
+    local chosenTalent = talents[bestIdx]
+    local chosenName = chosenTalent.TalentTmpl and chosenTalent.TalentTmpl.Name or ""
+    local chosenCat = getTalentCategory(chosenName)
+    talentPickHistory[chosenCat] = (talentPickHistory[chosenCat] or 0) + 1
+
+    local selectOk = pcall(function()
+        PT.AbyssSystem.ClientSelectTalent(bestIdx)
+    end)
+    return selectOk
 end
 
 -- Main Auto Abyss loop
@@ -5232,7 +5526,7 @@ RiftToggleBtn.TextColor3 = riftRunning and C.bg or C.text
 RiftToggleBtn.Font = Enum.Font.GothamBold
 RiftToggleBtn.TextSize = 12
 RiftToggleBtn.Text = riftRunning and "\xe2\x97\x8f AUTO RIFT: ON" or "\xe2\x97\x8f AUTO RIFT: OFF"
-RiftToggleBtn.LayoutOrder = 31
+RiftToggleBtn.LayoutOrder = 33
 Instance.new("UICorner", RiftToggleBtn).CornerRadius = UDim.new(0, 9)
 
 RiftToggleBtn.MouseButton1Click:Connect(function()
