@@ -2359,6 +2359,7 @@ AreaFarmIDs = {
     ["Mobius Circus"] = 10,
     ["Specter Shallows"] = 11,
     ["Nova Coast"] = 12,
+    ["Splash Isle"] = 13,
     ["Skyheart Isle"] = 10000,
     ["Activity place"] = 10001,
 }
@@ -2758,6 +2759,7 @@ BOSS_LIST = {
     { name = "Walrusk",          area = "Tideland",         tier = "Ultra" },
     { name = "Undine",           area = "Tideland",         tier = "Ultra" },
     { name = "Bull Lord",        area = "Specter Shallows", tier = "Ultra" },
+    { name = "Venofrog",         area = "Splash Isle",      tier = "Ultra" },
 }
 
 BossLoopDivider = Instance.new("Frame", AreaFarmTab)
