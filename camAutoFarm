@@ -3054,7 +3054,7 @@ function fightBossUntilDead(monster, isSpecial, bossName)
         end
 
         if isSpecial and os.clock() - fightStartedAt >= 20 then
-            BossLoopLiveStatusLbl.Text = "Status: " .. tostring(bossName or "Special") .. " timed out after 9s — continuing..."
+            BossLoopLiveStatusLbl.Text = "Status: " .. tostring(bossName or "Special") .. " timed out after 20s — continuing..."
             return true -- special/ultra timeout guard so the loop never gets stuck here
         end
 
