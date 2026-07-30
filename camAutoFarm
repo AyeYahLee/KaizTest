@@ -679,13 +679,6 @@ end
 
 ClaimStatus = nil
 LastClaimLbl = nil
-function claimRemote(channelName, ...)
-    local args = table.pack(...)
-    pcall(function()
-        DataPullFunc:InvokeServer(channelName, table.unpack(args, 1, args.n))
-    end)
-    task.wait(0.1)
-end
 
 function claimEverything()
     if not autoClaimEnabled then
@@ -696,23 +689,42 @@ function claimEverything()
         ClaimStatus.Text = "Status: Claiming..."
     end
 
+    -- Require fresh each time so the game's own UI listeners pick up the changes
+    local TaskSystem, ChestRewardSystem, TowerSystem
+    pcall(function() TaskSystem = require(RS.CommonLogic.Task.TaskSystem) end)
+    pcall(function() ChestRewardSystem = require(RS.CommonLogic.ChestReward.ChestRewardSystem) end)
+    pcall(function() TowerSystem = require(RS.CommonLogic.Tower.TowerSystem) end)
 
-    -- Daily tasks
-    for _, id in ipairs({101, 102, 103, 104, 105}) do
-        claimRemote("TaskClaimRewardChannel", id)
-    end
-
-    -- Weekly tasks
-    for _, id in ipairs({201, 202, 203, 204, 205}) do
-        claimRemote("TaskClaimRewardChannel", id)
+    -- Daily tasks (101-105)
+    if TaskSystem then
+        for _, id in ipairs({101, 102, 103, 104, 105}) do
+            pcall(function() TaskSystem.ClientClaimReward(id) end)
+            task.wait(0.15)
+        end
+        -- Weekly tasks (201-205)
+        for _, id in ipairs({201, 202, 203, 204, 205}) do
+            pcall(function() TaskSystem.ClientClaimReward(id) end)
+            task.wait(0.15)
+        end
     end
 
     -- Tower rewards
-    claimRemote("TowerTakeDailyRewardAllChannel")
+    if TowerSystem then
+        pcall(function() TowerSystem.ClientTakeDailyRewardAll() end)
+        task.wait(0.15)
+        pcall(function() TowerSystem.ClientTakePrevSeasonRankReward() end)
+        task.wait(0.15)
+    end
 
-    -- Daily chest/reward claims
-    claimRemote("ChestRewardTakeDailyChestChannel", 1)
-    claimRemote("ChestRewardTakeDailyRewardChannel", 1)
+    -- Daily chest + daily reward + member chest
+    if ChestRewardSystem then
+        pcall(function() ChestRewardSystem.ClientTakeDailyChest(1) end)
+        task.wait(0.15)
+        pcall(function() ChestRewardSystem.ClientTakeDailyReward(1) end)
+        task.wait(0.15)
+        pcall(function() ChestRewardSystem.ClientTakeMemberChest(1) end)
+        task.wait(0.15)
+    end
 
     if ClaimStatus then
         ClaimStatus.Text = "Status: Done!"
@@ -3053,8 +3065,8 @@ function fightBossUntilDead(monster, isSpecial, bossName)
             lastSnapAt = os.clock()
         end
 
-        if isSpecial and os.clock() - fightStartedAt >= 20 then
-            BossLoopLiveStatusLbl.Text = "Status: " .. tostring(bossName or "Special") .. " timed out after 20s — continuing..."
+        if isSpecial and os.clock() - fightStartedAt >= 9 then
+            BossLoopLiveStatusLbl.Text = "Status: " .. tostring(bossName or "Special") .. " timed out after 9s — continuing..."
             return true -- special/ultra timeout guard so the loop never gets stuck here
         end
 
@@ -5036,23 +5048,19 @@ local function tryAutoSelectTalent(syncKey)
     local bestIdx = nil
     local bestScore = -math.huge
 
-    -- Three-pass scoring:
-    -- Pass 1: respect blacklist + max copies (normal)
-    -- Pass 2: respect blacklist only (ignore max copies)
-    -- Pass 3: ignore everything (pick best available, last resort)
-    for pass = 1, 3 do
+    -- Two-pass scoring: first with all restrictions, then fallback ignoring max copies
+    -- Blacklist is NEVER ignored
+    for pass = 1, 2 do
         for i, talent in ipairs(talents) do
             local tmpl = talent.TalentTmpl
             local name = tmpl and tmpl.Name or ""
             local cat = getTalentCategory(name)
 
-        local blacklisted = isTalentBlacklisted(name)
-        -- Pass 3 ignores blacklist as last resort
-        if not blacklisted or pass == 3 then
-            local maxCopies = talentMaxCopies[cat] or 99
-            local currentCopies = talentPickHistory[cat] or 0
-            -- Pass 1: respect max copies. Pass 2-3: ignore max copies.
-            if pass >= 2 or currentCopies < maxCopies then
+            if not isTalentBlacklisted(name) then
+                local maxCopies = talentMaxCopies[cat] or 99
+                local currentCopies = talentPickHistory[cat] or 0
+                -- Pass 1: respect max copies. Pass 2: ignore max copies.
+                if pass == 2 or currentCopies < maxCopies then
                     local q = tmpl and tmpl.Quality or 0
                     local qNum = type(q) == "number" and q or (tonumber(q) or 0)
                     local v = (tmpl and tmpl.PlayerProperty and tmpl.PlayerProperty.Value) or 0
