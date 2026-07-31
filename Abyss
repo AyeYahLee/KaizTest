@@ -236,9 +236,9 @@ task.spawn(function()
         Invoke("AbyssTeamCreatePrepareChannel", Difficulty)
         task.wait(0.1)
         Invoke("AbyssViewedTimeLimitedChannel", DungeonId)
-        task.wait(0.1)
+        task.wait(0.2)
         Invoke("AbyssCreateTeamChannel", Difficulty, DungeonId, TeamMode)
-        task.wait(0.1)
+        task.wait(0.3)
         Invoke("AbyssTeamCreatePrepareCancelChannel", Difficulty)
         task.wait(0.5)
 
@@ -253,7 +253,7 @@ task.spawn(function()
                     if player ~= LP then
                         local theirChar = player.Character
                         local theirRoot = theirChar and theirChar:FindFirstChild("HumanoidRootPart")
-                        if theirRoot and (myRoot.Position - theirRoot.Position).Magnitude < 10 then
+                        if theirRoot and (myRoot.Position - theirRoot.Position).Magnitude < 13 then
                             found = true
                             break
                         end
