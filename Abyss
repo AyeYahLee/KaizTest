@@ -13,6 +13,28 @@ local DataPullFunc = RS:WaitForChild("CommonLibrary"):WaitForChild("Tool")
 local Character = LP.Character or LP.CharacterAdded:Wait()
 local HRP = Character:WaitForChild("HumanoidRootPart")
 
+-- Re-fetch character on respawn
+LP.CharacterAdded:Connect(function(c)
+    Character = c
+    HRP = c:WaitForChild("HumanoidRootPart")
+end)
+
+-- ══════════════════════════════════════════════════════════════════
+-- POINTS TRACKER
+-- ══════════════════════════════════════════════════════════════════
+local POINTS_PER_CYCLE = 30
+local totalPoints = 0
+local totalCycles = 0
+
+local function fmtPoints(n)
+    if n >= 1000000 then
+        return string.format("%.1fM", n / 1000000)
+    elseif n >= 1000 then
+        return string.format("%.1fk", n / 1000)
+    end
+    return tostring(n)
+end
+
 -- ══════════════════════════════════════════════════════════════════
 -- SETTINGS
 -- ══════════════════════════════════════════════════════════════════
@@ -43,12 +65,14 @@ local function isInAbyss()
 end
 
 local function teleportToAbyss()
-    local root = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
-    if root and Trigger then
-        root.CFrame = Trigger.CFrame + Vector3.new(0, 3, 0)
-        root.AssemblyLinearVelocity = Vector3.zero
-        root.AssemblyAngularVelocity = Vector3.zero
-    end
+    pcall(function()
+        local root = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+        if root and Trigger then
+            root.CFrame = Trigger.CFrame + Vector3.new(0, 3, 0)
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+        end
+    end)
 end
 
 local function leaveArena()
@@ -68,7 +92,7 @@ sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 sg.Parent = LP.PlayerGui
 
 local main = Instance.new("Frame", sg)
-main.Size = UDim2.new(0, 220, 0, 130)
+main.Size = UDim2.new(0, 220, 0, 144)
 main.Position = UDim2.new(0.5, -110, 0.15, 0)
 main.BackgroundColor3 = Color3.fromRGB(18, 18, 28)
 main.BorderSizePixel = 0
@@ -209,6 +233,17 @@ playerLbl.Font = Enum.Font.Gotham
 playerLbl.TextSize = 9
 playerLbl.TextXAlignment = Enum.TextXAlignment.Left
 
+-- Points label
+local pointsLbl = Instance.new("TextLabel", main)
+pointsLbl.Size = UDim2.new(1, -16, 0, 14)
+pointsLbl.Position = UDim2.new(0, 8, 0, 118)
+pointsLbl.BackgroundTransparency = 1
+pointsLbl.Text = "Points: 0"
+pointsLbl.TextColor3 = Color3.fromRGB(255, 200, 80)
+pointsLbl.Font = Enum.Font.GothamBold
+pointsLbl.TextSize = 9
+pointsLbl.TextXAlignment = Enum.TextXAlignment.Left
+
 task.spawn(function()
     while not stopped do
         task.wait(1)
@@ -275,6 +310,11 @@ task.spawn(function()
         setStatus("Host: leaving...", Color3.fromRGB(255, 200, 80))
         Invoke("ArenaLeaveChannel")
         task.wait(2)
+
+        -- Track points
+        totalCycles += 1
+        totalPoints += POINTS_PER_CYCLE
+        pointsLbl.Text = "Points: " .. fmtPoints(totalPoints)
 
         setStatus("Host: cycle done", Color3.fromRGB(100, 255, 130))
     end
