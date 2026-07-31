@@ -1,0 +1,138 @@
+-- Glue To Player — Standalone Script
+-- Locks your character onto a target player every frame.
+-- Works even if they TP or move fast.
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local LP = Players.LocalPlayer
+
+local TARGET_NAME = "1ocars0n" -- change to your alt
+
+-- State
+local enabled = false
+local conn = nil
+
+-- ── UI ────────────────────────────────────────────────────────────
+local old = LP.PlayerGui:FindFirstChild("GlueToPlayerGui")
+if old then old:Destroy() end
+
+local sg = Instance.new("ScreenGui")
+sg.Name = "GlueToPlayerGui"
+sg.ResetOnSpawn = false
+sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+sg.Parent = LP.PlayerGui
+
+local frame = Instance.new("Frame", sg)
+frame.Size = UDim2.new(0, 220, 0, 70)
+frame.Position = UDim2.new(0.5, -110, 0.05, 0)
+frame.BackgroundColor3 = Color3.fromRGB(18, 18, 28)
+frame.BorderSizePixel = 0
+frame.Active = true
+frame.Draggable = true
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
+Instance.new("UIStroke", frame).Color = Color3.fromRGB(60, 180, 100)
+
+local title = Instance.new("TextLabel", frame)
+title.Size = UDim2.new(1, 0, 0, 24)
+title.BackgroundColor3 = Color3.fromRGB(12, 12, 20)
+title.BackgroundTransparency = 0.3
+title.Text = "  Glue: " .. TARGET_NAME
+title.TextColor3 = Color3.fromRGB(130, 255, 170)
+title.Font = Enum.Font.GothamBold
+title.TextSize = 12
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.BorderSizePixel = 0
+Instance.new("UICorner", title).CornerRadius = UDim.new(0, 10)
+
+local statusLbl = Instance.new("TextLabel", frame)
+statusLbl.Size = UDim2.new(1, -16, 0, 16)
+statusLbl.Position = UDim2.new(0, 8, 0, 28)
+statusLbl.BackgroundTransparency = 1
+statusLbl.Text = "OFF"
+statusLbl.TextColor3 = Color3.fromRGB(140, 140, 160)
+statusLbl.Font = Enum.Font.Gotham
+statusLbl.TextSize = 10
+statusLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+local toggleBtn = Instance.new("TextButton", frame)
+toggleBtn.Size = UDim2.new(1, -16, 0, 22)
+toggleBtn.Position = UDim2.new(0, 8, 0, 46)
+toggleBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 50)
+toggleBtn.TextColor3 = Color3.new(1, 1, 1)
+toggleBtn.Font = Enum.Font.GothamBold
+toggleBtn.TextSize = 11
+toggleBtn.Text = "● GLUE: OFF"
+toggleBtn.BorderSizePixel = 0
+Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(0, 7)
+
+local function setStatus(text, color)
+    statusLbl.Text = text
+    statusLbl.TextColor3 = color or Color3.fromRGB(140, 140, 160)
+end
+
+local function getTargetPlayer()
+    return Players:FindFirstChild(TARGET_NAME)
+end
+
+local function getTargetRoot()
+    local p = getTargetPlayer()
+    local char = p and p.Character
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local function getMyRoot()
+    local char = LP.Character
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local function startGlue()
+    if conn then conn:Disconnect() end
+
+    conn = RunService.Heartbeat:Connect(function()
+        if not enabled then return end
+
+        local myRoot = getMyRoot()
+        local theirRoot = getTargetRoot()
+        if not myRoot or not theirRoot then
+            setStatus("Waiting for players...", Color3.fromRGB(255, 200, 80))
+            return
+        end
+
+        -- Lock onto target every single frame
+        myRoot.CFrame = theirRoot.CFrame
+        myRoot.AssemblyLinearVelocity = Vector3.zero
+        myRoot.AssemblyAngularVelocity = Vector3.zero
+        setStatus("Glued to " .. TARGET_NAME, Color3.fromRGB(100, 255, 130))
+    end)
+end
+
+local function stopGlue()
+    if conn then
+        conn:Disconnect()
+        conn = nil
+    end
+    setStatus("OFF", Color3.fromRGB(140, 140, 160))
+end
+
+toggleBtn.MouseButton1Click:Connect(function()
+    enabled = not enabled
+    if enabled then
+        toggleBtn.BackgroundColor3 = Color3.fromRGB(50, 180, 80)
+        toggleBtn.Text = "● GLUE: ON"
+        startGlue()
+    else
+        toggleBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 50)
+        toggleBtn.Text = "● GLUE: OFF"
+        stopGlue()
+    end
+end)
+
+-- Cleanup
+if _G.StopGlue then _G.StopGlue() end
+_G.StopGlue = function()
+    enabled = false
+    stopGlue()
+    if sg then sg:Destroy() end
+end
+
+print("[GlueToPlayer] Loaded — targeting: " .. TARGET_NAME)
