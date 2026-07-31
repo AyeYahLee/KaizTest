@@ -1,0 +1,223 @@
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local LocalPlayer = Players.LocalPlayer
+local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local HRP = Character:WaitForChild("HumanoidRootPart")
+
+local Remote = ReplicatedStorage
+    :WaitForChild("CommonLibrary")
+    :WaitForChild("Tool")
+    :WaitForChild("RemoteManager")
+    :WaitForChild("Funcs")
+    :WaitForChild("DataPullFunc")
+
+-- SETTINGS
+local Difficulty = 1
+local DungeonId = 1005
+local TeamMode = 2
+
+local Trigger = workspace.Area.center.ServerZone.Abyss.Abyss_1
+
+local function Invoke(...)
+    local ok, result = pcall(function(...)
+        return Remote:InvokeServer(...)
+    end, ...)
+    if not ok then warn(result) end
+    return ok, result
+end
+
+-- ══════════════════════════════
+-- CORE LOOP LOGIC
+-- ══════════════════════════════
+local loopEnabled = false
+local loopId = 0
+local statusLbl -- set after GUI built
+
+local function setStatus(text)
+    if statusLbl then statusLbl.Text = text end
+end
+
+local function runAbyssCycle()
+    setStatus("Teleporting...")
+    HRP = Character and Character:FindFirstChild("HumanoidRootPart")
+    if not HRP then return end
+    HRP.CFrame = Trigger.CFrame + Vector3.new(0, 3, 0)
+    task.wait(0.05)
+
+    setStatus("Creating team...")
+    Invoke("AbyssTeamCreatePrepareChannel", Difficulty)
+    task.wait(0.1)
+
+    Invoke("AbyssViewedTimeLimitedChannel", DungeonId)
+    task.wait()
+
+    Invoke("AbyssCreateTeamChannel", Difficulty, DungeonId, TeamMode)
+    task.wait()
+
+    Invoke("AbyssTeamCreatePrepareCancelChannel", Difficulty)
+    task.wait()
+
+    setStatus("Starting Abyss...")
+    Invoke("AbyssStartChannel")
+
+    task.wait(1.5)
+
+    setStatus("Leaving Arena...")
+    Invoke("ArenaLeaveChannel")
+
+    setStatus("Cycle complete.")
+end
+
+local function startLoop()
+    loopId += 1
+    local myId = loopId
+    task.spawn(function()
+        while loopEnabled and loopId == myId do
+            pcall(runAbyssCycle)
+            task.wait(2)
+            if not loopEnabled or loopId ~= myId then break end
+        end
+        if loopEnabled and loopId == myId then
+            setStatus("Idle")
+        end
+    end)
+end
+
+-- ══════════════════════════════
+-- GUI
+-- ══════════════════════════════
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "AbyssLooperGui"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+local main = Instance.new("Frame")
+main.Size = UDim2.new(0, 240, 0, 130)
+main.Position = UDim2.new(0.5, -120, 0.3, 0)
+main.BackgroundColor3 = Color3.fromRGB(20, 20, 26)
+main.BorderSizePixel = 0
+main.Active = true
+main.Draggable = true
+main.Parent = screenGui
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 10)
+
+-- Title bar (also draggable, holds minimize button)
+local titleBar = Instance.new("Frame", main)
+titleBar.Size = UDim2.new(1, 0, 0, 28)
+titleBar.BackgroundTransparency = 1
+titleBar.Active = true
+titleBar.Draggable = true
+
+local titleLbl = Instance.new("TextLabel", titleBar)
+titleLbl.Size = UDim2.new(1, -34, 1, 0)
+titleLbl.Position = UDim2.new(0, 8, 0, 0)
+titleLbl.BackgroundTransparency = 1
+titleLbl.Text = "🌀 Abyss Looper"
+titleLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+titleLbl.Font = Enum.Font.GothamBold
+titleLbl.TextSize = 13
+titleLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+local minimizeBtn = Instance.new("TextButton", titleBar)
+minimizeBtn.Size = UDim2.new(0, 24, 0, 24)
+minimizeBtn.Position = UDim2.new(1, -28, 0, 2)
+minimizeBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
+minimizeBtn.Text = "—"
+minimizeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+minimizeBtn.Font = Enum.Font.GothamBold
+minimizeBtn.TextSize = 14
+minimizeBtn.BorderSizePixel = 0
+Instance.new("UICorner", minimizeBtn).CornerRadius = UDim.new(0, 6)
+
+-- Body (everything below the title bar, hidden when minimized)
+local body = Instance.new("Frame", main)
+body.Size = UDim2.new(1, -10, 1, -34)
+body.Position = UDim2.new(0, 5, 0, 30)
+body.BackgroundTransparency = 1
+
+-- Toggle switch row
+local toggleRow = Instance.new("Frame", body)
+toggleRow.Size = UDim2.new(1, 0, 0, 30)
+toggleRow.BackgroundTransparency = 1
+
+local toggleLbl = Instance.new("TextLabel", toggleRow)
+toggleLbl.Size = UDim2.new(0.6, 0, 1, 0)
+toggleLbl.BackgroundTransparency = 1
+toggleLbl.Text = "Auto Loop"
+toggleLbl.TextColor3 = Color3.fromRGB(220, 220, 225)
+toggleLbl.Font = Enum.Font.Gotham
+toggleLbl.TextSize = 12
+toggleLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+local switchBg = Instance.new("Frame", toggleRow)
+switchBg.Size = UDim2.new(0, 44, 0, 22)
+switchBg.Position = UDim2.new(1, -44, 0.5, -11)
+switchBg.BackgroundColor3 = Color3.fromRGB(70, 30, 30)
+switchBg.BorderSizePixel = 0
+Instance.new("UICorner", switchBg).CornerRadius = UDim.new(1, 0)
+
+local switchKnob = Instance.new("Frame", switchBg)
+switchKnob.Size = UDim2.new(0, 18, 0, 18)
+switchKnob.Position = UDim2.new(0, 2, 0.5, -9)
+switchKnob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+switchKnob.BorderSizePixel = 0
+Instance.new("UICorner", switchKnob).CornerRadius = UDim.new(1, 0)
+
+local switchBtn = Instance.new("TextButton", switchBg)
+switchBtn.Size = UDim2.new(1, 0, 1, 0)
+switchBtn.BackgroundTransparency = 1
+switchBtn.Text = ""
+
+local TweenService = game:GetService("TweenService")
+
+local function setSwitch(on)
+    loopEnabled = on
+    if on then
+        TweenService:Create(switchBg, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(30, 90, 40)}):Play()
+        TweenService:Create(switchKnob, TweenInfo.new(0.15), {Position = UDim2.new(1, -20, 0.5, -9)}):Play()
+        setStatus("Starting...")
+        startLoop()
+    else
+        loopId += 1 -- invalidate running loop
+        TweenService:Create(switchBg, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(70, 30, 30)}):Play()
+        TweenService:Create(switchKnob, TweenInfo.new(0.15), {Position = UDim2.new(0, 2, 0.5, -9)}):Play()
+        setStatus("Stopped")
+    end
+end
+
+switchBtn.MouseButton1Click:Connect(function()
+    setSwitch(not loopEnabled)
+end)
+
+statusLbl = Instance.new("TextLabel", body)
+statusLbl.Size = UDim2.new(1, 0, 0, 40)
+statusLbl.Position = UDim2.new(0, 0, 0, 36)
+statusLbl.BackgroundTransparency = 1
+statusLbl.Text = "Idle"
+statusLbl.TextColor3 = Color3.fromRGB(160, 160, 170)
+statusLbl.Font = Enum.Font.Gotham
+statusLbl.TextSize = 11
+statusLbl.TextWrapped = true
+statusLbl.TextXAlignment = Enum.TextXAlignment.Left
+statusLbl.TextYAlignment = Enum.TextYAlignment.Top
+
+-- ══════════════════════════════
+-- MINIMIZE
+-- ══════════════════════════════
+local minimized = false
+minimizeBtn.MouseButton1Click:Connect(function()
+    minimized = not minimized
+    if minimized then
+        body.Visible = false
+        TweenService:Create(main, TweenInfo.new(0.15), {Size = UDim2.new(0, 240, 0, 34)}):Play()
+        minimizeBtn.Text = "+"
+    else
+        TweenService:Create(main, TweenInfo.new(0.15), {Size = UDim2.new(0, 240, 0, 130)}):Play()
+        task.wait(0.15)
+        body.Visible = true
+        minimizeBtn.Text = "—"
+    end
+end)
+
+print("Abyss Looper GUI loaded.")
