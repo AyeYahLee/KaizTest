@@ -397,6 +397,7 @@ function saveConfig()
             autoUseRiftItemEnabled = autoUseRiftItemEnabled,
             -- Auto Abyss
             autoAbyssEnabled = autoAbyssEnabled,
+            legitModeEnabled = legitModeEnabled,
             selectedAbyssTmplId = selectedAbyssTmplId,
             talentWhitelist = talentWhitelist,
             talentBlacklist = talentBlacklist,
@@ -443,6 +444,7 @@ function loadConfig()
             if data.autoUseRiftItemEnabled ~= nil then autoUseRiftItemEnabled = data.autoUseRiftItemEnabled end
             -- Auto Abyss restore
             if data.autoAbyssEnabled ~= nil then autoAbyssEnabled = data.autoAbyssEnabled end
+            if data.legitModeEnabled ~= nil then legitModeEnabled = data.legitModeEnabled end
             if data.selectedAbyssTmplId ~= nil then selectedAbyssTmplId = data.selectedAbyssTmplId end
             if data.talentWhitelist ~= nil then talentWhitelist = data.talentWhitelist end
             if data.talentBlacklist ~= nil then talentBlacklist = data.talentBlacklist end
@@ -3303,6 +3305,7 @@ autoUseRiftItemEnabled = autoUseRiftItemEnabled or false
 
 -- Auto Abyss States
 autoAbyssEnabled = autoAbyssEnabled or false
+legitModeEnabled = legitModeEnabled or false
 selectedAbyssTmplId = selectedAbyssTmplId or 1001 -- default: Easy (Cinderclaw Castle)
 autoSelectTalent = true -- always auto-select highest quality talent
 
@@ -4605,6 +4608,15 @@ Instance.new("UICorner", AbyssToggleBtn).CornerRadius = UDim.new(0, 9)
 AbyssToggleBtn.MouseButton1Click:Connect(function()
     autoAbyssEnabled = not autoAbyssEnabled
     if autoAbyssEnabled then
+        -- Mutual exclusivity: disable Legit Mode when Auto Abyss is enabled
+        if legitModeEnabled then
+            legitModeEnabled = false
+            LegitModeToggleBtn.BackgroundColor3 = C.red
+            LegitModeToggleBtn.TextColor3 = C.text
+            LegitModeToggleBtn.Text = "● LEGIT MODE: OFF"
+            stopAutoAbyss()
+            task.wait(0.1)
+        end
         AbyssToggleBtn.BackgroundColor3 = C.green
         AbyssToggleBtn.TextColor3 = C.bg
         AbyssToggleBtn.Text = "● AUTO ABYSS: ON"
@@ -4613,6 +4625,45 @@ AbyssToggleBtn.MouseButton1Click:Connect(function()
         AbyssToggleBtn.BackgroundColor3 = C.red
         AbyssToggleBtn.TextColor3 = C.text
         AbyssToggleBtn.Text = "● AUTO ABYSS: OFF"
+        stopAutoAbyss()
+    end
+    saveConfig()
+end)
+
+-- ══════════════════════════════════════════════════════════════════
+-- LEGIT MODE TOGGLE — same Auto Abyss logic but walks instead of
+-- teleporting, walks to every destination naturally.
+-- ══════════════════════════════════════════════════════════════════
+LegitModeToggleBtn = Instance.new("TextButton", RiftTab)
+LegitModeToggleBtn.Size = UDim2.new(1, -20, 0, 30)
+LegitModeToggleBtn.BackgroundColor3 = legitModeEnabled and C.green or C.red
+LegitModeToggleBtn.TextColor3 = legitModeEnabled and C.bg or C.text
+LegitModeToggleBtn.Text = legitModeEnabled and "● LEGIT MODE: ON" or "● LEGIT MODE: OFF"
+LegitModeToggleBtn.Font = Enum.Font.GothamBold
+LegitModeToggleBtn.TextSize = 11
+LegitModeToggleBtn.LayoutOrder = 20
+Instance.new("UICorner", LegitModeToggleBtn).CornerRadius = UDim.new(0, 9)
+
+LegitModeToggleBtn.MouseButton1Click:Connect(function()
+    legitModeEnabled = not legitModeEnabled
+    if legitModeEnabled then
+        -- Mutual exclusivity: disable Auto Abyss when Legit Mode is enabled
+        if autoAbyssEnabled then
+            autoAbyssEnabled = false
+            AbyssToggleBtn.BackgroundColor3 = C.red
+            AbyssToggleBtn.TextColor3 = C.text
+            AbyssToggleBtn.Text = "● AUTO ABYSS: OFF"
+            stopAutoAbyss()
+            task.wait(0.1)
+        end
+        LegitModeToggleBtn.BackgroundColor3 = C.green
+        LegitModeToggleBtn.TextColor3 = C.bg
+        LegitModeToggleBtn.Text = "● LEGIT MODE: ON"
+        startAutoAbyss()
+    else
+        LegitModeToggleBtn.BackgroundColor3 = C.red
+        LegitModeToggleBtn.TextColor3 = C.text
+        LegitModeToggleBtn.Text = "● LEGIT MODE: OFF"
         stopAutoAbyss()
     end
     saveConfig()
@@ -4960,7 +5011,65 @@ local function pickPreferredDoor(doorInfos)
     return bestDoor
 end
 
+-- ══════════════════════════════════════════════════════════════════
+-- LEGIT MODE — Walk-based movement helpers
+-- ══════════════════════════════════════════════════════════════════
+local function getHumanoid()
+    local char = LP.Character
+    return char and char:FindFirstChildOfClass("Humanoid")
+end
+
+-- Walk the character to a position using Humanoid:MoveTo (real walking,
+-- visible to other players). Returns true if arrived within threshold.
+local function walkToPosition(targetPos, threshold, maxTime, stillRunningFn)
+    threshold = threshold or 8
+    maxTime = maxTime or 30
+
+    local root = getRoot()
+    if not root then return false end
+
+    local hum = getHumanoid()
+    if not hum then return false end
+
+    hum:MoveTo(targetPos)
+
+    local startTick = os.clock()
+    local lastReissue = 0
+    while stillRunningFn and stillRunningFn() do
+        root = getRoot()
+        if not root then return false end
+
+        local pos = root.Position
+        local dx = targetPos.X - pos.X
+        local dz = targetPos.Z - pos.Z
+        local dist = math.sqrt(dx * dx + dz * dz)
+
+        if dist <= threshold then
+            return true
+        end
+
+        -- Re-issue MoveTo if humanoid stopped moving
+        local now = os.clock()
+        if now - lastReissue >= 1.5 then
+            local h = getHumanoid()
+            if h then h:MoveTo(targetPos) end
+            lastReissue = now
+        end
+
+        if now - startTick >= maxTime then
+            root.CFrame = CFrame.new(targetPos.X, targetPos.Y + 3, targetPos.Z)
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+            return true
+        end
+
+        task.wait(0.15)
+    end
+    return false
+end
+
 -- Walk to a door and click it
+-- In legit mode: walk to the door, then click it
 local function walkToDoorAndClick(door)
     if not door or not door.CFrame then return false end
 
@@ -4968,27 +5077,47 @@ local function walkToDoorAndClick(door)
     if not root then return false end
 
     local doorPos = door.CFrame.Position
-    root.CFrame = CFrame.new(doorPos.X, doorPos.Y + 3, doorPos.Z)
-    root.AssemblyLinearVelocity = Vector3.zero
-    root.AssemblyAngularVelocity = Vector3.zero
+
+    if legitModeEnabled then
+        -- Walk toward the door on the CURRENT floor level — MoveTo can't
+        -- pathfind to the door's own Y if it's elevated/in a wall.
+        -- Once we're close enough in XZ, the ClickDetector (15 studs) fires.
+        AbyssStatusLbl.Text = "🚶 Walking to door..."
+        AbyssStatusLbl.TextColor3 = C.gold
+        local myRoot = getRoot()
+        local walkTarget = myRoot
+            and Vector3.new(doorPos.X, myRoot.Position.Y, doorPos.Z)
+            or doorPos
+        walkToPosition(walkTarget, 15, 20, function() return autoAbyssEnabled or legitModeEnabled end)
+        AbyssStatusLbl.Text = "🚪 Clicking door..."
+        task.wait(0.5)
+    else
+        root.CFrame = CFrame.new(doorPos.X, doorPos.Y + 3, doorPos.Z)
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+    end
     task.wait(0.3)
 
     -- Find and click the door model in AbyssClientModel
+    local clicked = false
     local abyssModelFolder = workspace:FindFirstChild("AbyssClientModel")
     if abyssModelFolder then
         for _, model in ipairs(abyssModelFolder:GetChildren()) do
+            if clicked then break end
             local pp = model.PrimaryPart or model:FindFirstChild("Root")
             if pp and (pp.Position - doorPos).Magnitude < 15 then
                 local cd = pp:FindFirstChildOfClass("ClickDetector")
                 if cd then
                     pcall(function() fireclickdetector(cd) end)
-                    return true
-                end
-                -- Try clicking via the model itself
-                for _, desc in ipairs(model:GetDescendants()) do
-                    if desc:IsA("ClickDetector") then
-                        pcall(function() fireclickdetector(desc) end)
-                        return true
+                    clicked = true
+                else
+                    -- Try clicking via the model itself
+                    for _, desc in ipairs(model:GetDescendants()) do
+                        if desc:IsA("ClickDetector") then
+                            pcall(function() fireclickdetector(desc) end)
+                            clicked = true
+                            break
+                        end
                     end
                 end
             end
@@ -4996,16 +5125,19 @@ local function walkToDoorAndClick(door)
     end
 
     -- Fallback: try clicking any ClickDetector near the door position
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("ClickDetector") and obj.Parent and obj.Parent:IsA("BasePart") then
-            if (obj.Parent.Position - doorPos).Magnitude < 10 then
-                pcall(function() fireclickdetector(obj) end)
-                return true
+    if not clicked then
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("ClickDetector") and obj.Parent and obj.Parent:IsA("BasePart") then
+                if (obj.Parent.Position - doorPos).Magnitude < 10 then
+                    pcall(function() fireclickdetector(obj) end)
+                    clicked = true
+                    break
+                end
             end
         end
     end
 
-    return false
+    return clicked
 end
 
 -- Auto-select talent when available
@@ -5124,6 +5256,33 @@ function teleportToTalentModel()
     return false
 end
 
+-- Legit-mode-aware talent model movement: walks to the talent model
+-- then selects the talent.
+-- Takes the loop's stillRunning check as a parameter.
+local function goToTalentModel(stillRunningFn)
+    if not legitModeEnabled then
+        return teleportToTalentModel()
+    end
+
+    local abyssFolder = workspace:FindFirstChild("AbyssClientModel")
+    if not abyssFolder then return false end
+
+    for _, child in ipairs(abyssFolder:GetChildren()) do
+        local jitan = child:FindFirstChild("jitan2", true)
+        if jitan then
+            local rootPart = child:FindFirstChild("Root", true) or child:FindFirstChildWhichIsA("BasePart", true)
+            if rootPart then
+                -- Walk to talent model — same spot teleport uses
+                local walkTarget = rootPart.Position + Vector3.new(0, 3, 0)
+                walkToPosition(walkTarget, 8, 20, stillRunningFn)
+                task.wait(0.3)
+                return true
+            end
+        end
+    end
+    return false
+end
+
 -- Finds the closest room in SpaceModels to the player right now.
 -- Returns (centerCFrame, distance) or (nil, nil) if nothing found.
 -- Shared by both the initial floor-change centering and the periodic
@@ -5156,7 +5315,7 @@ end
 
 function autoAbyssLoop(myGen)
     local function stillRunning()
-        return autoAbyssEnabled and myGen == _G.NoxarAbyssLoopGeneration
+        return (autoAbyssEnabled or legitModeEnabled) and myGen == _G.NoxarAbyssLoopGeneration
     end
 
     local lastStage = nil -- track floor changes for auto-center teleport
@@ -5192,9 +5351,9 @@ function autoAbyssLoop(myGen)
                         local restPlayerSelect = restTalentInfo.PlayerSelect
                         local restAlreadySelected = restPlayerSelect and restPlayerSelect[tostring(LP.UserId)]
                         if not restAlreadySelected and autoSelectTalent then
-                            -- Talent exists and not yet selected - teleport to it
+                            -- Talent exists and not yet selected - go to it
                             AbyssStatusLbl.Text = "Rest room - selecting talent..."
-                            teleportToTalentModel()
+                            goToTalentModel(stillRunning)
                             task.wait(0.5)
                             tryAutoSelectTalent(syncKey)
                             task.wait(0.3)
@@ -5238,13 +5397,19 @@ function autoAbyssLoop(myGen)
                     AbyssStatusLbl.TextColor3 = C.accent
 
                     local root = getRoot()
-                    local centerCFrame = getClosestRoomCenter()
+                    local centerCFrame, centerDist = getClosestRoomCenter()
                     if root and centerCFrame then
-                        root.CFrame = centerCFrame + Vector3.new(0, 3, 0)
-                        root.AssemblyLinearVelocity = Vector3.zero
-                        root.AssemblyAngularVelocity = Vector3.zero
+                        if legitModeEnabled and centerDist and centerDist > 8 then
+                            -- Legit mode: walk to center
+                            AbyssStatusLbl.Text = "🚶 Floor " .. tostring(stage) .. " — walking to center..."
+                            walkToPosition(centerCFrame.Position, 8, 20, stillRunning)
+                        else
+                            root.CFrame = centerCFrame + Vector3.new(0, 3, 0)
+                            root.AssemblyLinearVelocity = Vector3.zero
+                            root.AssemblyAngularVelocity = Vector3.zero
+                        end
                     end
-                    task.wait(0.5) -- brief settle after teleport
+                    task.wait(0.5) -- brief settle after teleport/walk
                 end
 
                 lastChosenRoomType = nil -- reset after processing
@@ -5310,10 +5475,10 @@ function autoAbyssLoop(myGen)
                     local stillPending = ti2 and ti2.Seed and (not ps2 or not ps2[tostring(LP.UserId)])
 
                     if stillPending and os.clock() - talentStartTime < 3 then
-                        -- Still pending - teleport to talent model (jitan2) to get in range
-                        AbyssStatusLbl.Text = "Talent: teleporting to model..."
+                        -- Still pending - go to talent model (jitan2) to get in range
+                        AbyssStatusLbl.Text = legitModeEnabled and "Talent: walking to model..." or "Talent: teleporting to model..."
                         AbyssStatusLbl.TextColor3 = C.gold
-                        teleportToTalentModel()
+                        goToTalentModel(stillRunning)
                         task.wait(0.3)
                         tryAutoSelectTalent(syncKey)
                         task.wait(0.3)
@@ -5329,9 +5494,12 @@ function autoAbyssLoop(myGen)
                         task.wait(0.5)
                     end
 
-                    continue
+                    -- Re-fetch doors and fall through to door check below
+                    doorInfos = getAbyssSyncValue(syncKey, {"DoorInfos"})
                 end
             end
+            -- Always re-fetch doors right before checking them
+            doorInfos = getAbyssSyncValue(syncKey, {"DoorInfos"})
             -- Check for door selection
             if doorInfos and #doorInfos > 0 then
                 local door = pickPreferredDoor(doorInfos)
@@ -5393,9 +5561,13 @@ function autoAbyssLoop(myGen)
                 if driftRoot then
                     AbyssStatusLbl.Text = "📍 Floor " .. tostring(stage or "?") .. " — re-centering (drifted)..."
                     AbyssStatusLbl.TextColor3 = C.accent
-                    driftRoot.CFrame = driftCenter + Vector3.new(0, 3, 0)
-                    driftRoot.AssemblyLinearVelocity = Vector3.zero
-                    driftRoot.AssemblyAngularVelocity = Vector3.zero
+                    if legitModeEnabled then
+                        walkToPosition(driftCenter.Position, 8, 15, stillRunning)
+                    else
+                        driftRoot.CFrame = driftCenter + Vector3.new(0, 3, 0)
+                        driftRoot.AssemblyLinearVelocity = Vector3.zero
+                        driftRoot.AssemblyAngularVelocity = Vector3.zero
+                    end
                     task.wait(0.3)
                 end
             end
@@ -5419,9 +5591,17 @@ function autoAbyssLoop(myGen)
             task.wait(0.5)
 
         else
-            -- Not in an Abyss — teleport to entrance, create team, and start
+            -- Not in an Abyss
             lastStage = nil
             lastChosenRoomType = nil
+
+            -- Legit Mode: only operates inside an Abyss (no portal/team/start handling)
+            if legitModeEnabled then
+                AbyssStatusLbl.Text = "⏸ Legit Mode: waiting — enter an Abyss first..."
+                AbyssStatusLbl.TextColor3 = C.sub
+                task.wait(2)
+                continue
+            end
 
             -- Step 1: Teleport to Abyss entrance
             AbyssStatusLbl.Text = "Teleporting to Abyss entrance..."
@@ -5588,8 +5768,8 @@ if riftRunning then
     startRiftLoop()
 end
 
--- If Auto Abyss was left ON from a previous session, resume automatically.
-if autoAbyssEnabled then
+-- If Auto Abyss or Legit Mode was left ON from a previous session, resume automatically.
+if autoAbyssEnabled or legitModeEnabled then
     startAutoAbyss()
 end
 
@@ -5657,6 +5837,7 @@ CloseBtn.MouseButton1Click:Connect(function()
     running = false
     riftRunning = false
     autoAbyssEnabled = false
+    legitModeEnabled = false
     _G.NoxarRiftLoopGeneration = (_G.NoxarRiftLoopGeneration or 0) + 1
     _G.NoxarAbyssLoopGeneration = (_G.NoxarAbyssLoopGeneration or 0) + 1
     riftPhase = "IDLE"
