@@ -25,6 +25,7 @@ local Trigger = workspace.Area.center.ServerZone.Abyss.Abyss_1
 local hostEnabled = false
 local joinerEnabled = false
 local busy = false
+local stopped = false
 
 -- ══════════════════════════════════════════════════════════════════
 -- HELPERS
@@ -209,7 +210,8 @@ playerLbl.TextSize = 9
 playerLbl.TextXAlignment = Enum.TextXAlignment.Left
 
 task.spawn(function()
-    while task.wait(1) do
+    while not stopped do
+        task.wait(1)
         playerLbl.Text = "Players: " .. #Players:GetPlayers()
     end
 end)
@@ -218,7 +220,7 @@ end)
 -- HOST LOOP
 -- ══════════════════════════════════════════════════════════════════
 task.spawn(function()
-    while true do
+    while not stopped do
         task.wait(0.5)
         if not hostEnabled then continue end
 
@@ -282,14 +284,14 @@ end)
 -- JOINER LOOP
 -- ══════════════════════════════════════════════════════════════════
 task.spawn(function()
-    while true do
+    while not stopped do
         task.wait(0.2)
         if not joinerEnabled then continue end
 
         -- In Abyss — monitor for host leaving
         if isInAbyss() then
             setStatus("Joiner: in Abyss!", Color3.fromRGB(100, 255, 130))
-            while joinerEnabled and isInAbyss() do
+            while joinerEnabled and not stopped and isInAbyss() do
                 -- Check if any other player is still in the Abyss
                 local teammates = 0
                 for _, player in ipairs(Players:GetPlayers()) do
@@ -354,6 +356,7 @@ end)
 -- Cleanup
 if _G.StopAbyssAllInOne then _G.StopAbyssAllInOne() end
 _G.StopAbyssAllInOne = function()
+    stopped = true
     hostEnabled = false
     joinerEnabled = false
     busy = false
