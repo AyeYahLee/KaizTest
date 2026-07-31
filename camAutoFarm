@@ -2763,6 +2763,7 @@ BOSS_LIST = {
     { name = "Thunderclaw",      area = "Blossom Haven",    tier = "Boss" },
     { name = "Lampyr",           area = "Mobius Circus",    tier = "Boss" },
     { name = "Scareaper",        area = "Specter Shallows", tier = "Boss" },
+    { name = "Rainimp",          area = "Splash Isle",      tier = "Boss" },
 
     -- Ultra Rare monster spawns (UltraRareMonsterAppear)
     { name = "Bladetooth",       area = "Blossom Haven",    tier = "Ultra" },
