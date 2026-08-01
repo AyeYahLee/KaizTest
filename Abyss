@@ -392,7 +392,7 @@ updateRejoinProgress()
 -- ══════════════════════════════════════════════════════════════════
 task.spawn(function()
     while not stopped do
-        task.wait(1)
+        task.wait()
         if not hostEnabled then continue end
 
         -- Teleport to portal and verify
@@ -435,7 +435,7 @@ task.spawn(function()
         -- Leave
         setStatus("Leaving Arena...")
         Invoke("ArenaLeaveChannel")
-        task.wait(1)
+        task.wait(1.5)
 
         -- Track points
         totalCycles += 1
