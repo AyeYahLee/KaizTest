@@ -392,7 +392,7 @@ updateRejoinProgress()
 -- ══════════════════════════════════════════════════════════════════
 task.spawn(function()
     while not stopped do
-        task.wait(2)
+        task.wait(1)
         if not hostEnabled then continue end
 
         -- Teleport to portal
@@ -404,7 +404,7 @@ task.spawn(function()
         local portalPos = Trigger.Position
         while hostEnabled and not stopped do
             local root = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
-            if root and (root.Position - portalPos).Magnitude < 15 then
+            if root and (root.Position - portalPos).Magnitude < 10 then
                 break
             end
             task.wait(0.05)
@@ -429,11 +429,12 @@ task.spawn(function()
         -- Start
         setStatus("Starting Abyss...")
         Invoke("AbyssStartChannel")
-        task.wait(0.5)
+        task.wait(1)
 
         -- Leave
         setStatus("Leaving Arena...")
         Invoke("ArenaLeaveChannel")
+        task.wait(1)
 
         -- Track points
         totalCycles += 1
