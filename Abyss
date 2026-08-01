@@ -256,7 +256,7 @@ end)
 -- ══════════════════════════════════════════════════════════════════
 task.spawn(function()
     while not stopped do
-        task.wait(2.5)
+        task.wait(2.3)
         if not hostEnabled then continue end
 
         -- Teleport to portal
@@ -277,6 +277,7 @@ task.spawn(function()
         if not hostEnabled or stopped then continue end
 
         -- Create team
+        setStatus("Creating team...")
         Invoke("AbyssTeamCreatePrepareChannel", Difficulty)
         task.wait()
 
@@ -290,12 +291,13 @@ task.spawn(function()
         task.wait()
 
         -- Start
+        setStatus("Starting Abyss...")
         Invoke("AbyssStartChannel")
         task.wait(1.5)
 
         -- Leave
+        setStatus("Leaving Arena...")
         Invoke("ArenaLeaveChannel")
-        task.wait()
 
         -- Track points
         totalCycles += 1
