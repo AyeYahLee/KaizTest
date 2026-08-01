@@ -1,18 +1,17 @@
--- Abyss All-In-One — Host + Joiner in one UI
--- Two toggles: Host Mode (creates teams) and Joiner Mode (joins teams).
--- Only one can be active at a time.
+-- Abyss Host Looper
+-- Auto-creates teams, cycles, rejoins, and has a failsafe.
 
 -- Kill any previous instance before starting
-if _G.StopAbyssAllInOne then
-    _G.StopAbyssAllInOne()
-    task.wait(0.5) -- wait for old threads to fully die
+if _G.StopAbyssLooper then
+    _G.StopAbyssLooper()
+    task.wait(0.5)
 end
 
 -- Wait for game to fully load before doing anything
 if not game:IsLoaded() then
     game.Loaded:Wait()
 end
-task.wait(3) -- let the game initialize before running
+task.wait(3)
 
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
@@ -27,7 +26,6 @@ local DataPullFunc = RS:WaitForChild("CommonLibrary"):WaitForChild("Tool")
 local Character = LP.Character or LP.CharacterAdded:Wait()
 local HRP = Character:WaitForChild("HumanoidRootPart")
 
--- Re-fetch character on respawn
 LP.CharacterAdded:Connect(function(c)
     Character = c
     HRP = c:WaitForChild("HumanoidRootPart")
@@ -67,17 +65,13 @@ local function rejoinSameServer()
 end
 
 -- ══════════════════════════════════════════════════════════════════
--- SAVE / LOAD (persists across rejoins)
+-- SAVE / LOAD
 -- ══════════════════════════════════════════════════════════════════
-local SAVE_FILE = "AbyssAllInOneSave.json"
+local SAVE_FILE = "AbyssLooperSave.json"
 
--- State (declared before loadSettings so save/load works)
 local hostEnabled = false
-local joinerEnabled = false
-local busy = false
 local stopped = false
 
--- Reset cycles/points on fresh load (rejoin)
 totalCycles = 0
 totalPoints = 0
 
@@ -128,40 +122,20 @@ local function Invoke(...)
     return ok, result
 end
 
-local function isInAbyss()
-    local ok, key = pcall(function() return LP:GetAttribute("AbyssSyncKey") end)
-    return ok and key ~= nil
-end
-
-local function teleportToAbyss()
-    pcall(function()
-        local root = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
-        if root and Trigger then
-            root.CFrame = Trigger.CFrame + Vector3.new(0, 3, 0)
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
-        end
-    end)
-end
-
-local function leaveArena()
-    Invoke("ArenaLeaveChannel")
-end
-
 -- ══════════════════════════════════════════════════════════════════
 -- UI
 -- ══════════════════════════════════════════════════════════════════
-local old = LP.PlayerGui:FindFirstChild("AbyssAllInOneGui")
+local old = LP.PlayerGui:FindFirstChild("AbyssLooperGui")
 if old then old:Destroy() end
 
 local sg = Instance.new("ScreenGui")
-sg.Name = "AbyssAllInOneGui"
+sg.Name = "AbyssLooperGui"
 sg.ResetOnSpawn = false
 sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 sg.Parent = LP.PlayerGui
 
 local main = Instance.new("Frame", sg)
-main.Size = UDim2.new(0, 220, 0, 190)
+main.Size = UDim2.new(0, 220, 0, 30) -- start minimized
 main.Position = UDim2.new(0.5, -110, 0.15, 0)
 main.BackgroundColor3 = Color3.fromRGB(18, 18, 28)
 main.BorderSizePixel = 0
@@ -179,19 +153,37 @@ titleBar.BorderSizePixel = 0
 Instance.new("UICorner", titleBar).CornerRadius = UDim.new(0, 10)
 
 local titleLbl = Instance.new("TextLabel", titleBar)
-titleLbl.Size = UDim2.new(1, -12, 1, 0)
+titleLbl.Size = UDim2.new(1, -34, 1, 0)
 titleLbl.Position = UDim2.new(0, 8, 0, 0)
 titleLbl.BackgroundTransparency = 1
-titleLbl.Text = "🌀 Abyss All-In-One"
+titleLbl.Text = "🌀 Abyss Looper"
 titleLbl.TextColor3 = Color3.fromRGB(200, 180, 255)
 titleLbl.Font = Enum.Font.GothamBold
 titleLbl.TextSize = 12
 titleLbl.TextXAlignment = Enum.TextXAlignment.Left
 
+local minimizeBtn = Instance.new("TextButton", titleBar)
+minimizeBtn.Size = UDim2.new(0, 20, 0, 20)
+minimizeBtn.Position = UDim2.new(1, -24, 0.5, -10)
+minimizeBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
+minimizeBtn.Text = "+"
+minimizeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+minimizeBtn.Font = Enum.Font.GothamBold
+minimizeBtn.TextSize = 14
+minimizeBtn.BorderSizePixel = 0
+Instance.new("UICorner", minimizeBtn).CornerRadius = UDim.new(0, 5)
+
+-- Body (everything below title bar)
+local body = Instance.new("Frame", main)
+body.Size = UDim2.new(1, 0, 1, -26)
+body.Position = UDim2.new(0, 0, 0, 26)
+body.BackgroundTransparency = 1
+body.Visible = false -- start minimized
+
 -- Status
-local statusLbl = Instance.new("TextLabel", main)
+local statusLbl = Instance.new("TextLabel", body)
 statusLbl.Size = UDim2.new(1, -16, 0, 14)
-statusLbl.Position = UDim2.new(0, 8, 0, 28)
+statusLbl.Position = UDim2.new(0, 8, 0, 4)
 statusLbl.BackgroundTransparency = 1
 statusLbl.Text = "Idle"
 statusLbl.TextColor3 = Color3.fromRGB(140, 140, 160)
@@ -261,50 +253,20 @@ local function makeToggle(parent, label, yOffset, onToggle)
 end
 
 -- Host toggle
-local hostToggle = makeToggle(main, "🌀 Host Mode (create teams)", 48, function(on)
+local hostToggle = makeToggle(body, "🌀 Host Mode", 22, function(on)
     hostEnabled = on
     saveSettings()
     if on then
-        if joinerEnabled then
-            joinerEnabled = false
-            joinerToggle.set(false)
-        end
         setStatus("Host: starting...", Color3.fromRGB(100, 220, 255))
     else
         setStatus("Host: stopped", Color3.fromRGB(140, 140, 160))
     end
 end)
 
--- Joiner toggle
-local joinerToggle = makeToggle(main, "🎯 Joiner Mode (join teams)", 76, function(on)
-    joinerEnabled = on
-    busy = false
-    if on then
-        if hostEnabled then
-            hostEnabled = false
-            hostToggle.set(false)
-        end
-        setStatus("Joiner: scanning...", Color3.fromRGB(100, 255, 130))
-    else
-        setStatus("Joiner: stopped", Color3.fromRGB(140, 140, 160))
-    end
-end)
-
--- Player count
-local playerLbl = Instance.new("TextLabel", main)
-playerLbl.Size = UDim2.new(1, -16, 0, 14)
-playerLbl.Position = UDim2.new(0, 8, 0, 104)
-playerLbl.BackgroundTransparency = 1
-playerLbl.Text = "Players: " .. #Players:GetPlayers()
-playerLbl.TextColor3 = Color3.fromRGB(100, 100, 120)
-playerLbl.Font = Enum.Font.Gotham
-playerLbl.TextSize = 9
-playerLbl.TextXAlignment = Enum.TextXAlignment.Left
-
 -- Points label
-local pointsLbl = Instance.new("TextLabel", main)
+local pointsLbl = Instance.new("TextLabel", body)
 pointsLbl.Size = UDim2.new(1, -16, 0, 14)
-pointsLbl.Position = UDim2.new(0, 8, 0, 118)
+pointsLbl.Position = UDim2.new(0, 8, 0, 50)
 pointsLbl.BackgroundTransparency = 1
 pointsLbl.Text = "Points: " .. fmtPoints(totalPoints)
 pointsLbl.TextColor3 = Color3.fromRGB(255, 200, 80)
@@ -315,15 +277,14 @@ pointsLbl.TextXAlignment = Enum.TextXAlignment.Left
 -- ══════════════════════════════════════════════════════════════════
 -- AUTO REJOIN UI
 -- ══════════════════════════════════════════════════════════════════
-local rejoinToggle = makeToggle(main, "🔄 Auto Rejoin", 136, function(on)
+local rejoinToggle = makeToggle(body, "🔄 Auto Rejoin", 70, function(on)
     autoRejoinEnabled = on
     saveSettings()
 end)
 
--- Rejoin cycle input
-local rejoinInputBg = Instance.new("Frame", main)
+local rejoinInputBg = Instance.new("Frame", body)
 rejoinInputBg.Size = UDim2.new(0, 36, 0, 18)
-rejoinInputBg.Position = UDim2.new(0, 10, 0, 163)
+rejoinInputBg.Position = UDim2.new(0, 10, 0, 97)
 rejoinInputBg.BackgroundColor3 = Color3.fromRGB(25, 28, 40)
 rejoinInputBg.BorderSizePixel = 0
 Instance.new("UICorner", rejoinInputBg).CornerRadius = UDim.new(0, 5)
@@ -339,9 +300,9 @@ rejoinInput.TextSize = 10
 rejoinInput.ClearTextOnFocus = false
 rejoinInput.TextXAlignment = Enum.TextXAlignment.Center
 
-local rejoinCyclesLbl = Instance.new("TextLabel", main)
+local rejoinCyclesLbl = Instance.new("TextLabel", body)
 rejoinCyclesLbl.Size = UDim2.new(0, 40, 0, 18)
-rejoinCyclesLbl.Position = UDim2.new(0, 50, 0, 163)
+rejoinCyclesLbl.Position = UDim2.new(0, 50, 0, 97)
 rejoinCyclesLbl.BackgroundTransparency = 1
 rejoinCyclesLbl.Text = "cycles"
 rejoinCyclesLbl.TextColor3 = Color3.fromRGB(100, 100, 120)
@@ -349,10 +310,9 @@ rejoinCyclesLbl.Font = Enum.Font.Gotham
 rejoinCyclesLbl.TextSize = 9
 rejoinCyclesLbl.TextXAlignment = Enum.TextXAlignment.Left
 
--- Progress display (xx/30)
-local rejoinProgressLbl = Instance.new("TextLabel", main)
+local rejoinProgressLbl = Instance.new("TextLabel", body)
 rejoinProgressLbl.Size = UDim2.new(0, 60, 0, 18)
-rejoinProgressLbl.Position = UDim2.new(0, 100, 0, 163)
+rejoinProgressLbl.Position = UDim2.new(0, 100, 0, 97)
 rejoinProgressLbl.BackgroundTransparency = 1
 rejoinProgressLbl.Text = ""
 rejoinProgressLbl.TextColor3 = Color3.fromRGB(200, 200, 120)
@@ -381,11 +341,26 @@ rejoinInput.FocusLost:Connect(function()
     updateRejoinProgress()
 end)
 
+-- Minimize toggle
+local minimized = true
+minimizeBtn.MouseButton1Click:Connect(function()
+    minimized = not minimized
+    if minimized then
+        body.Visible = false
+        TweenService:Create(main, TweenInfo.new(0.15), {Size = UDim2.new(0, 220, 0, 30)}):Play()
+        minimizeBtn.Text = "+"
+    else
+        TweenService:Create(main, TweenInfo.new(0.15), {Size = UDim2.new(0, 220, 0, 160)}):Play()
+        task.wait(0.15)
+        body.Visible = true
+        minimizeBtn.Text = "—"
+    end
+end)
+
 -- Background updater
 task.spawn(function()
     while not stopped do
         task.wait(1)
-        playerLbl.Text = "Players: " .. #Players:GetPlayers()
         updateRejoinProgress()
     end
 end)
@@ -407,7 +382,6 @@ local STUCK_TIMEOUT = 30
 local lastStatusText = ""
 local lastStatusTime = os.clock()
 
--- Override setStatus to track changes
 local originalSetStatus = setStatus
 setStatus = function(text, color)
     if text ~= lastStatusText then
@@ -443,7 +417,6 @@ task.spawn(function()
         task.wait(1)
         if not hostEnabled then continue end
 
-        -- Wait until character is at the starting position
         local startPos = Vector3.new(583.272, 3472.545, -549.761)
         local targetHeight = 3.225
         local atStart = false
@@ -462,13 +435,11 @@ task.spawn(function()
 
         if not atStart or not hostEnabled or stopped then continue end
 
-        -- Teleport to portal
         HRP = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
         if not HRP then continue end
         HRP.CFrame = Trigger.CFrame + Vector3.new(0, 3, 0)
         task.wait(0.1)
 
-        -- Create team
         setStatus("Creating team...")
         Invoke("AbyssTeamCreatePrepareChannel", Difficulty)
         task.wait()
@@ -482,116 +453,35 @@ task.spawn(function()
         Invoke("AbyssTeamCreatePrepareCancelChannel", Difficulty)
         task.wait()
 
-        -- Start
         setStatus("Starting Abyss...")
         Invoke("AbyssStartChannel")
         task.wait(0.5)
 
-        -- Leave
         setStatus("Leaving Arena...")
         Invoke("ArenaLeaveChannel")
         task.wait(0.5)
 
-        -- Track points
         totalCycles += 1
         totalPoints += POINTS_PER_CYCLE
         pointsLbl.Text = "Points: " .. fmtPoints(totalPoints)
         updateRejoinProgress()
         saveSettings()
 
-        -- Check auto rejoin
         if autoRejoinEnabled and totalCycles >= rejoinAtCycles then
             setStatus("Rejoining...", Color3.fromRGB(255, 200, 80))
-            -- Save with hostEnabled = true so it auto-starts after rejoin
             saveSettings()
             rejoinSameServer()
             continue
         end
 
-        setStatus("Host: cycle done", Color3.fromRGB(100, 255, 130))
-    end
-end)
-
--- ══════════════════════════════════════════════════════════════════
--- JOINER LOOP
--- ══════════════════════════════════════════════════════════════════
-task.spawn(function()
-    while not stopped do
-        task.wait(0.2)
-        if not joinerEnabled then continue end
-
-        -- In Abyss — monitor for host leaving
-        if isInAbyss() then
-            setStatus("Joiner: in Abyss!", Color3.fromRGB(100, 255, 130))
-            while joinerEnabled and not stopped and isInAbyss() do
-                local teammates = 0
-                for _, player in ipairs(Players:GetPlayers()) do
-                    if player ~= LP and player:GetAttribute("AbyssSyncKey") ~= nil then
-                        teammates += 1
-                    end
-                end
-                if teammates == 0 then
-                    setStatus("Joiner: alone — leaving!", Color3.fromRGB(255, 100, 100))
-                    leaveArena()
-                    break
-                end
-                task.wait(0.3)
-            end
-            if joinerEnabled then
-                task.wait(1)
-                setStatus("Joiner: scanning...", Color3.fromRGB(100, 220, 130))
-            end
-            continue
-        end
-
-        -- Not in Abyss — try joining
-        if busy then continue end
-        busy = true
-
-        local joinOk, joinResult = pcall(function()
-            return DataPullFunc:InvokeServer("AbyssJoinTeamChannel", 1)
-        end)
-
-        task.wait(0.1)
-        if isInAbyss() then
-            setStatus("Joiner: joined!", Color3.fromRGB(100, 255, 130))
-            busy = false
-            continue
-        end
-
-        if joinOk and joinResult ~= false then
-            setStatus("Joiner: team found — joining...", Color3.fromRGB(100, 220, 255))
-            teleportToAbyss()
-            task.wait(0.5)
-            if not joinerEnabled then busy = false; continue end
-
-            for attempt = 1, 3 do
-                if isInAbyss() then break end
-                pcall(function()
-                    DataPullFunc:InvokeServer("AbyssJoinTeamChannel", 1)
-                end)
-                task.wait(0.3)
-            end
-
-            if isInAbyss() then
-                setStatus("Joiner: joined!", Color3.fromRGB(100, 255, 130))
-            else
-                setStatus("Joiner: failed — retrying...", Color3.fromRGB(255, 150, 80))
-            end
-        end
-
-        busy = false
+        setStatus("Cycle done", Color3.fromRGB(100, 255, 130))
     end
 end)
 
 -- Cleanup
-if _G.StopAbyssAllInOne then _G.StopAbyssAllInOne() end
-_G.StopAbyssAllInOne = function()
+if _G.StopAbyssLooper then _G.StopAbyssLooper() end
+_G.StopAbyssLooper = function()
     stopped = true
     hostEnabled = false
-    joinerEnabled = false
-    busy = false
     if sg then sg:Destroy() end
 end
-
-print("[AbyssAllInOne] Loaded.")
