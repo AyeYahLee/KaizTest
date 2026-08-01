@@ -394,40 +394,37 @@ end
 updateRejoinProgress()
 
 -- ══════════════════════════════════════════════════════════════════
--- FAILSAFE: teleport back if flung off map
--- Only triggers when host loop is IDLE (not mid-cycle)
+-- FAILSAFE: teleport back if stuck on same status for 30s
 -- ══════════════════════════════════════════════════════════════════
 local START_POS = Vector3.new(583.272, 3472.545, -549.761)
-local STUCK_TIMEOUT = 10
-local hostInCycle = false -- set by host loop
+local STUCK_TIMEOUT = 30
+local lastStatusText = ""
+local lastStatusTime = os.clock()
+
+-- Override setStatus to track changes
+local originalSetStatus = setStatus
+setStatus = function(text, color)
+    if text ~= lastStatusText then
+        lastStatusText = text
+        lastStatusTime = os.clock()
+    end
+    originalSetStatus(text, color)
+end
 
 task.spawn(function()
-    local awaySince = nil
     while not stopped do
         task.wait(1)
-        if not hostEnabled or hostInCycle or isInAbyss() then
-            awaySince = nil
-            continue
-        end
+        if not hostEnabled then continue end
 
-        local root = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
-        if not root then continue end
-
-        local dist = (root.Position - START_POS).Magnitude
-        if dist > 50 then
-            if awaySince then
-                if os.clock() - awaySince >= STUCK_TIMEOUT then
-                    setStatus("Stuck — TP back!", Color3.fromRGB(255, 100, 100))
-                    root.CFrame = CFrame.new(START_POS + Vector3.new(0, 5, 0))
-                    root.AssemblyLinearVelocity = Vector3.zero
-                    root.AssemblyAngularVelocity = Vector3.zero
-                    awaySince = nil
-                end
-            else
-                awaySince = os.clock()
+        if os.clock() - lastStatusTime >= STUCK_TIMEOUT then
+            local root = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+            if root then
+                setStatus("Stuck — TP back!", Color3.fromRGB(255, 100, 100))
+                root.CFrame = CFrame.new(START_POS + Vector3.new(0, 5, 0))
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+                lastStatusTime = os.clock()
             end
-        else
-            awaySince = nil
         end
     end
 end)
@@ -458,8 +455,6 @@ task.spawn(function()
         end
 
         if not atStart or not hostEnabled or stopped then continue end
-
-        hostInCycle = true
 
         -- Teleport to portal
         HRP = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
@@ -497,8 +492,6 @@ task.spawn(function()
         pointsLbl.Text = "Points: " .. fmtPoints(totalPoints)
         updateRejoinProgress()
         saveSettings()
-
-        hostInCycle = false
 
         -- Check auto rejoin
         if autoRejoinEnabled and totalCycles >= rejoinAtCycles then
@@ -590,7 +583,6 @@ if _G.StopAbyssAllInOne then _G.StopAbyssAllInOne() end
 _G.StopAbyssAllInOne = function()
     stopped = true
     hostEnabled = false
-    hostInCycle = false
     joinerEnabled = false
     busy = false
     if sg then sg:Destroy() end
