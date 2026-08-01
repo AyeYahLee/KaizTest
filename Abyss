@@ -260,48 +260,31 @@ task.spawn(function()
         if not hostEnabled then continue end
 
         -- Teleport to portal
-        setStatus("Host: teleporting...", Color3.fromRGB(255, 200, 80))
         HRP = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
         if not HRP then continue end
         HRP.CFrame = Trigger.CFrame + Vector3.new(0, 3, 0)
-
-        -- Wait until confirmed near portal before creating team
-        local portalPos = Trigger.Position
-        local atPortal = false
-        for attempt = 1, 20 do
-            task.wait(0.1)
-            local root = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
-            if root and (root.Position - portalPos).Magnitude < 15 then
-                atPortal = true
-                break
-            end
-        end
-        if not atPortal then
-            setStatus("Host: TP failed — retrying...", Color3.fromRGB(255, 100, 100))
-            task.wait(1)
-            continue
-        end
+        task.wait(0.05)
 
         -- Create team
-        setStatus("Host: creating team...", Color3.fromRGB(255, 200, 80))
         Invoke("AbyssTeamCreatePrepareChannel", Difficulty)
-        task.wait(0.1)
+        task.wait()
+
         Invoke("AbyssViewedTimeLimitedChannel", DungeonId)
-        task.wait(0.1)
+        task.wait()
+
         Invoke("AbyssCreateTeamChannel", Difficulty, DungeonId, TeamMode)
-        task.wait(0.1)
+        task.wait()
+
         Invoke("AbyssTeamCreatePrepareCancelChannel", Difficulty)
-        task.wait(0.5)
+        task.wait()
 
         -- Start
-        setStatus("Host: starting Abyss...", Color3.fromRGB(100, 255, 130))
         Invoke("AbyssStartChannel")
         task.wait(1.5)
 
         -- Leave
-        setStatus("Host: leaving...", Color3.fromRGB(255, 200, 80))
         Invoke("ArenaLeaveChannel")
-        task.wait(2)
+        task.wait(1)
 
         -- Track points
         totalCycles += 1
