@@ -392,26 +392,33 @@ updateRejoinProgress()
 -- ══════════════════════════════════════════════════════════════════
 task.spawn(function()
     while not stopped do
-        task.wait(3)
+        task.wait(1)
         if not hostEnabled then continue end
 
-        -- Teleport to portal and verify
-        local portalPos = Trigger.Position
-        local atPortal = false
-        for attempt = 1, 5 do
-            HRP = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
-            if HRP then
-                HRP.CFrame = Trigger.CFrame + Vector3.new(0, 3, 0)
-            end
-            task.wait(0.1)
+        -- Wait until character is at the starting position
+        local startPos = Vector3.new(583.272, 3472.545, -549.761)
+        local targetHeight = 3.225
+        local atStart = false
+        while hostEnabled and not stopped do
             local root = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
-            if root and (root.Position - portalPos).Magnitude < 10 then
-                atPortal = true
-                break
+            if root then
+                local dist = (root.Position - startPos).Magnitude
+                local heightAboveGround = root.Position.Y - (startPos.Y - targetHeight)
+                if dist < 10 and math.abs(heightAboveGround - targetHeight) < 2 then
+                    atStart = true
+                    break
+                end
             end
+            task.wait(0.2)
         end
 
-        if not atPortal or not hostEnabled or stopped then continue end
+        if not atStart or not hostEnabled or stopped then continue end
+
+        -- Teleport to portal
+        HRP = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+        if not HRP then continue end
+        HRP.CFrame = Trigger.CFrame + Vector3.new(0, 3, 0)
+        task.wait(0.1)
 
         -- Create team
         setStatus("Creating team...")
@@ -430,12 +437,12 @@ task.spawn(function()
         -- Start
         setStatus("Starting Abyss...")
         Invoke("AbyssStartChannel")
-        task.wait(1)
+        task.wait(0.5)
 
         -- Leave
         setStatus("Leaving Arena...")
         Invoke("ArenaLeaveChannel")
-        task.wait(1)
+        task.wait(0.5)
 
         -- Track points
         totalCycles += 1
