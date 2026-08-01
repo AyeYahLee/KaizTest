@@ -116,10 +116,9 @@ local Trigger = workspace:WaitForChild("Area", 30)
 -- HELPERS
 -- ══════════════════════════════════════════════════════════════════
 local function Invoke(...)
-    local ok, result = pcall(function(...)
+    return pcall(function(...)
         return DataPullFunc:InvokeServer(...)
     end, ...)
-    return ok, result
 end
 
 -- ══════════════════════════════════════════════════════════════════
@@ -357,10 +356,10 @@ minimizeBtn.MouseButton1Click:Connect(function()
     end
 end)
 
--- Background updater
+-- Background updater (low frequency to reduce GC pressure)
 task.spawn(function()
     while not stopped do
-        task.wait(1)
+        task.wait(5)
         updateRejoinProgress()
     end
 end)
@@ -393,7 +392,7 @@ end
 
 task.spawn(function()
     while not stopped do
-        task.wait(1)
+        task.wait(5)
         if not hostEnabled then continue end
 
         if os.clock() - lastStatusTime >= STUCK_TIMEOUT then
@@ -412,13 +411,14 @@ end)
 -- ══════════════════════════════════════════════════════════════════
 -- HOST LOOP
 -- ══════════════════════════════════════════════════════════════════
+local startPos = Vector3.new(583.272, 3472.545, -549.761)
+local targetHeight = 3.225
+
 task.spawn(function()
     while not stopped do
         task.wait(1)
         if not hostEnabled then continue end
 
-        local startPos = Vector3.new(583.272, 3472.545, -549.761)
-        local targetHeight = 3.225
         local atStart = false
         while hostEnabled and not stopped do
             local root = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
@@ -442,16 +442,16 @@ task.spawn(function()
 
         setStatus("Creating team...")
         Invoke("AbyssTeamCreatePrepareChannel", Difficulty)
-        task.wait()
+        task.wait(0.1)
 
         Invoke("AbyssViewedTimeLimitedChannel", DungeonId)
-        task.wait()
+        task.wait(0.2)
 
         Invoke("AbyssCreateTeamChannel", Difficulty, DungeonId, TeamMode)
-        task.wait()
+        task.wait(0.3)
 
         Invoke("AbyssTeamCreatePrepareCancelChannel", Difficulty)
-        task.wait()
+        task.wait(0.1)
 
         setStatus("Starting Abyss...")
         Invoke("AbyssStartChannel")
