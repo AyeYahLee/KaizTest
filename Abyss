@@ -5,8 +5,14 @@
 -- Kill any previous instance before starting
 if _G.StopAbyssAllInOne then
     _G.StopAbyssAllInOne()
-    task.wait(0.1)
+    task.wait(0.5) -- wait for old threads to fully die
 end
+
+-- Wait for game to fully load before doing anything
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+task.wait(3) -- let the game initialize before running
 
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
