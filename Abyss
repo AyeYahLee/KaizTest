@@ -4,7 +4,7 @@
 -- Kill any previous instance before starting
 if _G.StopAbyssLooper then
     _G.StopAbyssLooper()
-    task.wait(1.5)
+    task.wait(2)
 end
 
 -- Wait for game to fully load before doing anything
@@ -438,11 +438,11 @@ task.spawn(function()
         HRP = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
         if not HRP then continue end
         HRP.CFrame = Trigger.CFrame + Vector3.new(0, 3, 0)
-        task.wait(0.1)
+        task.wait(0.5)
 
         setStatus("Creating team...")
         Invoke("AbyssTeamCreatePrepareChannel", Difficulty)
-        task.wait(0.1)
+        task.wait(0.2)
 
         Invoke("AbyssViewedTimeLimitedChannel", DungeonId)
         task.wait(0.2)
