@@ -435,20 +435,35 @@ task.spawn(function()
 
         if not atStart or not hostEnabled or stopped then continue end
 
-        HRP = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
-        if not HRP then continue end
-        HRP.CFrame = Trigger.CFrame + Vector3.new(0, 3, 0)
-        task.wait(0.5)
+        -- Teleport to portal and wait until confirmed there
+        local portalPos = Trigger.Position
+        local atPortal = false
+        for attempt = 1, 10 do
+            HRP = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+            if HRP then
+                HRP.CFrame = Trigger.CFrame + Vector3.new(0, 3, 0)
+            end
+            task.wait(0.05)
+            local root = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+            if root and (root.Position - portalPos).Magnitude < 10 then
+                atPortal = true
+                break
+            end
+        end
+
+        if not atPortal or not hostEnabled or stopped then continue end
+
+        task.wait(0.2) -- let the game register we're on the pad
 
         setStatus("Creating team...")
         Invoke("AbyssTeamCreatePrepareChannel", Difficulty)
-        task.wait(0.2)
+        task.wait(0.1)
 
         Invoke("AbyssViewedTimeLimitedChannel", DungeonId)
-        task.wait(0.2)
+        task.wait(0.3)
 
         Invoke("AbyssCreateTeamChannel", Difficulty, DungeonId, TeamMode)
-        task.wait(0.3)
+        task.wait(0.2)
 
         Invoke("AbyssTeamCreatePrepareCancelChannel", Difficulty)
         task.wait(0.1)
