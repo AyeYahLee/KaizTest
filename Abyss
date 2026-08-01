@@ -4,14 +4,14 @@
 -- Kill any previous instance before starting
 if _G.StopAbyssLooper then
     _G.StopAbyssLooper()
-    task.wait(0.5)
+    task.wait(1.5)
 end
 
 -- Wait for game to fully load before doing anything
 if not game:IsLoaded() then
     game.Loaded:Wait()
 end
-task.wait(3)
+task.wait(6)
 
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
