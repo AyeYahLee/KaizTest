@@ -39,7 +39,7 @@ end
 -- SETTINGS
 -- ══════════════════════════════════════════════════════════════════
 local Difficulty = 1
-local DungeonId = 1005
+local DungeonId = 1006
 local TeamMode = 2
 local Trigger = workspace.Area.center.ServerZone.Abyss.Abyss_1
 
