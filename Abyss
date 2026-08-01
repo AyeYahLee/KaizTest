@@ -287,35 +287,11 @@ task.spawn(function()
         Invoke("AbyssTeamCreatePrepareChannel", Difficulty)
         task.wait(0.1)
         Invoke("AbyssViewedTimeLimitedChannel", DungeonId)
-        task.wait(0.2)
+        task.wait(0.1)
         Invoke("AbyssCreateTeamChannel", Difficulty, DungeonId, TeamMode)
-        task.wait(0.2)
+        task.wait(0.1)
         Invoke("AbyssTeamCreatePrepareCancelChannel", Difficulty)
         task.wait(0.5)
-
-        -- Wait for joiner near portal
-        setStatus("Host: waiting for teammate...", Color3.fromRGB(200, 200, 120))
-        local waitStart = os.clock()
-        local myRoot = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
-        while hostEnabled and os.clock() - waitStart < 30 do
-            local found = false
-            if myRoot then
-                for _, player in ipairs(Players:GetPlayers()) do
-                    if player ~= LP then
-                        local theirChar = player.Character
-                        local theirRoot = theirChar and theirChar:FindFirstChild("HumanoidRootPart")
-                        if theirRoot and (myRoot.Position - theirRoot.Position).Magnitude < 13 then
-                            found = true
-                            break
-                        end
-                    end
-                end
-            end
-            if found then break end
-            task.wait(0.2)
-        end
-
-        if not hostEnabled then continue end
 
         -- Start
         setStatus("Host: starting Abyss...", Color3.fromRGB(100, 255, 130))
@@ -325,7 +301,7 @@ task.spawn(function()
         -- Leave
         setStatus("Host: leaving...", Color3.fromRGB(255, 200, 80))
         Invoke("ArenaLeaveChannel")
-        task.wait(2.5)
+        task.wait(2)
 
         -- Track points
         totalCycles += 1
