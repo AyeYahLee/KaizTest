@@ -404,7 +404,7 @@ task.spawn(function()
             if root then
                 local dist = (root.Position - startPos).Magnitude
                 local heightAboveGround = root.Position.Y - (startPos.Y - targetHeight)
-                if dist < 10 and math.abs(heightAboveGround - targetHeight) < 2 then
+                if dist < 8 and math.abs(heightAboveGround - targetHeight) < 1 then
                     atStart = true
                     break
                 end
