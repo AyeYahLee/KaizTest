@@ -271,7 +271,7 @@ task.spawn(function()
             if root and (root.Position - portalPos).Magnitude < 15 then
                 break
             end
-            task.wait()
+            task.wait(0.05)
         end
 
         if not hostEnabled or stopped then continue end
