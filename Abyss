@@ -2,6 +2,12 @@
 -- Two toggles: Host Mode (creates teams) and Joiner Mode (joins teams).
 -- Only one can be active at a time.
 
+-- Kill any previous instance before starting
+if _G.StopAbyssAllInOne then
+    _G.StopAbyssAllInOne()
+    task.wait(0.1)
+end
+
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
