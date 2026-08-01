@@ -100,7 +100,11 @@ local Difficulty = 1
 local DungeonId = 1006
 local TeamMode = 2
 
-local Trigger = workspace.Area.center.ServerZone.Abyss.Abyss_1
+local Trigger = workspace:WaitForChild("Area", 30)
+    :WaitForChild("center", 30)
+    :WaitForChild("ServerZone", 30)
+    :WaitForChild("Abyss", 30)
+    :WaitForChild("Abyss_1", 30)
 
 -- ══════════════════════════════════════════════════════════════════
 -- HELPERS
@@ -388,7 +392,7 @@ updateRejoinProgress()
 -- ══════════════════════════════════════════════════════════════════
 task.spawn(function()
     while not stopped do
-        task.wait(2.5)
+        task.wait(0.5)
         if not hostEnabled then continue end
 
         -- Teleport to portal
