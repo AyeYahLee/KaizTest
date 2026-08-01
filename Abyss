@@ -403,7 +403,7 @@ task.spawn(function()
             if HRP then
                 HRP.CFrame = Trigger.CFrame + Vector3.new(0, 3, 0)
             end
-            task.wait(0.05)
+            task.wait(0.1)
             local root = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
             if root and (root.Position - portalPos).Magnitude < 10 then
                 atPortal = true
