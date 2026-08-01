@@ -5,6 +5,8 @@
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
 local LP = Players.LocalPlayer
 
 local DataPullFunc = RS:WaitForChild("CommonLibrary"):WaitForChild("Tool")
@@ -36,18 +38,69 @@ local function fmtPoints(n)
 end
 
 -- ══════════════════════════════════════════════════════════════════
+-- AUTO REJOIN
+-- ══════════════════════════════════════════════════════════════════
+local autoRejoinEnabled = false
+local rejoinAtCycles = 20
+
+local function rejoinSameServer()
+    local ok, joinData = pcall(function() return LP:GetJoinData() end)
+    local code = ok and joinData and joinData.PrivateServerAccessCode
+    task.wait(2)
+    if code and code ~= "" then
+        pcall(function() TeleportService:TeleportToPrivateServer(game.PlaceId, code, {LP}) end)
+    else
+        pcall(function() TeleportService:Teleport(game.PlaceId, LP) end)
+    end
+end
+
+-- ══════════════════════════════════════════════════════════════════
+-- SAVE / LOAD (persists across rejoins)
+-- ══════════════════════════════════════════════════════════════════
+local SAVE_FILE = "AbyssAllInOneSave.json"
+
+-- State (declared before loadSettings so save/load works)
+local hostEnabled = false
+local joinerEnabled = false
+local busy = false
+local stopped = false
+
+-- Reset cycles/points on fresh load (rejoin)
+totalCycles = 0
+totalPoints = 0
+
+local function saveSettings()
+    if not writefile then return end
+    pcall(function()
+        local data = {
+            hostEnabled = hostEnabled,
+            autoRejoinEnabled = autoRejoinEnabled,
+            rejoinAtCycles = rejoinAtCycles
+        }
+        writefile(SAVE_FILE, HttpService:JSONEncode(data))
+    end)
+end
+
+local function loadSettings()
+    if not (isfile and readfile and isfile(SAVE_FILE)) then return end
+    pcall(function()
+        local data = HttpService:JSONDecode(readfile(SAVE_FILE))
+        if data.hostEnabled ~= nil then hostEnabled = data.hostEnabled end
+        if data.autoRejoinEnabled ~= nil then autoRejoinEnabled = data.autoRejoinEnabled end
+        if data.rejoinAtCycles ~= nil then rejoinAtCycles = data.rejoinAtCycles end
+    end)
+end
+
+loadSettings()
+
+-- ══════════════════════════════════════════════════════════════════
 -- SETTINGS
 -- ══════════════════════════════════════════════════════════════════
 local Difficulty = 1
 local DungeonId = 1006
 local TeamMode = 2
-local Trigger = workspace.Area.center.ServerZone.Abyss.Abyss_1
 
--- State
-local hostEnabled = false
-local joinerEnabled = false
-local busy = false
-local stopped = false
+local Trigger = workspace.Area.center.ServerZone.Abyss.Abyss_1
 
 -- ══════════════════════════════════════════════════════════════════
 -- HELPERS
@@ -92,7 +145,7 @@ sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 sg.Parent = LP.PlayerGui
 
 local main = Instance.new("Frame", sg)
-main.Size = UDim2.new(0, 220, 0, 144)
+main.Size = UDim2.new(0, 220, 0, 190)
 main.Position = UDim2.new(0.5, -110, 0.15, 0)
 main.BackgroundColor3 = Color3.fromRGB(18, 18, 28)
 main.BorderSizePixel = 0
@@ -194,8 +247,8 @@ end
 -- Host toggle
 local hostToggle = makeToggle(main, "🌀 Host Mode (create teams)", 48, function(on)
     hostEnabled = on
+    saveSettings()
     if on then
-        -- Disable joiner
         if joinerEnabled then
             joinerEnabled = false
             joinerToggle.set(false)
@@ -211,7 +264,6 @@ local joinerToggle = makeToggle(main, "🎯 Joiner Mode (join teams)", 76, funct
     joinerEnabled = on
     busy = false
     if on then
-        -- Disable host
         if hostEnabled then
             hostEnabled = false
             hostToggle.set(false)
@@ -238,18 +290,98 @@ local pointsLbl = Instance.new("TextLabel", main)
 pointsLbl.Size = UDim2.new(1, -16, 0, 14)
 pointsLbl.Position = UDim2.new(0, 8, 0, 118)
 pointsLbl.BackgroundTransparency = 1
-pointsLbl.Text = "Points: 0"
+pointsLbl.Text = "Points: " .. fmtPoints(totalPoints)
 pointsLbl.TextColor3 = Color3.fromRGB(255, 200, 80)
 pointsLbl.Font = Enum.Font.GothamBold
 pointsLbl.TextSize = 9
 pointsLbl.TextXAlignment = Enum.TextXAlignment.Left
 
+-- ══════════════════════════════════════════════════════════════════
+-- AUTO REJOIN UI
+-- ══════════════════════════════════════════════════════════════════
+local rejoinToggle = makeToggle(main, "🔄 Auto Rejoin", 136, function(on)
+    autoRejoinEnabled = on
+    saveSettings()
+end)
+
+-- Rejoin cycle input
+local rejoinInputBg = Instance.new("Frame", main)
+rejoinInputBg.Size = UDim2.new(0, 36, 0, 18)
+rejoinInputBg.Position = UDim2.new(0, 10, 0, 163)
+rejoinInputBg.BackgroundColor3 = Color3.fromRGB(25, 28, 40)
+rejoinInputBg.BorderSizePixel = 0
+Instance.new("UICorner", rejoinInputBg).CornerRadius = UDim.new(0, 5)
+
+local rejoinInput = Instance.new("TextBox", rejoinInputBg)
+rejoinInput.Size = UDim2.new(1, -4, 1, -2)
+rejoinInput.Position = UDim2.new(0, 2, 0, 1)
+rejoinInput.BackgroundTransparency = 1
+rejoinInput.Text = tostring(rejoinAtCycles)
+rejoinInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+rejoinInput.Font = Enum.Font.GothamBold
+rejoinInput.TextSize = 10
+rejoinInput.ClearTextOnFocus = false
+rejoinInput.TextXAlignment = Enum.TextXAlignment.Center
+
+local rejoinCyclesLbl = Instance.new("TextLabel", main)
+rejoinCyclesLbl.Size = UDim2.new(0, 40, 0, 18)
+rejoinCyclesLbl.Position = UDim2.new(0, 50, 0, 163)
+rejoinCyclesLbl.BackgroundTransparency = 1
+rejoinCyclesLbl.Text = "cycles"
+rejoinCyclesLbl.TextColor3 = Color3.fromRGB(100, 100, 120)
+rejoinCyclesLbl.Font = Enum.Font.Gotham
+rejoinCyclesLbl.TextSize = 9
+rejoinCyclesLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+-- Progress display (xx/30)
+local rejoinProgressLbl = Instance.new("TextLabel", main)
+rejoinProgressLbl.Size = UDim2.new(0, 60, 0, 18)
+rejoinProgressLbl.Position = UDim2.new(0, 100, 0, 163)
+rejoinProgressLbl.BackgroundTransparency = 1
+rejoinProgressLbl.Text = ""
+rejoinProgressLbl.TextColor3 = Color3.fromRGB(200, 200, 120)
+rejoinProgressLbl.Font = Enum.Font.GothamBold
+rejoinProgressLbl.TextSize = 10
+rejoinProgressLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+local function updateRejoinProgress()
+    if autoRejoinEnabled then
+        rejoinProgressLbl.Text = totalCycles .. "/" .. rejoinAtCycles
+        rejoinProgressLbl.TextColor3 = totalCycles >= rejoinAtCycles
+            and Color3.fromRGB(255, 100, 100)
+            or Color3.fromRGB(200, 200, 120)
+    else
+        rejoinProgressLbl.Text = ""
+    end
+end
+
+rejoinInput.FocusLost:Connect(function()
+    local val = tonumber(rejoinInput.Text)
+    if val and val >= 1 then
+        rejoinAtCycles = math.floor(val)
+    end
+    rejoinInput.Text = tostring(rejoinAtCycles)
+    saveSettings()
+    updateRejoinProgress()
+end)
+
+-- Background updater
 task.spawn(function()
     while not stopped do
         task.wait(1)
         playerLbl.Text = "Players: " .. #Players:GetPlayers()
+        updateRejoinProgress()
     end
 end)
+
+-- Restore saved toggle states
+if hostEnabled then
+    hostToggle.set(true)
+end
+if autoRejoinEnabled then
+    rejoinToggle.set(true)
+end
+updateRejoinProgress()
 
 -- ══════════════════════════════════════════════════════════════════
 -- HOST LOOP
@@ -303,6 +435,17 @@ task.spawn(function()
         totalCycles += 1
         totalPoints += POINTS_PER_CYCLE
         pointsLbl.Text = "Points: " .. fmtPoints(totalPoints)
+        updateRejoinProgress()
+        saveSettings()
+
+        -- Check auto rejoin
+        if autoRejoinEnabled and totalCycles >= rejoinAtCycles then
+            setStatus("Rejoining...", Color3.fromRGB(255, 200, 80))
+            -- Save with hostEnabled = true so it auto-starts after rejoin
+            saveSettings()
+            rejoinSameServer()
+            continue
+        end
 
         setStatus("Host: cycle done", Color3.fromRGB(100, 255, 130))
     end
@@ -320,7 +463,6 @@ task.spawn(function()
         if isInAbyss() then
             setStatus("Joiner: in Abyss!", Color3.fromRGB(100, 255, 130))
             while joinerEnabled and not stopped and isInAbyss() do
-                -- Check if any other player is still in the Abyss
                 local teammates = 0
                 for _, player in ipairs(Players:GetPlayers()) do
                     if player ~= LP and player:GetAttribute("AbyssSyncKey") ~= nil then
