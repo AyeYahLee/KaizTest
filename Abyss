@@ -485,3 +485,5 @@ _G.StopAbyssLooper = function()
     hostEnabled = false
     if sg then sg:Destroy() end
 end
+
+print("[AbyssLooper] Loaded.")
