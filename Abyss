@@ -293,7 +293,7 @@ task.spawn(function()
         -- Start
         setStatus("Starting Abyss...")
         Invoke("AbyssStartChannel")
-        task.wait(1.5)
+        task.wait(0.1)
 
         -- Leave
         setStatus("Leaving Arena...")
