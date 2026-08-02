@@ -103,7 +103,7 @@ loadSettings()
 -- SETTINGS
 -- ══════════════════════════════════════════════════════════════════
 local Difficulty = 1
-local DungeonId = 1006
+local DungeonId = 1007
 local TeamMode = 2
 
 local Trigger = workspace:WaitForChild("Area", 30)
