@@ -4179,7 +4179,7 @@ function riftLoop(myGeneration)
         local uiAppeared = false
         local uiWaitStart = os.clock()
 
-        while isCurrentRiftLoop(myGeneration) and isRiftArenaActive() and os.clock() - uiWaitStart < 12 do
+        while isCurrentRiftLoop(myGeneration) and isRiftArenaActive() and os.clock() - uiWaitStart < 7 do
             if isRiftBossAlive() then
                 uiAppeared = true
                 break
