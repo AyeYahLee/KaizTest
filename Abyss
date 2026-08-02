@@ -4,14 +4,14 @@
 -- Kill any previous instance before starting
 if _G.StopAbyssLooper then
     _G.StopAbyssLooper()
-    task.wait(2)
+    task.wait(3)
 end
 
 -- Wait for game to fully load before doing anything
 if not game:IsLoaded() then
     game.Loaded:Wait()
 end
-task.wait(6)
+task.wait(7)
 
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
@@ -416,7 +416,7 @@ local targetHeight = 3.225
 
 task.spawn(function()
     while not stopped do
-        task.wait()
+        task.wait(1)
         if not hostEnabled then continue end
 
         local atStart = false
@@ -425,7 +425,7 @@ task.spawn(function()
             if root then
                 local dist = (root.Position - startPos).Magnitude
                 local heightAboveGround = root.Position.Y - (startPos.Y - targetHeight)
-                if dist < 5 and math.abs(heightAboveGround - targetHeight) < 1 then
+                if dist < 8 and math.abs(heightAboveGround - targetHeight) < 1 then
                     atStart = true
                     break
                 end
@@ -435,7 +435,6 @@ task.spawn(function()
 
         if not atStart or not hostEnabled or stopped then continue end
 
-        -- Teleport to portal
         HRP = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
         if not HRP then continue end
         HRP.CFrame = Trigger.CFrame + Vector3.new(0, 3, 0)
@@ -443,15 +442,15 @@ task.spawn(function()
 
         setStatus("Creating team...")
         Invoke("AbyssCreateTeamChannel", Difficulty, DungeonId, TeamMode)
-        task.wait()
+        task.wait(0.5)
 
         setStatus("Starting Abyss...")
         Invoke("AbyssStartChannel")
-        task.wait(1.5)
+        task.wait(0.5)
 
         setStatus("Leaving Arena...")
         Invoke("ArenaLeaveChannel")
-        task.wait()
+        task.wait(0.5)
 
         totalCycles += 1
         totalPoints += POINTS_PER_CYCLE
