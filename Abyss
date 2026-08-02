@@ -416,7 +416,7 @@ local targetHeight = 3.225
 
 task.spawn(function()
     while not stopped do
-        task.wait(2)
+        task.wait(0.5)
         if not hostEnabled then continue end
 
         local atStart = false
@@ -465,7 +465,7 @@ task.spawn(function()
 
         setStatus("Leaving Arena...")
         Invoke("ArenaLeaveChannel")
-        task.wait(0.5)
+        task.wait(1.5)
 
         totalCycles += 1
         totalPoints += POINTS_PER_CYCLE
