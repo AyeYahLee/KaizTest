@@ -416,7 +416,7 @@ local targetHeight = 3.225
 
 task.spawn(function()
     while not stopped do
-        task.wait(0.1)
+        task.wait()
         if not hostEnabled then continue end
 
         local atStart = false
@@ -435,37 +435,23 @@ task.spawn(function()
 
         if not atStart or not hostEnabled or stopped then continue end
 
-        -- Teleport to portal and wait until confirmed there
-        local portalPos = Trigger.Position
-        local atPortal = false
-        for attempt = 1, 10 do
-            HRP = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
-            if HRP then
-                HRP.CFrame = Trigger.CFrame + Vector3.new(0, 3, 0)
-            end
-            task.wait(0.05)
-            local root = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
-            if root and (root.Position - portalPos).Magnitude < 10 then
-                atPortal = true
-                break
-            end
-        end
-
-        if not atPortal or not hostEnabled or stopped then continue end
-
-        task.wait(0.05) -- let the game register we're on the pad
+        -- Teleport to portal
+        HRP = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+        if not HRP then continue end
+        HRP.CFrame = Trigger.CFrame + Vector3.new(0, 3, 0)
+        task.wait(0.1)
 
         setStatus("Creating team...")
         Invoke("AbyssCreateTeamChannel", Difficulty, DungeonId, TeamMode)
-        task.wait(0.05)
+        task.wait()
 
         setStatus("Starting Abyss...")
         Invoke("AbyssStartChannel")
-        task.wait(0.05)
+        task.wait(1.5)
 
         setStatus("Leaving Arena...")
         Invoke("ArenaLeaveChannel")
-        task.wait(0.05)
+        task.wait()
 
         totalCycles += 1
         totalPoints += POINTS_PER_CYCLE
