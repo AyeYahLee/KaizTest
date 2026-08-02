@@ -1,79 +1,103 @@
--- Abyss Host Looper
--- Auto-creates teams, cycles, rejoins, and has a failsafe.
-
--- Kill any previous instance before starting
-if _G.StopAbyssLooper then
-    _G.StopAbyssLooper()
-    task.wait(3)
-end
-
--- Wait for game to fully load before doing anything
-if not game:IsLoaded() then
-    game.Loaded:Wait()
-end
-task.wait(7)
-
+-- 🌀 Abyss Host Looper - Optimized & Memory Safe (Reverted Validation)
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
+local VirtualUser = game:GetService("VirtualUser")
+
 local LP = Players.LocalPlayer
 
-local DataPullFunc = RS:WaitForChild("CommonLibrary"):WaitForChild("Tool")
-    :WaitForChild("RemoteManager"):WaitForChild("Funcs"):WaitForChild("DataPullFunc")
+-- ══════════════════════════════════════════════════════════════════
+-- CLEANUP & MEMORY MANAGEMENT
+-- ══════════════════════════════════════════════════════════════════
+if _G.StopAbyssLooper then
+    _G.StopAbyssLooper()
+end
+
+local activeConnections = {}
+local activeThreads = {}
+local stopped = false
+
+local function trackConnection(conn)
+    table.insert(activeConnections, conn)
+    return conn
+end
+
+local function trackThread(func)
+    local thread = task.spawn(func)
+    table.insert(activeThreads, thread)
+    return thread
+end
+
+_G.StopAbyssLooper = function()
+    stopped = true
+    for _, conn in ipairs(activeConnections) do
+        conn:Disconnect()
+    end
+    for _, t in ipairs(activeThreads) do
+        pcall(task.cancel, t)
+    end
+    table.clear(activeConnections)
+    table.clear(activeThreads)
+    
+    local oldGui = LP.PlayerGui:FindFirstChild("AbyssLooperGui")
+    if oldGui then oldGui:Destroy() end
+end
+
+-- Wait for game to fully load
+if not game:IsLoaded() then game.Loaded:Wait() end
+task.wait(2)
+
+-- ══════════════════════════════════════════════════════════════════
+-- SAFE REFERENCES
+-- ══════════════════════════════════════════════════════════════════
+local DataPullFunc = RS:WaitForChild("CommonLibrary", 10)
+if DataPullFunc then
+    DataPullFunc = DataPullFunc:WaitForChild("Tool", 10)
+        :WaitForChild("RemoteManager", 10)
+        :WaitForChild("Funcs", 10)
+        :WaitForChild("DataPullFunc", 10)
+end
 
 local Character = LP.Character or LP.CharacterAdded:Wait()
-local HRP = Character:WaitForChild("HumanoidRootPart")
+local HRP = Character:WaitForChild("HumanoidRootPart", 10)
 
-LP.CharacterAdded:Connect(function(c)
+trackConnection(LP.CharacterAdded:Connect(function(c)
     Character = c
-    HRP = c:WaitForChild("HumanoidRootPart")
-end)
+    HRP = c:WaitForChild("HumanoidRootPart", 10)
+end))
+
+local function getTrigger()
+    local area = workspace:FindFirstChild("Area") or workspace:WaitForChild("Area", 10)
+    if not area then return nil end
+    
+    local center = area:WaitForChild("center", 5)
+    if not center then return nil end
+    
+    local sz = center:WaitForChild("ServerZone", 5)
+    if not sz then return nil end
+    
+    local abyss = sz:WaitForChild("Abyss", 5)
+    if not abyss then return nil end
+    
+    return abyss:WaitForChild("Abyss_1", 5)
+end
+
+local Trigger = getTrigger()
 
 -- ══════════════════════════════════════════════════════════════════
--- POINTS TRACKER
+-- STATE & SAVING
 -- ══════════════════════════════════════════════════════════════════
+local SAVE_FILE = "AbyssLooperSave.json"
 local POINTS_PER_CYCLE = 30
 local totalPoints = 0
 local totalCycles = 0
 
-local function fmtPoints(n)
-    if n >= 1000000 then
-        return string.format("%.1fM", n / 1000000)
-    elseif n >= 1000 then
-        return string.format("%.1fk", n / 1000)
-    end
-    return tostring(n)
-end
-
--- ══════════════════════════════════════════════════════════════════
--- AUTO REJOIN
--- ══════════════════════════════════════════════════════════════════
+local hostEnabled = false
 local autoRejoinEnabled = false
 local rejoinAtCycles = 20
-
-local function rejoinSameServer()
-    local ok, joinData = pcall(function() return LP:GetJoinData() end)
-    local code = ok and joinData and joinData.PrivateServerAccessCode
-    task.wait(2)
-    if code and code ~= "" then
-        pcall(function() TeleportService:TeleportToPrivateServer(game.PlaceId, code, {LP}) end)
-    else
-        pcall(function() TeleportService:Teleport(game.PlaceId, LP) end)
-    end
-end
-
--- ══════════════════════════════════════════════════════════════════
--- SAVE / LOAD
--- ══════════════════════════════════════════════════════════════════
-local SAVE_FILE = "AbyssLooperSave.json"
-
-local hostEnabled = false
-local stopped = false
-
-totalCycles = 0
-totalPoints = 0
+local antiAfkEnabled = false
 
 local function saveSettings()
     if not writefile then return end
@@ -81,7 +105,8 @@ local function saveSettings()
         local data = {
             hostEnabled = hostEnabled,
             autoRejoinEnabled = autoRejoinEnabled,
-            rejoinAtCycles = rejoinAtCycles
+            rejoinAtCycles = rejoinAtCycles,
+            antiAfkEnabled = antiAfkEnabled
         }
         writefile(SAVE_FILE, HttpService:JSONEncode(data))
     end)
@@ -94,39 +119,21 @@ local function loadSettings()
         if data.hostEnabled ~= nil then hostEnabled = data.hostEnabled end
         if data.autoRejoinEnabled ~= nil then autoRejoinEnabled = data.autoRejoinEnabled end
         if data.rejoinAtCycles ~= nil then rejoinAtCycles = data.rejoinAtCycles end
+        if data.antiAfkEnabled ~= nil then antiAfkEnabled = data.antiAfkEnabled end
     end)
 end
 
 loadSettings()
 
--- ══════════════════════════════════════════════════════════════════
--- SETTINGS
--- ══════════════════════════════════════════════════════════════════
-local Difficulty = 1
-local DungeonId = 1007
-local TeamMode = 2
-
-local Trigger = workspace:WaitForChild("Area", 30)
-    :WaitForChild("center", 30)
-    :WaitForChild("ServerZone", 30)
-    :WaitForChild("Abyss", 30)
-    :WaitForChild("Abyss_1", 30)
-
--- ══════════════════════════════════════════════════════════════════
--- HELPERS
--- ══════════════════════════════════════════════════════════════════
-local function Invoke(...)
-    return pcall(function(...)
-        return DataPullFunc:InvokeServer(...)
-    end, ...)
+local function fmtPoints(n)
+    if n >= 1000000 then return string.format("%.1fM", n / 1000000) end
+    if n >= 1000 then return string.format("%.1fk", n / 1000) end
+    return tostring(n)
 end
 
 -- ══════════════════════════════════════════════════════════════════
--- UI
+-- UI CREATION
 -- ══════════════════════════════════════════════════════════════════
-local old = LP.PlayerGui:FindFirstChild("AbyssLooperGui")
-if old then old:Destroy() end
-
 local sg = Instance.new("ScreenGui")
 sg.Name = "AbyssLooperGui"
 sg.ResetOnSpawn = false
@@ -134,7 +141,7 @@ sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 sg.Parent = LP.PlayerGui
 
 local main = Instance.new("Frame", sg)
-main.Size = UDim2.new(0, 220, 0, 30) -- start minimized
+main.Size = UDim2.new(0, 220, 0, 30)
 main.Position = UDim2.new(0.5, -110, 0.15, 0)
 main.BackgroundColor3 = Color3.fromRGB(18, 18, 28)
 main.BorderSizePixel = 0
@@ -143,7 +150,6 @@ main.Draggable = true
 Instance.new("UICorner", main).CornerRadius = UDim.new(0, 10)
 Instance.new("UIStroke", main).Color = Color3.fromRGB(80, 60, 200)
 
--- Title
 local titleBar = Instance.new("Frame", main)
 titleBar.Size = UDim2.new(1, 0, 0, 26)
 titleBar.BackgroundColor3 = Color3.fromRGB(12, 12, 20)
@@ -169,17 +175,14 @@ minimizeBtn.Text = "+"
 minimizeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 minimizeBtn.Font = Enum.Font.GothamBold
 minimizeBtn.TextSize = 14
-minimizeBtn.BorderSizePixel = 0
 Instance.new("UICorner", minimizeBtn).CornerRadius = UDim.new(0, 5)
 
--- Body (everything below title bar)
 local body = Instance.new("Frame", main)
 body.Size = UDim2.new(1, 0, 1, -26)
 body.Position = UDim2.new(0, 0, 0, 26)
 body.BackgroundTransparency = 1
-body.Visible = false -- start minimized
+body.Visible = false
 
--- Status
 local statusLbl = Instance.new("TextLabel", body)
 statusLbl.Size = UDim2.new(1, -16, 0, 14)
 statusLbl.Position = UDim2.new(0, 8, 0, 4)
@@ -190,12 +193,16 @@ statusLbl.Font = Enum.Font.Gotham
 statusLbl.TextSize = 10
 statusLbl.TextXAlignment = Enum.TextXAlignment.Left
 
+local lastStatusText, lastStatusTime = "", os.clock()
 local function setStatus(text, color)
+    if text ~= lastStatusText then
+        lastStatusText = text
+        lastStatusTime = os.clock()
+    end
     statusLbl.Text = text
     statusLbl.TextColor3 = color or Color3.fromRGB(140, 140, 160)
 end
 
--- Toggle helper
 local function makeToggle(parent, label, yOffset, onToggle)
     local row = Instance.new("Frame", parent)
     row.Size = UDim2.new(1, -16, 0, 24)
@@ -215,14 +222,12 @@ local function makeToggle(parent, label, yOffset, onToggle)
     bg.Size = UDim2.new(0, 44, 0, 20)
     bg.Position = UDim2.new(1, -44, 0.5, -10)
     bg.BackgroundColor3 = Color3.fromRGB(70, 30, 30)
-    bg.BorderSizePixel = 0
     Instance.new("UICorner", bg).CornerRadius = UDim.new(1, 0)
 
     local knob = Instance.new("Frame", bg)
     knob.Size = UDim2.new(0, 16, 0, 16)
     knob.Position = UDim2.new(0, 2, 0.5, -8)
     knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-    knob.BorderSizePixel = 0
     Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
 
     local btn = Instance.new("TextButton", bg)
@@ -231,51 +236,36 @@ local function makeToggle(parent, label, yOffset, onToggle)
     btn.Text = ""
 
     local state = false
-
     local function set(on)
         state = on
-        if on then
-            TweenService:Create(bg, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(30, 90, 40)}):Play()
-            TweenService:Create(knob, TweenInfo.new(0.15), {Position = UDim2.new(1, -18, 0.5, -8)}):Play()
-        else
-            TweenService:Create(bg, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(70, 30, 30)}):Play()
-            TweenService:Create(knob, TweenInfo.new(0.15), {Position = UDim2.new(0, 2, 0.5, -8)}):Play()
-        end
+        local color = on and Color3.fromRGB(30, 90, 40) or Color3.fromRGB(70, 30, 30)
+        local pos = on and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8)
+        
+        TweenService:Create(bg, TweenInfo.new(0.15), {BackgroundColor3 = color}):Play()
+        TweenService:Create(knob, TweenInfo.new(0.15), {Position = pos}):Play()
         onToggle(on)
     end
 
-    btn.MouseButton1Click:Connect(function()
-        set(not state)
-    end)
-
-    return { set = set, getState = function() return state end }
+    trackConnection(btn.MouseButton1Click:Connect(function() set(not state) end))
+    return { set = set }
 end
 
--- Host toggle
 local hostToggle = makeToggle(body, "🌀 Host Mode", 22, function(on)
     hostEnabled = on
     saveSettings()
-    if on then
-        setStatus("Host: starting...", Color3.fromRGB(100, 220, 255))
-    else
-        setStatus("Host: stopped", Color3.fromRGB(140, 140, 160))
-    end
+    setStatus(on and "Host: starting..." or "Host: stopped", on and Color3.fromRGB(100, 220, 255) or nil)
 end)
 
--- Points label
 local pointsLbl = Instance.new("TextLabel", body)
 pointsLbl.Size = UDim2.new(1, -16, 0, 14)
 pointsLbl.Position = UDim2.new(0, 8, 0, 50)
 pointsLbl.BackgroundTransparency = 1
-pointsLbl.Text = "Points: " .. fmtPoints(totalPoints)
+pointsLbl.Text = "Points: 0"
 pointsLbl.TextColor3 = Color3.fromRGB(255, 200, 80)
 pointsLbl.Font = Enum.Font.GothamBold
 pointsLbl.TextSize = 9
 pointsLbl.TextXAlignment = Enum.TextXAlignment.Left
 
--- ══════════════════════════════════════════════════════════════════
--- AUTO REJOIN UI
--- ══════════════════════════════════════════════════════════════════
 local rejoinToggle = makeToggle(body, "🔄 Auto Rejoin", 70, function(on)
     autoRejoinEnabled = on
     saveSettings()
@@ -285,7 +275,6 @@ local rejoinInputBg = Instance.new("Frame", body)
 rejoinInputBg.Size = UDim2.new(0, 36, 0, 18)
 rejoinInputBg.Position = UDim2.new(0, 10, 0, 97)
 rejoinInputBg.BackgroundColor3 = Color3.fromRGB(25, 28, 40)
-rejoinInputBg.BorderSizePixel = 0
 Instance.new("UICorner", rejoinInputBg).CornerRadius = UDim.new(0, 5)
 
 local rejoinInput = Instance.new("TextBox", rejoinInputBg)
@@ -296,18 +285,7 @@ rejoinInput.Text = tostring(rejoinAtCycles)
 rejoinInput.TextColor3 = Color3.fromRGB(255, 255, 255)
 rejoinInput.Font = Enum.Font.GothamBold
 rejoinInput.TextSize = 10
-rejoinInput.ClearTextOnFocus = false
 rejoinInput.TextXAlignment = Enum.TextXAlignment.Center
-
-local rejoinCyclesLbl = Instance.new("TextLabel", body)
-rejoinCyclesLbl.Size = UDim2.new(0, 40, 0, 18)
-rejoinCyclesLbl.Position = UDim2.new(0, 50, 0, 97)
-rejoinCyclesLbl.BackgroundTransparency = 1
-rejoinCyclesLbl.Text = "cycles"
-rejoinCyclesLbl.TextColor3 = Color3.fromRGB(100, 100, 120)
-rejoinCyclesLbl.Font = Enum.Font.Gotham
-rejoinCyclesLbl.TextSize = 9
-rejoinCyclesLbl.TextXAlignment = Enum.TextXAlignment.Left
 
 local rejoinProgressLbl = Instance.new("TextLabel", body)
 rejoinProgressLbl.Size = UDim2.new(0, 60, 0, 18)
@@ -320,148 +298,167 @@ rejoinProgressLbl.TextSize = 10
 rejoinProgressLbl.TextXAlignment = Enum.TextXAlignment.Left
 
 local function updateRejoinProgress()
-    if autoRejoinEnabled then
-        rejoinProgressLbl.Text = totalCycles .. "/" .. rejoinAtCycles
-        rejoinProgressLbl.TextColor3 = totalCycles >= rejoinAtCycles
-            and Color3.fromRGB(255, 100, 100)
-            or Color3.fromRGB(200, 200, 120)
-    else
+    if not autoRejoinEnabled then
         rejoinProgressLbl.Text = ""
+        return
     end
+    rejoinProgressLbl.Text = totalCycles .. "/" .. rejoinAtCycles
+    rejoinProgressLbl.TextColor3 = totalCycles >= rejoinAtCycles and Color3.fromRGB(255, 100, 100) or Color3.fromRGB(200, 200, 120)
 end
 
-rejoinInput.FocusLost:Connect(function()
+trackConnection(rejoinInput.FocusLost:Connect(function()
     local val = tonumber(rejoinInput.Text)
-    if val and val >= 1 then
-        rejoinAtCycles = math.floor(val)
-    end
+    if val and val >= 1 then rejoinAtCycles = math.floor(val) end
     rejoinInput.Text = tostring(rejoinAtCycles)
     saveSettings()
     updateRejoinProgress()
+end))
+
+local antiAfkToggle = makeToggle(body, "🚫 Anti-AFK", 122, function(on)
+    antiAfkEnabled = on
+    saveSettings()
 end)
 
--- Minimize toggle
 local minimized = true
-minimizeBtn.MouseButton1Click:Connect(function()
+trackConnection(minimizeBtn.MouseButton1Click:Connect(function()
     minimized = not minimized
     if minimized then
         body.Visible = false
         TweenService:Create(main, TweenInfo.new(0.15), {Size = UDim2.new(0, 220, 0, 30)}):Play()
         minimizeBtn.Text = "+"
     else
-        TweenService:Create(main, TweenInfo.new(0.15), {Size = UDim2.new(0, 220, 0, 160)}):Play()
+        TweenService:Create(main, TweenInfo.new(0.15), {Size = UDim2.new(0, 220, 0, 190)}):Play()
         task.wait(0.15)
         body.Visible = true
         minimizeBtn.Text = "—"
     end
-end)
+end))
 
--- Background updater (low frequency to reduce GC pressure)
-task.spawn(function()
-    while not stopped do
-        task.wait(5)
-        updateRejoinProgress()
-    end
-end)
-
--- Restore saved toggle states
-if hostEnabled then
-    hostToggle.set(true)
-end
-if autoRejoinEnabled then
-    rejoinToggle.set(true)
-end
+if hostEnabled then hostToggle.set(true) end
+if autoRejoinEnabled then rejoinToggle.set(true) end
+if antiAfkEnabled then antiAfkToggle.set(true) end
 updateRejoinProgress()
 
 -- ══════════════════════════════════════════════════════════════════
--- FAILSAFE: teleport back if stuck on same status for 30s
+-- CORE LOGIC
 -- ══════════════════════════════════════════════════════════════════
-local START_POS = Vector3.new(583.272, 3472.545, -549.761)
-local STUCK_TIMEOUT = 30
-local lastStatusText = ""
-local lastStatusTime = os.clock()
-
-local originalSetStatus = setStatus
-setStatus = function(text, color)
-    if text ~= lastStatusText then
-        lastStatusText = text
-        lastStatusTime = os.clock()
-    end
-    originalSetStatus(text, color)
+local function SafeInvoke(action, ...)
+    if not DataPullFunc then return false end
+    local success, result = pcall(function(...)
+        return DataPullFunc:InvokeServer(...)
+    end, action, ...)
+    
+    return success
 end
 
-task.spawn(function()
+-- Anti-AFK Thread
+trackThread(function()
     while not stopped do
-        task.wait(5)
-        if not hostEnabled then continue end
-
-        if os.clock() - lastStatusTime >= STUCK_TIMEOUT then
-            local root = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
-            if root then
-                setStatus("Stuck — TP back!", Color3.fromRGB(255, 100, 100))
-                root.CFrame = CFrame.new(START_POS + Vector3.new(0, 5, 0))
-                root.AssemblyLinearVelocity = Vector3.zero
-                root.AssemblyAngularVelocity = Vector3.zero
-                lastStatusTime = os.clock()
-            end
+        task.wait(60)
+        if antiAfkEnabled then
+            pcall(function()
+                VirtualUser:CaptureController()
+                VirtualUser:ClickButton2(Vector2.new(0, 0))
+            end)
         end
     end
 end)
 
--- ══════════════════════════════════════════════════════════════════
--- HOST LOOP
--- ══════════════════════════════════════════════════════════════════
-local startPos = Vector3.new(583.272, 3472.545, -549.761)
+-- Failsafe Thread
+local START_POS = Vector3.new(583.272, 3472.545, -549.761)
 local targetHeight = 3.225
 
-task.spawn(function()
+trackThread(function()
+    while not stopped do
+        task.wait(5)
+        if not hostEnabled then continue end
+
+        if os.clock() - lastStatusTime >= 30 then
+            if HRP then
+                setStatus("Stuck — TP back!", Color3.fromRGB(255, 100, 100))
+                HRP.CFrame = CFrame.new(START_POS + Vector3.new(0, 5, 0))
+                HRP.AssemblyLinearVelocity = Vector3.zero
+            end
+            lastStatusTime = os.clock()
+        end
+    end
+end)
+
+-- Host Thread
+trackThread(function()
     while not stopped do
         task.wait(1)
         if not hostEnabled then continue end
+        
+        -- Validate Trigger Exists (Kept this so it doesn't crash your script entirely!)
+        if not Trigger then
+            setStatus("Error: Trigger missing", Color3.fromRGB(255, 100, 100))
+            Trigger = getTrigger()
+            task.wait(3)
+            continue
+        end
 
         local atStart = false
         while hostEnabled and not stopped do
-            local root = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
-            if root then
-                local dist = (root.Position - startPos).Magnitude
-                local heightAboveGround = root.Position.Y - (startPos.Y - targetHeight)
+            if HRP then
+                -- REVERTED TO ORIGINAL VALIDATION LOGIC
+                local dist = (HRP.Position - START_POS).Magnitude
+                local heightAboveGround = HRP.Position.Y - (START_POS.Y - targetHeight)
+                
                 if dist < 8 and math.abs(heightAboveGround - targetHeight) < 1 then
                     atStart = true
                     break
                 end
             end
-            task.wait(0.2)
+            task.wait(0.5)
         end
 
         if not atStart or not hostEnabled or stopped then continue end
 
-        HRP = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
-        if not HRP then continue end
-        HRP.CFrame = Trigger.CFrame + Vector3.new(0, 3, 0)
-        task.wait(0.1)
+        if HRP and Trigger then
+            HRP.CFrame = Trigger.CFrame + Vector3.new(0, 3, 0)
+        end
+        task.wait(0.5)
 
         setStatus("Creating team...")
-        Invoke("AbyssCreateTeamChannel", Difficulty, DungeonId, TeamMode)
+        if not SafeInvoke("AbyssCreateTeamChannel", 1, 1007, 2) then
+            setStatus("Failed to create team", Color3.fromRGB(255, 100, 100))
+            task.wait(2)
+            continue
+        end
+        
         task.wait(0.5)
-
         setStatus("Starting Abyss...")
-        Invoke("AbyssStartChannel")
+        if not SafeInvoke("AbyssStartChannel") then
+            setStatus("Failed to start abyss", Color3.fromRGB(255, 100, 100))
+            task.wait(2)
+            continue
+        end
+
         task.wait(1)
-
         setStatus("Leaving Arena...")
-        Invoke("ArenaLeaveChannel")
-        task.wait(0.5)
+        SafeInvoke("ArenaLeaveChannel")
 
+        -- Successfully completed loop
         totalCycles += 1
         totalPoints += POINTS_PER_CYCLE
         pointsLbl.Text = "Points: " .. fmtPoints(totalPoints)
         updateRejoinProgress()
-        saveSettings()
 
         if autoRejoinEnabled and totalCycles >= rejoinAtCycles then
             setStatus("Rejoining...", Color3.fromRGB(255, 200, 80))
-            saveSettings()
-            rejoinSameServer()
+            local ok, joinData = pcall(function() return LP:GetJoinData() end)
+            local code = ok and joinData and joinData.PrivateServerAccessCode
+            task.wait(1)
+            
+            pcall(function()
+                if code and code ~= "" then
+                    TeleportService:TeleportToPrivateServer(game.PlaceId, code, {LP})
+                else
+                    TeleportService:Teleport(game.PlaceId, LP)
+                end
+            end)
+            task.wait(10) -- Pause while teleporting
             continue
         end
 
@@ -469,12 +466,4 @@ task.spawn(function()
     end
 end)
 
--- Cleanup
-if _G.StopAbyssLooper then _G.StopAbyssLooper() end
-_G.StopAbyssLooper = function()
-    stopped = true
-    hostEnabled = false
-    if sg then sg:Destroy() end
-end
-
-print("[AbyssLooper] Loaded.")
+print("[AbyssLooper] Optimized version loaded cleanly. Ready for AFK.")
