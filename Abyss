@@ -453,19 +453,19 @@ task.spawn(function()
 
         if not atPortal or not hostEnabled or stopped then continue end
 
-        task.wait(0.2) -- let the game register we're on the pad
+        task.wait(0.05) -- let the game register we're on the pad
 
         setStatus("Creating team...")
         Invoke("AbyssCreateTeamChannel", Difficulty, DungeonId, TeamMode)
-        task.wait(0.2)
+        task.wait(0.05)
 
         setStatus("Starting Abyss...")
         Invoke("AbyssStartChannel")
-        task.wait(0.5)
+        task.wait(0.05)
 
         setStatus("Leaving Arena...")
         Invoke("ArenaLeaveChannel")
-        task.wait(1.5)
+        task.wait(0.05)
 
         totalCycles += 1
         totalPoints += POINTS_PER_CYCLE
