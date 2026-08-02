@@ -3894,7 +3894,7 @@ function useAutoRiftItem(generation)
     RiftStatusLbl.TextColor3 = C.gold
 
     local ok = pcall(function()
-        DataPullFunc:InvokeServer("CommonItemUseChannel", 11010)
+        DataPullFunc:InvokeServer("CommonItemUseChannel", 11005)
     end)
 
     -- Give the server call a small amount of time to register before the
