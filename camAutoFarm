@@ -246,15 +246,26 @@ do
 end
 
 -- Male/Female gender constants — pet:GetGender() returns one of these.
--- Falls back to the game's typical 1/2 enum-as-number convention if the
--- constants module path below doesn't resolve.
+-- The game's breed validation compares against _G.PathTool.Constants
+-- .PetGenderType, so prefer that LIVE table first (no local-enum drift);
+-- the module require + the hardcoded 1/2 are just fallbacks.
 PetGenderType = {Male = 1, Female = 2}
 do
-    local ok, mod = pcall(function()
-        return require(RS.CommonConfig.Constants)
+    local seeded = false
+    pcall(function()
+        local c = _G.PathTool and _G.PathTool.Constants
+        if c and c.PetGenderType then
+            PetGenderType = c.PetGenderType
+            seeded = true
+        end
     end)
-    if ok and mod and mod.PetGenderType then
-        PetGenderType = mod.PetGenderType
+    if not seeded then
+        local ok, mod = pcall(function()
+            return require(RS.CommonConfig.Constants)
+        end)
+        if ok and mod and mod.PetGenderType then
+            PetGenderType = mod.PetGenderType
+        end
     end
 end
 
@@ -296,6 +307,27 @@ EggDatabase = {
     {id = 70, name = "Beatopus's Egg"}, {id = 71, name = "Flash Chest Egg"}, {id = 72, name = "Golden Winged Sacred Egg"},
     {id = 271, name = "Valentine's King Egg"}, {id = 211, name = "Rift EggII"}
 }
+
+-- Live egg list: override the hardcoded table above with the game's own
+-- CfgEgg.Tmpls (ReplicatedStorage.CommonConfig.Egg.CfgEgg) -- the SAME table
+-- the game's EggHatchStartChannel validates egg ids against. When a game
+-- update adds eggs they appear in the picker automatically on next execute.
+-- If the require ever fails we silently keep the hardcoded list as fallback.
+do
+    local okCfg, cfg = pcall(function()
+        return require(RS.CommonConfig.Egg.CfgEgg)
+    end)
+    if okCfg and cfg and cfg.Tmpls then
+        local liveEggs = {}
+        for tmplId, tmpl in pairs(cfg.Tmpls) do
+            if type(tmplId) == "number" and type(tmpl) == "table" and tmpl.Name then
+                table.insert(liveEggs, {id = tmplId, name = tmpl.Name})
+            end
+        end
+        table.sort(liveEggs, function(a, b) return a.id < b.id end)
+        if #liveEggs > 0 then EggDatabase = liveEggs end
+    end
+end
 
 -- ==========================================
 -- 1.6 PET BREEDING — BAG SCANNING
@@ -2938,7 +2970,7 @@ SettingsTabW:Section({ Title = "Hub" })
 
 SettingsTabW:Paragraph({
     Title = "About",
-    Desc = "WindUI build 11 (boss count init). The X button minimizes the hub — tap the floating button to reopen it. Unload Hub below fully stops every loop, like the old panel's X did."
+    Desc = "WindUI build 17 (egg list auto-updates from the game). The X button minimizes the hub — tap the floating button to reopen it. Unload Hub below fully stops every loop, like the old panel's X did."
 })
 
 SettingsTabW:Button({
@@ -5623,8 +5655,90 @@ end)
 -- is also on, immediately re-fires ClientCreateBreeding() with the same
 -- two selected pets right after collecting, so the whole
 -- breed -> wait -> hatch -> breed cycle repeats with no input needed.
+-- Game-faithful breed parent validation: mirrors the EXACT checks in the
+-- game's PetBreedCreateBreedingChannel (per the PetBreedSystem decompile):
+-- the item exists (pet:GetItem), is not a child pet, has the right gender
+-- for its role, grade >= CfgPetBreed.ParentGradeMin, template not CantBreed.
+-- The gender enum refreshes from the game's own _G.PathTool.Constants each
+-- call so it can never drift from what the game checks. Returns true, or
+-- false + a player-readable reason for the status label.
+function noxarBreedValidateParent(id, kind)
+    if not id then return false, "nothing selected" end
+    pcall(function()
+        local c = _G.PathTool and _G.PathTool.Constants
+        if c and c.PetGenderType then PetGenderType = c.PetGenderType end
+    end)
+    local gp = getGamePlayer()
+    if not gp or not gp.pet or not gp.pet.GetItem then return false, "pet data not loaded" end
+    local item = gp.pet:GetItem(id)
+    if item == nil then return false, "no longer in bag" end
+    local okCheck, reason = pcall(function()
+        if item:IsChildPet() then return "a child pet now" end
+        local want = (kind == "father") and PetGenderType.Male or PetGenderType.Female
+        if item:GetGender() ~= want then return "wrong gender for that slot" end
+        local min = CfgPetBreed and CfgPetBreed.ParentGradeMin
+        if min and item:GetGrade() < min then return "grade too low" end
+        local tmpl = item:GetTmpl()
+        if tmpl and tmpl.CantBreed then return "can't breed" end
+        return nil
+    end)
+    if not okCheck then return false, "pet data error" end
+    if reason then return false, reason end
+    return true
+end
+
+-- Finds a fresh eligible replacement parent by name. Breeding CONSUMES the
+-- parents, so the pet the user sees in the bag is usually a same-name copy
+-- with a NEW id -- the saved id is a ghost, and this rebinds to the real one.
+function noxarBreedFindReplacement(label, kind)
+    if not label then return nil end
+    local males, females = scanBreedablePets()
+    for _, entry in ipairs(kind == "father" and males or females) do
+        if entry.name == label then
+            return entry
+        end
+    end
+    return nil
+end
+
+-- Returns true when both saved parents validate per the game's breed rules.
+-- Ghost ids auto-heal by rebinding to a fresh eligible same-name pet (saved
+-- to config); unfixable blockers are shown on the status label.
+local function noxarBreedParentsReady()
+    for _, role in ipairs({"father", "mother"}) do
+        local isFather = (role == "father")
+        local id = isFather and breedFatherId or breedMotherId
+        local label = isFather and breedFatherLabel or breedMotherLabel
+        local roleTitle = isFather and "Father" or "Mother"
+        local okParent, why = noxarBreedValidateParent(id, role)
+        if not okParent then
+            local repl = noxarBreedFindReplacement(label, role)
+            if repl then
+                if isFather then
+                    breedFatherId, breedFatherLabel = repl.id, repl.name
+                else
+                    breedMotherId, breedMotherLabel = repl.id, repl.name
+                end
+                saveConfig()
+                BreedStatusLbl.Text = "↻ Re-bound " .. roleTitle .. " to fresh " .. tostring(repl.name) .. " (ID " .. tostring(repl.id) .. ")"
+                BreedStatusLbl.TextColor3 = Color3.fromRGB(200, 210, 240)
+            else
+                BreedStatusLbl.Text = "⚠ " .. roleTitle .. " " .. tostring(label) .. ": " .. tostring(why) .. " — Refresh pet lists and reselect"
+                BreedStatusLbl.TextColor3 = C.gold
+                return false
+            end
+        end
+    end
+    return true
+end
+
 spawnTracked("breedingWatcher", function()
     while task.wait(2) do
+        -- A single bad tick (nil StartTick during a game edge state, a
+        -- module hiccup, etc.) must never silently kill this thread --
+        -- before this guard, one runtime error left Auto Breeding dead
+        -- forever while the toggle still looked ON. Log and keep polling.
+        local okTick, errTick = pcall(function()
         local info = getBreedingSlotInfo()
 
         if info == nil then
@@ -5632,14 +5746,29 @@ spawnTracked("breedingWatcher", function()
             -- selected, start a new breed right away — this covers both
             -- "just collected" and "rejoined with slot already empty".
             if autoBreedEnabled and breedFatherId and breedMotherId and PetBreedSystem then
-                BreedStatusLbl.Text = "Slot 1: Empty — auto-breeding again..."
-                BreedStatusLbl.TextColor3 = Color3.fromRGB(200, 210, 240)
-                local ok = pcall(function()
-                    PetBreedSystem.ClientCreateBreeding(breedFatherId, breedMotherId)
+                -- Gate on game-faithful parent validation (auto-heals ghost
+                -- ids to their fresh same-name copies; label explains any
+                -- real blocker) before burning a breed request.
+                if not noxarBreedParentsReady() then
+                    task.wait(10) -- a parent is blocked; idle, label says why
+                else
+                -- IMPORTANT: pcall-ok only means "no Lua error". The game's
+                -- channel validation can silently REJECT the request (returns
+                -- false) -- bad parents, game rule, API change -- and the old
+                -- code then lied with "Auto-breeding: ..." every 2s forever.
+                -- Read the real return values and show the actual outcome.
+                local ok, r1, r2 = pcall(function()
+                    return PetBreedSystem.ClientCreateBreeding(breedFatherId, breedMotherId)
                 end)
-                if ok then
+                if ok and r1 ~= false then
                     BreedStatusLbl.Text = "Auto-breeding: " .. tostring(breedFatherLabel) .. " x " .. tostring(breedMotherLabel)
                     BreedStatusLbl.TextColor3 = C.green
+                else
+                    local errText = (not ok) and tostring(r1) or tostring(r2 or r1 or "no result")
+                    BreedStatusLbl.Text = "⚠ Auto-breed rejected: " .. errText
+                    BreedStatusLbl.TextColor3 = C.gold
+                    task.wait(10) -- don't spam a request the game keeps rejecting
+                end
                 end
             else
                 BreedStatusLbl.Text = "Slot 1: Empty — pick two pets and breed"
@@ -5653,7 +5782,9 @@ spawnTracked("breedingWatcher", function()
             end)
             serverTime = serverTime or os.time()
 
-            local remaining = (info.StartTick + BreedTimeSeconds) - serverTime
+            -- StartTick can be missing on some breeds; fall back to "now"
+            -- so the countdown shows a full timer instead of erroring out.
+            local remaining = ((info.StartTick or serverTime) + BreedTimeSeconds) - serverTime
 
             if remaining > 0 then
                 local h = math.floor(remaining / 3600)
@@ -5666,30 +5797,46 @@ spawnTracked("breedingWatcher", function()
                 BreedStatusLbl.TextColor3 = C.green
 
                 if autoBreedHatchEnabled and PetBreedSystem then
-                    local ok = pcall(function()
-                        PetBreedSystem.ClientHatching()
+                    -- same honesty rule as the breed request above
+                    local ok, h1, h2 = pcall(function()
+                        return PetBreedSystem.ClientHatching()
                     end)
-                    if ok then
+                    if ok and h1 ~= false then
                         if autoBreedEnabled and breedFatherId and breedMotherId then
                             -- Collected — immediately queue the next breed.
                             -- The slot won't show empty until next poll,
                             -- so fire it here rather than waiting a full
                             -- extra 2s cycle for the "info == nil" branch.
                             task.wait(0.3)
-                            local ok2 = pcall(function()
-                                PetBreedSystem.ClientCreateBreeding(breedFatherId, breedMotherId)
+                            local ok2, b1, b2 = pcall(function()
+                                return PetBreedSystem.ClientCreateBreeding(breedFatherId, breedMotherId)
                             end)
-                            if ok2 then
+                            if ok2 and b1 ~= false then
                                 BreedStatusLbl.Text = "Collected! Auto-breeding again: " .. tostring(breedFatherLabel) .. " x " .. tostring(breedMotherLabel)
                                 BreedStatusLbl.TextColor3 = C.green
+                            else
+                                local errText = (not ok2) and tostring(b1) or tostring(b2 or b1 or "no result")
+                                BreedStatusLbl.Text = "⚠ Re-breed rejected: " .. errText
+                                BreedStatusLbl.TextColor3 = C.gold
                             end
                         else
                             BreedStatusLbl.Text = "Slot 1: Collected! Pick pets to breed again."
                             BreedStatusLbl.TextColor3 = C.green
                         end
+                    else
+                        local errText = (not ok) and tostring(h1) or tostring(h2 or h1 or "no result")
+                        BreedStatusLbl.Text = "⚠ Egg collect rejected: " .. errText
+                        BreedStatusLbl.TextColor3 = C.gold
+                        task.wait(10) -- don't spam a request the game keeps rejecting
                     end
                 end
             end
+        end
+        end)
+        if not okTick then
+            pcall(function()
+                BreedStatusLbl.Text = "⚠ Breed watcher error: " .. tostring(errTick)
+            end)
         end
     end
 end)
