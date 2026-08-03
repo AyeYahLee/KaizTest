@@ -2191,6 +2191,11 @@ function NoxarBossCount(tbl)
     return n
 end
 
+-- Show the saved selection count immediately. Creation-time callbacks are
+-- noxarCallbackGate'd (WindUI's initial Value application fires one), so the
+-- "Selected: X" text would otherwise stay blank until the first manual tap.
+BossDrop:SetDesc("Selected: " .. tostring(NoxarBossCount(selectedBosses)))
+
 BossLoopLiveStatusLbl = makeStatusLabel(BossesTabW:Paragraph({ Title = "Boss status", Desc = "Status: Idle" }), "Status: Idle")
 
 NoxarElm.BossLoop = BossesTabW:Toggle({
@@ -2933,7 +2938,7 @@ SettingsTabW:Section({ Title = "Hub" })
 
 SettingsTabW:Paragraph({
     Title = "About",
-    Desc = "WindUI build 10 (Equip Mode text). The X button minimizes the hub — tap the floating button to reopen it. Unload Hub below fully stops every loop, like the old panel's X did."
+    Desc = "WindUI build 11 (boss count init). The X button minimizes the hub — tap the floating button to reopen it. Unload Hub below fully stops every loop, like the old panel's X did."
 })
 
 SettingsTabW:Button({
