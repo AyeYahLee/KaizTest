@@ -3075,7 +3075,7 @@ SettingsTabW:Section({ Title = "Hub" })
 
 SettingsTabW:Paragraph({
     Title = "About",
-    Desc = "WindUI build 26 (pre-attack pet gather now only needs ONE of your equipped pets close to start attacking). The X button minimizes the hub — tap the floating button to reopen it. Unload Hub below fully stops every loop, like the old panel's X did."
+    Desc = "WindUI build 27 (your equipped pets' distance is now watched the whole time a boss fight attacks, and the watcher fully stops when the fight ends). The X button minimizes the hub — tap the floating button to reopen it. Unload Hub below fully stops every loop, like the old panel's X did."
 })
 
 SettingsTabW:Button({
@@ -3376,35 +3376,100 @@ function noxarBossAttackMonster(monster)
     end)
 end
 
--- Boss-fight pre-attack gather check (build 26): are ANY of MY OWN equipped
--- pets already close to my character after the snap? Your pets live directly
--- in workspace.Pets as BaseParts carrying PlayerId (owner) and EquipedIndex
--- (equipped slot) attributes -- so PlayerId == my user id AND EquipedIndex
--- set means "my currently equipped pet" and nobody else's pets in that
--- folder can ever count. Distance = pet.Position vs my HumanoidRootPart.
--- Returns (anyWithin, detected): anyWithin = at least one equipped pet of
--- mine sits within radius; detected = how many matched (0 = layout
--- unreadable -- callers must proceed anyway, never hang).
-function noxarMyEquippedPetAnyWithin(radius)
+-- Scans MY OWN equipped pets for boss-fight distance checks. Your pets live
+-- directly in workspace.Pets as BaseParts carrying PlayerId (owner) and
+-- EquipedIndex (equipped slot) attributes -- so PlayerId == my user id AND
+-- EquipedIndex set means "my currently equipped pet" and nobody else's pets
+-- in that folder can ever count. Distance = pet.Position vs my
+-- HumanoidRootPart. Returns (beyondAny, anyWithin, detected):
+--   beyondAny = at least one equipped pet of mine sits farther than radius
+--   anyWithin = at least one equipped pet of mine sits within radius
+--   detected  = how many matched (0 = pets undetectable -- happens while
+--               MOUNTED; callers must never treat that as "far")
+function noxarScanMyEquippedPets(radius)
     radius = tonumber(radius) or 50
     local root = getRoot()
     local myUid = LP and LP.UserId
     local petsFolder = workspace:FindFirstChild("Pets")
-    if not root or not myUid or not petsFolder then return false, 0 end
+    if not root or not myUid or not petsFolder then return false, false, 0 end
     local myPos = root.Position
 
-    local detected, anyWithin = 0, false
+    local detected, beyondAny, anyWithin = 0, false, false
     for _, pet in ipairs(petsFolder:GetChildren()) do
         if pet:IsA("BasePart")
             and pet:GetAttribute("PlayerId") == myUid
             and pet:GetAttribute("EquipedIndex") ~= nil then
             detected += 1
-            if (pet.Position - myPos).Magnitude <= radius then
+            if (pet.Position - myPos).Magnitude > radius then
+                beyondAny = true
+            else
                 anyWithin = true
             end
         end
     end
-    return anyWithin, detected
+    return beyondAny, anyWithin, detected
+end
+
+-- Continuous pet-distance monitor for the boss-fight ATTACK phase (build 27).
+-- Exists ONLY while a boss fight is actively attacking: spawned by
+-- fightBossUntilDead right when the attack starts and guaranteed torn down
+-- before that function returns. Owns no connections -- one task polling
+-- distance. Whenever at least one of my equipped pets is detected (never
+-- mount-blind) and any sits farther than 50 studs, it re-mounts -> 0.4s ->
+-- unmounts to pull them in, then waits for redetection before judging again.
+local function noxarBossPetMonitorLoop(monitor)
+    while monitor.running do
+        task.wait(0.5) -- gentle cadence: distance drifts slowly, keep scans cheap
+        if not monitor.running then break end
+
+        local beyondAny, _, detected = noxarScanMyEquippedPets(50)
+        if detected > 0 and beyondAny then
+            -- pull the pets back in (same mount calls the snap uses). The
+            -- 0.4s wait is chunked so a stop request exits promptly and the
+            -- unmount ALWAYS runs -- we never leave you mid-mount.
+            _G.NoxarSetBossMount(true)
+            local t = 0
+            while monitor.running and t < 0.4 do
+                task.wait(0.05)
+                t += 0.05
+            end
+            _G.NoxarSetBossMount(false)
+
+            -- While mounted our equipped pets are undetectable; wait for them
+            -- to reappear (bounded) before the next distance judgement, so a
+            -- mount-blind scan can never be mistaken for "pets are far".
+            local waited = 0
+            while monitor.running and waited < 3 do
+                local _, _, nowDetected = noxarScanMyEquippedPets(50)
+                if nowDetected > 0 then break end
+                task.wait(0.2)
+                waited += 0.2
+            end
+        end
+    end
+    monitor.done = true
+end
+
+function noxarStartBossPetMonitor()
+    local monitor = { running = true, done = false, thread = nil }
+    monitor.thread = task.spawn(noxarBossPetMonitorLoop, monitor)
+    return monitor
+end
+
+function noxarStopBossPetMonitor(monitor)
+    if not monitor then return end
+    monitor.running = false
+    -- graceful first: the loop notices the flag within ~0.55s, finishing any
+    -- in-flight unmount; hard cancel only as the last resort
+    local t = 0
+    while not monitor.done and t < 1.5 do
+        task.wait(0.05)
+        t += 0.05
+    end
+    if not monitor.done and monitor.thread and type(task.cancel) == "function" then
+        pcall(task.cancel, monitor.thread)
+    end
+    monitor.thread = nil
 end
 
 -- Mid-fight re-snap failsafe (5s cadence). Build 25: glue-only -- the
@@ -3431,8 +3496,9 @@ end
 -- pet auto-combat also contributes damage.
 -- "Still present in ClientMonsters" is the same death check used everywhere
 -- else in this file. A glue-only (no mount/unmount) re-snap runs every 5s as
--- a wander/glitch failsafe. Bails out early (returns false) if
--- bossLoopEnabled goes false mid-fight.
+-- a wander/glitch failsafe, and a pet-distance monitor watches MY equipped
+-- pets for the attack phase only (build 27). Bails out early (returns false)
+-- if bossLoopEnabled goes false mid-fight.
 function fightBossUntilDead(monster, isSpecial, bossName)
     local root = monster:FindFirstChild("Root") or monster.PrimaryPart
     if not root then
@@ -3467,7 +3533,7 @@ function fightBossUntilDead(monster, isSpecial, bossName)
     -- equipped pet nodes, we proceed anyway.
     local gatherCycles = 0
     while bossLoopEnabled and gatherCycles < 6 do
-        local anyWithin, detected = noxarMyEquippedPetAnyWithin(50)
+        local _, anyWithin, detected = noxarScanMyEquippedPets(50)
         if detected == 0 then break end -- unreadable layout: fight anyway
         if anyWithin then break end -- at least one pet close enough
         gatherCycles += 1
@@ -3482,9 +3548,15 @@ function fightBossUntilDead(monster, isSpecial, bossName)
     BossLoopLiveStatusLbl.Text = "Status: Attacking " .. tostring(bossName or "boss") .. "..."
     BossLoopLiveStatusLbl.TextColor3 = C.gold
 
+    -- Pet-distance monitor for the ATTACK phase only (build 27): spawned now,
+    -- guaranteed stopped before this function returns on EVERY exit path
+    -- (boss dead / caught / loop toggled off / next target).
+    local petMonitor = noxarStartBossPetMonitor()
+
+    local result, message, resultMonsterId
     if isSpecial then
         local specialSnapAt = os.clock()
-        return NoxarAutoCatchWaitProcessed(
+        result, message, resultMonsterId = NoxarAutoCatchWaitProcessed(
             monster,
             tostring(bossName or "Special"),
             function(text, color)
@@ -3541,19 +3613,20 @@ function fightBossUntilDead(monster, isSpecial, bossName)
                 return st == "catchable"
             end
         )
-    end
-
-    -- Regular bosses: hammer the boss with scripted attacks at farm cadence
+    else
+        -- Regular bosses: hammer the boss with scripted attacks at farm cadence
     -- (same remote the farm loop and Ultra fights use) on top of the game's
     -- own auto-combat. Death/resnap detection below is intentionally unchanged.
     local lastAttackAt = 0
     while bossLoopEnabled do
         if wasBossDeathNotified(bossName, fightStartedAt) then
-            return true -- server kill notification confirmed it
+            result = true -- server kill notification confirmed it
+            break
         end
 
         if not clientMonsters:FindFirstChild(monster.Name) then
-            return true -- boss is dead/disappeared from ClientMonsters
+            result = true -- boss is dead/disappeared from ClientMonsters
+            break
         end
 
         if os.clock() - lastAttackAt >= math.max(ATTACK_DELAY or 0.15, 0.15) then
@@ -3571,9 +3644,13 @@ function fightBossUntilDead(monster, isSpecial, bossName)
         end
 
         task.wait(0.1) -- ticks must keep up with attack cadence now
+        end
+        if not result then message = "stopped" end
     end
 
-    return false -- got turned off mid-fight
+    noxarStopBossPetMonitor(petMonitor)
+
+    return result and true or false, message, resultMonsterId
 end
 
 -- Runs the full cycle for one queued boss: travel to its area, scan for
