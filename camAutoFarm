@@ -965,6 +965,27 @@ function rejoinSameServer()
     end
 end
 
+-- Safe-rejoin gate (build 28): the auto-rejoin deadline marks the EARLIEST
+-- time a rejoin may happen -- never a forced one. Hopping mid-transition
+-- used to land us rejoining while still mounted after the boss loop, or
+-- with Auto Farm left paused. Every false path returns the reason so the
+-- status line can say what we are holding for. nil = safe to rejoin.
+function noxarRejoinBlockReason()
+    if currentBossFight ~= nil then
+        return "boss fight in progress"
+    end
+    if wasFarmingBeforeBossFight then
+        return "resuming Auto Farm after boss"
+    end
+    if bossLoopEnabled and #bossQueue > 0 then
+        return "boss queued"
+    end
+    if _G.NoxarBossMountState then
+        return "still mounted"
+    end
+    return nil
+end
+
 CoreGui = game:GetService("CoreGui")
 promptOverlay = CoreGui:FindFirstChild("RobloxPromptGui")
     and CoreGui.RobloxPromptGui:FindFirstChild("promptOverlay")
@@ -3075,7 +3096,7 @@ SettingsTabW:Section({ Title = "Hub" })
 
 SettingsTabW:Paragraph({
     Title = "About",
-    Desc = "WindUI build 27 (your equipped pets' distance is now watched the whole time a boss fight attacks, and the watcher fully stops when the fight ends). The X button minimizes the hub — tap the floating button to reopen it. Unload Hub below fully stops every loop, like the old panel's X did."
+    Desc = "WindUI build 28 (Auto Rejoin now waits for a clean moment — no rejoining mid-boss-fight, mid-return, pre-resume, or while mounted). The X button minimizes the hub — tap the floating button to reopen it. Unload Hub below fully stops every loop, like the old panel's X did."
 })
 
 SettingsTabW:Button({
@@ -3097,13 +3118,21 @@ spawnTracked("rejoinTimer", function()
         task.wait(1)
         if rejoinTimerEnabled and rejoinDeadline then
             local remaining = rejoinDeadline - tick()
-            if remaining <= 0 then
-                RejoinStatusLbl.Text = "Rejoining now..."
-                rejoinSameServer()
-            else
+            if remaining > 0 then
                 local m = math.floor(remaining / 60)
                 local s = math.floor(remaining % 60)
                 RejoinStatusLbl.Text = string.format("Rejoin in: %02d:%02d", m, s)
+            else
+                -- Deadline reached = earliest allowed time, not a forced one
+                -- (build 28). Hold while any boss-loop/farm transition is
+                -- still settling; the gate re-checks every second.
+                local blockReason = noxarRejoinBlockReason()
+                if blockReason then
+                    RejoinStatusLbl.Text = "Rejoin pending: " .. blockReason
+                else
+                    RejoinStatusLbl.Text = "Rejoining now..."
+                    rejoinSameServer()
+                end
             end
         end
     end
