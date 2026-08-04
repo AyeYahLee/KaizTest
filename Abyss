@@ -431,7 +431,7 @@ trackThread(function()
         task.wait(0.5)
 
         setStatus("Creating team...")
-        if not SafeInvoke("AbyssCreateTeamChannel", 1, 1007, 2) then
+        if not SafeInvoke("AbyssCreateTeamChannel", 1, 1006, 2) then
             setStatus("Failed to create team", Color3.fromRGB(255, 100, 100))
             task.wait(2)
             continue
