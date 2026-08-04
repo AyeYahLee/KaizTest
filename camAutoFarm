@@ -721,7 +721,10 @@ function startFarming(statusLbl)
             -- independent V6-style fast catch sweep: does NOT wait for the
             -- current target to become catchable, catches every nearby
             -- catchable filtered monster NOW, and NEVER moves the player.
-            if farmAutoCatchEnabled then
+            -- Hard gate: while the boss loop owns a fight, the farm is
+            -- paused anyway -- this is the belt for the suspenders so a
+            -- manually-restarted farm can NEVER try to catch a boss target.
+            if farmAutoCatchEnabled and not currentBossFight then
                 for _, cand in ipairs(NoxarFindNearbyCatchableInfos(catchRadius)) do
                     local mid = cand.monsterId
                     if not (catchCooldowns[mid] and os.clock() < catchCooldowns[mid]) then
@@ -1586,14 +1589,66 @@ function NoxarStartAutoCatchForMonster(monster)
     return true, monsterId, "started"
 end
 
-function NoxarAutoCatchWaitProcessed(monster, label, statusFn, keepRunningFn, canTryFn, startWait, doneWait)
+-- Monster model -> its data MonsterId (same extraction the attack call uses).
+function noxarMonsterIdFromModel(monster)
+    if not monster then return nil end
+    local okName, byName = pcall(function()
+        return tonumber(monster.Name:match("Monster_(%d+)"))
+    end)
+    if okName and byName then return byName end
+    local okAttr, byAttr = pcall(function()
+        return tonumber(monster:GetAttribute("MonsterId"))
+    end)
+    if okAttr then return byAttr end
+    return nil
+end
+
+-- Game-faithful per-monster catch state, read from the boss's ServerNode
+-- attributes -- the exact signals the in-game Auto feature
+-- (AutoAttackUtil._searchAutoCatch) and the MonsterCatchStartChannel
+-- validation both use:
+--   "catchable" = CatchPlayerId_<my user id> present (we are eligible, and no
+--                 one has claimed it)
+--   "claimed"   = CatchTakenPlayerId (or per-player CatchTakenPlayerId_<id>)
+--                 present -- set the INSTANT any catch start is accepted,
+--                 no matter who fired it (us, in-game Auto, another player)
+--   "gone"      = the monster info is gone (CatchComplete destroyed it)
+--   "pending"   = monster exists but none of the above (alive / not eligible)
+--   nil         = unreadable (manager/info unavailable) -- callers fall back
+--                 to legacy behavior
+function noxarReadMonsterCatchState(monsterId)
+    local mgr = NoxarGetMgrMonsterClient()
+    if not mgr or type(mgr.GetMonsterInfo) ~= "function" then return nil end
+    local okInfo, info = pcall(mgr.GetMonsterInfo, monsterId)
+    if not okInfo then return nil end
+    if info == nil then return "gone" end
+    local node = info.ServerNode
+    if node == nil then return nil end
+
+    local okT, taken = pcall(function() return node:GetAttribute("CatchTakenPlayerId") end)
+    if okT and taken ~= nil then return "claimed" end
+
+    local lp = game.Players and game.Players.LocalPlayer
+    local uid = lp and lp.UserId
+    if uid then
+        local okPT, takenMine = pcall(function() return node:GetAttribute("CatchTakenPlayerId_" .. uid) end)
+        if okPT and takenMine ~= nil then return "claimed" end
+        local okE, eligible = pcall(function() return node:GetAttribute("CatchPlayerId_" .. uid) end)
+        if okE and eligible ~= nil then return "catchable" end
+    end
+    return "pending"
+end
+
+function NoxarAutoCatchWaitProcessed(monster, label, statusFn, keepRunningFn, canTryFn, startWait, doneWait, attackFn, externalDoneFn, canStartFn)
     local maxStartWait = tonumber(startWait)
     local waitUntilStarted = (not maxStartWait) or maxStartWait <= 0
     doneWait = tonumber(doneWait) or 1
     label = tostring(label or "Monster")
 
     local started, monsterId, message = false, nil, nil
+    local externalDone = nil
     local startAt = os.clock()
+    local lastAttackAt = 0
 
     while waitUntilStarted or os.clock() - startAt < maxStartWait do
         if keepRunningFn and not keepRunningFn() then
@@ -1605,18 +1660,60 @@ function NoxarAutoCatchWaitProcessed(monster, label, statusFn, keepRunningFn, ca
             return false, "target unavailable"
         end
 
-        started, monsterId, message = NoxarStartAutoCatchForMonster(monster)
-        if started then break end
+        -- The catch may be started/finished by something other than us --
+        -- the in-game Auto battle feature, or another player. Boss callers
+        -- pass externalDoneFn to notice that (boss gone / death notified);
+        -- rift callers pass nothing and their behavior is unchanged.
+        if externalDoneFn then
+            local okExt, done, why = pcall(externalDoneFn)
+            if okExt and done then
+                externalDone = tostring(why or "external")
+                break
+            end
+        end
+
+        -- Optional "attack while waiting for the catch window" hook (Ultra
+        -- boss fights). Runs at farm attack cadence until the catch starts;
+        -- rift callers simply don't pass it, so that path is unchanged.
+        if attackFn and os.clock() - lastAttackAt >= math.max(ATTACK_DELAY or 0.15, 0.15) then
+            lastAttackAt = os.clock()
+            pcall(attackFn)
+        end
+
+        -- Optional game-faithful catch-window gate (special boss fights):
+        -- only fire MonsterCatchStartChannel once the boss's ServerNode
+        -- marks us an eligible catcher -- the same gate the in-game Auto
+        -- feature uses -- instead of blind-spamming a remote the server
+        -- keeps rejecting. nil gate = legacy blind attempts (rift path).
+        local mayStart = true
+        if canStartFn then
+            local okGate, allowed = pcall(canStartFn)
+            mayStart = okGate and allowed and true or false
+        end
+        if mayStart then
+            started, monsterId, message = NoxarStartAutoCatchForMonster(monster)
+            if started then break end
+        else
+            message = "boss not catchable yet"
+        end
 
         if statusFn then
             local elapsed = math.floor(os.clock() - startAt)
-            local waitText = waitUntilStarted and ("waiting... " .. tostring(elapsed) .. "s") or "waiting..."
-            statusFn("Status: " .. label .. " Auto Catch " .. waitText .. " " .. tostring(message or "not ready"), C.gold)
+            if attackFn then
+                -- Ultra boss fights attack while camping the catch window --
+                -- say so, otherwise the status looks like we are just standing
+                -- there doing nothing.
+                statusFn("Status: Attacking " .. label .. "... waiting for catch window (" .. tostring(elapsed) .. "s)"
+                    .. (message and (" — " .. tostring(message)) or ""), C.gold)
+            else
+                local waitText = waitUntilStarted and ("waiting... " .. tostring(elapsed) .. "s") or "waiting..."
+                statusFn("Status: " .. label .. " Auto Catch " .. waitText .. " " .. tostring(message or "not ready"), C.gold)
+            end
         end
         task.wait(0.25)
     end
 
-    if not started then
+    if not started and not externalDone then
         NoxarCleanupAutoCatchState()
         if statusFn then
             statusFn("Status: " .. label .. " Auto Catch did not start" .. (message and (" (" .. tostring(message) .. ")") or ""), C.red)
@@ -1625,7 +1722,11 @@ function NoxarAutoCatchWaitProcessed(monster, label, statusFn, keepRunningFn, ca
     end
 
     if statusFn then
-        statusFn("Status: " .. label .. " Auto Catch started — processing...", C.green)
+        if externalDone then
+            statusFn("Status: " .. label .. " catch finished (" .. externalDone .. ") — processing...", C.green)
+        else
+            statusFn("Status: " .. label .. " Auto Catch started — processing...", C.green)
+        end
     end
 
     local doneAt = os.clock() + doneWait
@@ -2247,6 +2348,10 @@ NoxarElm.BossLoop = BossesTabW:Toggle({
             BossLoopLiveStatusLbl.Text = "Status: Disabled"
             table.clear(bossQueue)
             _G.NoxarSetBossMount(false, true)
+            if wasFarmingBeforeBossFight and not running then
+                wasFarmingBeforeBossFight = false
+                toggleFarming(true)
+            end
         end
         BossDrop:SetDesc("Selected: " .. tostring(NoxarBossCount(selectedBosses)))
         saveConfig()
@@ -2970,7 +3075,7 @@ SettingsTabW:Section({ Title = "Hub" })
 
 SettingsTabW:Paragraph({
     Title = "About",
-    Desc = "WindUI build 17 (egg list auto-updates from the game). The X button minimizes the hub — tap the floating button to reopen it. Unload Hub below fully stops every loop, like the old panel's X did."
+    Desc = "WindUI build 23 (special bosses now read the game's own catch signals — fires the moment you become eligible, notices any catch claim instantly). The X button minimizes the hub — tap the floating button to reopen it. Unload Hub below fully stops every loop, like the old panel's X did."
 })
 
 SettingsTabW:Button({
@@ -3270,13 +3375,29 @@ function resnapToCurrentBoss(bossName, fallbackMonster)
     return monster
 end
 
+-- Shared boss-fight attack: fires the game's own
+-- ClientAttackMonsterOnHasAlivePet for a monster model (same remote call the
+-- farm loop uses). Safe to spam each tick; the game applies real cadence.
+function noxarBossAttackMonster(monster)
+    local monsterId = monster and (tonumber(monster.Name:match("Monster_(%d+)"))
+        or tonumber(monster:GetAttribute("MonsterId")))
+    if not monsterId then return end
+    pcall(function()
+        local PT = _G.PathTool or getPathToolSafe()
+        if PT and PT.MonsterSystem and PT.MonsterSystem.ClientAttackMonsterOnHasAlivePet then
+            PT.MonsterSystem.ClientAttackMonsterOnHasAlivePet(monsterId)
+        end
+    end)
+end
+
 -- Fights a specific boss instance until it dies. Teleports onto it once
--- (same one-shot style as the saved-farm-spot TP button) and then just
--- watches for it to disappear from ClientMonsters -- damage is expected
--- to come from your in-game auto-attack (e.g. equipped pets), not from
--- this script clicking anything. "Still present in ClientMonsters" is
--- the same death check used everywhere else in this file. Bails out
--- early (returns false) if bossLoopEnabled goes false mid-fight.
+-- (same one-shot style as the saved-farm-spot TP button) and then attacks it
+-- at farm cadence via noxarBossAttackMonster (regular bosses; Ultra fights
+-- attack from inside their catch-window camp instead) while watching for it
+-- to disappear from ClientMonsters -- the game's own pet auto-combat also
+-- contributes damage. "Still present in ClientMonsters" is the same death
+-- check used everywhere else in this file. Bails out early (returns false)
+-- if bossLoopEnabled goes false mid-fight.
 function fightBossUntilDead(monster, isSpecial, bossName)
     local root = monster:FindFirstChild("Root") or monster.PrimaryPart
     if not root then
@@ -3302,10 +3423,11 @@ function fightBossUntilDead(monster, isSpecial, bossName)
         _G.NoxarSetBossMount(false)
     end
 
-    BossLoopLiveStatusLbl.Text = "Status: Fighting " .. tostring(bossName or "boss") .. "..."
+    BossLoopLiveStatusLbl.Text = "Status: Attacking " .. tostring(bossName or "boss") .. "..."
     BossLoopLiveStatusLbl.TextColor3 = C.gold
 
     if isSpecial then
+        local specialSnapAt = os.clock()
         return NoxarAutoCatchWaitProcessed(
             monster,
             tostring(bossName or "Special"),
@@ -3320,11 +3442,55 @@ function fightBossUntilDead(monster, isSpecial, bossName)
                 return bossLoopEnabled
             end,
             0,
-            1
+            1,
+            function()
+                noxarBossAttackMonster(monster)
+                -- Ultras wander; keep us glued to it (same failsafe cadence
+                -- the regular-boss path uses) so the attacks actually land.
+                if os.clock() - specialSnapAt >= 5 then
+                    specialSnapAt = os.clock()
+                    monster = resnapToCurrentBoss(bossName, monster) or monster
+                end
+            end,
+            function()
+                -- The catch does not have to come from us: the in-game Auto
+                -- battle feature (or another player) may catch the boss while
+                -- we camp it. Watch the boss's own ServerNode attributes --
+                -- CatchTakenPlayerId lands the INSTANT any catch start is
+                -- accepted server-side, long before the model despawns -- plus
+                -- the legacy gone/death-notified fallbacks so a stale reader
+                -- can never hang the loop.
+                local id = noxarMonsterIdFromModel(monster)
+                local st = id and noxarReadMonsterCatchState(id) or nil
+                if st == "claimed" then
+                    return true, "catch claimed"
+                end
+                if st == "gone" or (st == nil and not clientMonsters:FindFirstChild(monster.Name)) then
+                    return true, "boss gone"
+                end
+                if wasBossDeathNotified(bossName, fightStartedAt) then
+                    return true, "boss notified"
+                end
+                return false
+            end,
+            function()
+                -- Only burn a MonsterCatchStartChannel invoke once the boss's
+                -- ServerNode marks US as an eligible catcher (CatchPlayerId_)
+                -- -- the same gate the in-game Auto feature applies. If the
+                -- reader is unavailable, fall back to the legacy blind
+                -- attempt every tick.
+                local id = noxarMonsterIdFromModel(monster)
+                local st = id and noxarReadMonsterCatchState(id) or nil
+                if st == nil then return true end
+                return st == "catchable"
+            end
         )
     end
 
-    -- Regular boss death-detection below is intentionally unchanged.
+    -- Regular bosses: hammer the boss with scripted attacks at farm cadence
+    -- (same remote the farm loop and Ultra fights use) on top of the game's
+    -- own auto-combat. Death/resnap detection below is intentionally unchanged.
+    local lastAttackAt = 0
     while bossLoopEnabled do
         if wasBossDeathNotified(bossName, fightStartedAt) then
             return true -- server kill notification confirmed it
@@ -3332,6 +3498,11 @@ function fightBossUntilDead(monster, isSpecial, bossName)
 
         if not clientMonsters:FindFirstChild(monster.Name) then
             return true -- boss is dead/disappeared from ClientMonsters
+        end
+
+        if os.clock() - lastAttackAt >= math.max(ATTACK_DELAY or 0.15, 0.15) then
+            lastAttackAt = os.clock()
+            noxarBossAttackMonster(monster)
         end
 
         -- Teleport/glitch failsafe: if we have been "fighting" the same target
@@ -3343,8 +3514,7 @@ function fightBossUntilDead(monster, isSpecial, bossName)
             lastSnapAt = os.clock()
         end
 
-
-        task.wait(0.5) -- just polling for death now, no need to run at ATTACK_DELAY speed
+        task.wait(0.1) -- ticks must keep up with attack cadence now
     end
 
     return false -- got turned off mid-fight
@@ -3529,9 +3699,10 @@ spawnTracked("bossLoop", function()
             if running then
                 wasFarmingBeforeBossFight = true
                 toggleFarming(false) -- cleanly stop Auto-Farm (updates its button too), not just flipping `running`
-            else
-                wasFarmingBeforeBossFight = false
             end
+            -- (no else-clear for the flag: if an earlier cycle's resume got
+            -- interrupted by a fresh spawn, the intent must survive into
+            -- the next drain instead of being silently dropped)
 
             local nextEntry = table.remove(bossQueue, 1)
             runBossFight(nextEntry)
@@ -3545,8 +3716,22 @@ spawnTracked("bossLoop", function()
             end
             _G.NoxarSetBossMount(false, true) -- Unmount AFTER travel/teleport back to Farming Spot completes
             if wasFarmingBeforeBossFight then
-                toggleFarming(true) -- cleanly restart Auto-Farm (spawns a fresh farmLoop thread, updates its button)
-                wasFarmingBeforeBossFight = false
+                -- Settle before handing control back to Auto-Farm: the area
+                -- and character need a moment to finish streaming in. Bails
+                -- early (keeping the resume intent) if a fresh boss queues
+                -- up or the loop gets toggled off mid-countdown.
+                for settleSec = 4, 1, -1 do
+                    if not bossLoopEnabled or #bossQueue > 0 then break end
+                    BossLoopLiveStatusLbl.Text = "Status: Back at spot — resuming Auto-Farm in " .. settleSec .. "s..."
+                    BossLoopLiveStatusLbl.TextColor3 = Color3.fromRGB(205, 215, 245)
+                    task.wait(1)
+                end
+                if bossLoopEnabled and #bossQueue == 0 then
+                    if not running then
+                        toggleFarming(true) -- cleanly restart Auto-Farm (spawns a fresh farmLoop thread, updates its button)
+                    end
+                    wasFarmingBeforeBossFight = false
+                end
             end
             BossLoopLiveStatusLbl.Text = "Status: Waiting for a boss spawn..."
             BossLoopLiveStatusLbl.TextColor3 = Color3.fromRGB(205, 215, 245)
@@ -5588,11 +5773,50 @@ end)
 -- we only start a slot we just emptied ourselves, never blind-restart a
 -- slot we're merely guessing is empty. incubatorKnownEmpty tracks which
 -- slots we're confident are actually empty right now.
+-- Shared read of the game's egg accessor object (GamePlayer.egg) -- the same
+-- object the hatch channels validate against (per the EggSystem decompile).
+-- Returns nil when unreadable so every caller can degrade gracefully.
+local function noxarGameEgg()
+    local gp = getGamePlayer()
+    if gp and gp.egg then return gp.egg end
+    return nil
+end
+
+-- How many of one egg template sit in the bag. nil = couldn't read; callers
+-- must treat nil as "unknown" (fire anyway, the server is the real guard).
+function noxarGetEggAmount(eggId)
+    local egg = noxarGameEgg()
+    if not egg or not egg.GetEggAmount then return nil end
+    local okAmount, amount = pcall(function() return egg:GetEggAmount(eggId) end)
+    if okAmount and type(amount) == "number" then return amount end
+    return nil
+end
+
+-- Whether an incubator slot is unlocked. nil = couldn't read.
+function noxarIsHatchUnlocked(idx)
+    local egg = noxarGameEgg()
+    if not egg or not egg.IsHatchUnlocked then return nil end
+    local okU, unlocked = pcall(function() return egg:IsHatchUnlocked(idx) end)
+    if okU then return unlocked and true or false end
+    return nil
+end
+
+-- Tmpl id of the egg currently incubating in a slot (nil = empty or the
+-- read failed). Used for the hatch loop's idle status ("waiting on X/5").
+function noxarGetHatchSlotTmpl(idx)
+    local egg = noxarGameEgg()
+    if not egg or not egg.GetHatchEggTmplId then return nil end
+    local okT, tmpl = pcall(function() return egg:GetHatchEggTmplId(idx) end)
+    if okT then return tmpl end
+    return nil
+end
+
 incubatorKnownEmpty = {} -- [index] = true once we've either claimed it or confirmed it empty
 
 -- One-time pass: try Start on every slot once at startup, in case some
 -- are sitting empty from before the script ran (e.g. after a rejoin).
 hatchBootstrapped = false
+
 
 spawnTracked("autoHatchLoop", function()
     while task.wait(3) do
@@ -5605,22 +5829,47 @@ spawnTracked("autoHatchLoop", function()
             for i = 1, 5 do incubatorKnownEmpty[i] = true end
         end
 
+        -- Live stock check, straight from the game's own egg data. nil =
+        -- couldn't read (don't gate on it). When the bag is out of the
+        -- chosen egg we skip the Start burns entirely and say why — and
+        -- since slots stay flagged empty, hatching RESUMES by itself the
+        -- moment you farm more of the egg.
+        local eggAmount = noxarGetEggAmount(selectedEggId)
+        local noEggsLeft = (eggAmount ~= nil and eggAmount <= 0)
+
+        -- Tracks whether an event this pass already wrote the status label;
+        -- if nothing did, the end-of-cycle idle refresh fills it in so the
+        -- label can never sit frozen on a stale "Hatching ..." for hours.
+        local labelTouched = false
+
         for incubatorIndex = 1, 5 do
             if not autoHatchEnabled then break end
 
-            -- Always attempt to claim — if it's not ready, this
-            -- should just fail/no-op server-side rather than error.
-            -- If it succeeds, the slot is now empty, so mark it for
-            -- a Start attempt below.
-            local claimedOk = pcall(function()
+            -- Claim: read the REAL outcome. pcall-ok only means "no Lua
+            -- error" — the channel also returns plain `false` for a
+            -- normal "nothing ready/empty slot" (ignore quietly) and
+            -- `false + reason` when the take is blocked (pet bag full).
+            local okClaim, c1, c2 = pcall(function()
                 if EggSystem then
-                    EggSystem.ClientHatchTaken(incubatorIndex)
+                    return EggSystem.ClientHatchTaken(incubatorIndex)
                 else
-                    DataPullFunc:InvokeServer("EggHatchTakenChannel", incubatorIndex)
+                    return DataPullFunc:InvokeServer("EggHatchTakenChannel", incubatorIndex)
                 end
             end)
-            if claimedOk then
+            if okClaim and c1 ~= false then
+                -- Actually took a pet: the slot is truly empty now.
                 incubatorKnownEmpty[incubatorIndex] = true
+                HatchStatusLbl.Text = "Status: Collected pet from incubator " .. tostring(incubatorIndex)
+                HatchStatusLbl.TextColor3 = C.green
+                labelTouched = true
+            elseif okClaim and c2 then
+                if tostring(c2):find("SlotsFull") then
+                    HatchStatusLbl.Text = "⚠ Pet bag is full — release or fuse pets to keep hatching"
+                else
+                    HatchStatusLbl.Text = "⚠ Incubator " .. tostring(incubatorIndex) .. " collect rejected: " .. tostring(c2)
+                end
+                HatchStatusLbl.TextColor3 = C.gold
+                labelTouched = true
             end
             task.wait(0.2)
 
@@ -5628,19 +5877,52 @@ spawnTracked("autoHatchLoop", function()
             -- just claimed above, or seeded on the first pass) —
             -- never blind-restart a slot that might already be
             -- hatching.
-            if incubatorKnownEmpty[incubatorIndex] then
-                pcall(function()
+            if incubatorKnownEmpty[incubatorIndex] and not noEggsLeft then
+                local okStart, s1 = pcall(function()
                     if EggSystem then
-                        EggSystem.ClientHatchStart(incubatorIndex, selectedEggId)
+                        return EggSystem.ClientHatchStart(incubatorIndex, selectedEggId)
                     else
-                        DataPullFunc:InvokeServer("EggHatchStartChannel", incubatorIndex, selectedEggId)
+                        return DataPullFunc:InvokeServer("EggHatchStartChannel", incubatorIndex, selectedEggId)
                     end
                 end)
-                -- Once started, we no longer know it's empty — clear
-                -- the flag so we don't Start it again until we've
-                -- claimed it fresh.
+                if okStart and s1 ~= false then
+                    HatchStatusLbl.Text = "Status: Hatching " .. tostring(selectedEggName) .. " (incubator " .. tostring(incubatorIndex) .. ")"
+                    HatchStatusLbl.TextColor3 = C.green
+                else
+                    local lockHint = ""
+                    if noxarIsHatchUnlocked(incubatorIndex) == false then
+                        lockHint = " — that incubator may still be locked"
+                    end
+                    HatchStatusLbl.Text = "⚠ Incubator " .. tostring(incubatorIndex) .. " rejected the egg" .. lockHint
+                    HatchStatusLbl.TextColor3 = C.gold
+                end
+                labelTouched = true
+                -- Whether it started or got rejected, stop treating
+                -- the slot as empty until a real claim marks it
+                -- again (a rejected slot isn't safe to retry-loop).
                 incubatorKnownEmpty[incubatorIndex] = nil
                 task.wait(0.2)
+            end
+        end
+
+        -- End-of-cycle idle refresh: if no event this pass wrote a status,
+        -- show the live waiting state instead of leaving an old message
+        -- (e.g. "Hatching ..." from hours ago) frozen on screen.
+        if not labelTouched then
+            if noEggsLeft then
+                HatchStatusLbl.Text = "Status: No " .. tostring(selectedEggName) .. " left — farm more and hatching will resume by itself"
+                HatchStatusLbl.TextColor3 = C.gold
+            else
+                local busySlots = 0
+                for i = 1, 5 do
+                    if noxarGetHatchSlotTmpl(i) ~= nil then busySlots = busySlots + 1 end
+                end
+                if busySlots > 0 then
+                    HatchStatusLbl.Text = "Status: Waiting for hatches — " .. tostring(busySlots) .. "/5 eggs incubating"
+                else
+                    HatchStatusLbl.Text = "Status: Idle — no eggs incubating"
+                end
+                HatchStatusLbl.TextColor3 = Color3.fromRGB(205, 215, 245)
             end
         end
     end
