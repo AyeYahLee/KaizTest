@@ -3075,7 +3075,7 @@ SettingsTabW:Section({ Title = "Hub" })
 
 SettingsTabW:Paragraph({
     Title = "About",
-    Desc = "WindUI build 23 (special bosses now read the game's own catch signals — fires the moment you become eligible, notices any catch claim instantly). The X button minimizes the hub — tap the floating button to reopen it. Unload Hub below fully stops every loop, like the old panel's X did."
+    Desc = "WindUI build 26 (pre-attack pet gather now only needs ONE of your equipped pets close to start attacking). The X button minimizes the hub — tap the floating button to reopen it. Unload Hub below fully stops every loop, like the old panel's X did."
 })
 
 SettingsTabW:Button({
@@ -3361,20 +3361,6 @@ function wasBossDeathNotified(bossName, sinceTime)
     return t ~= nil and (not sinceTime or t >= sinceTime)
 end
 
-function resnapToCurrentBoss(bossName, fallbackMonster)
-    local monster = findBossByName(bossName) or fallbackMonster
-    if not monster then return fallbackMonster end
-    local root = monster:FindFirstChild("Root") or monster.PrimaryPart
-    if root then
-        _G.NoxarSetBossMount(true)
-        task.wait(0.1)
-        glueToTarget(root)
-        task.wait(0.1)
-        _G.NoxarSetBossMount(false)
-    end
-    return monster
-end
-
 -- Shared boss-fight attack: fires the game's own
 -- ClientAttackMonsterOnHasAlivePet for a monster model (same remote call the
 -- farm loop uses). Safe to spam each tick; the game applies real cadence.
@@ -3390,14 +3376,63 @@ function noxarBossAttackMonster(monster)
     end)
 end
 
+-- Boss-fight pre-attack gather check (build 26): are ANY of MY OWN equipped
+-- pets already close to my character after the snap? Your pets live directly
+-- in workspace.Pets as BaseParts carrying PlayerId (owner) and EquipedIndex
+-- (equipped slot) attributes -- so PlayerId == my user id AND EquipedIndex
+-- set means "my currently equipped pet" and nobody else's pets in that
+-- folder can ever count. Distance = pet.Position vs my HumanoidRootPart.
+-- Returns (anyWithin, detected): anyWithin = at least one equipped pet of
+-- mine sits within radius; detected = how many matched (0 = layout
+-- unreadable -- callers must proceed anyway, never hang).
+function noxarMyEquippedPetAnyWithin(radius)
+    radius = tonumber(radius) or 50
+    local root = getRoot()
+    local myUid = LP and LP.UserId
+    local petsFolder = workspace:FindFirstChild("Pets")
+    if not root or not myUid or not petsFolder then return false, 0 end
+    local myPos = root.Position
+
+    local detected, anyWithin = 0, false
+    for _, pet in ipairs(petsFolder:GetChildren()) do
+        if pet:IsA("BasePart")
+            and pet:GetAttribute("PlayerId") == myUid
+            and pet:GetAttribute("EquipedIndex") ~= nil then
+            detected += 1
+            if (pet.Position - myPos).Magnitude <= radius then
+                anyWithin = true
+            end
+        end
+    end
+    return anyWithin, detected
+end
+
+-- Mid-fight re-snap failsafe (5s cadence). Build 25: glue-only -- the
+-- mount/unmount this used to wrap the snap in is gone on purpose, since the
+-- pre-attack gather already settled the pets next to us. Re-finds the live
+-- boss model by name (in case the old reference went stale) and NEVER
+-- area-teleports.
+function resnapToCurrentBoss(bossName, fallbackMonster)
+    local monster = findBossByName(bossName) or fallbackMonster
+    if not monster then return fallbackMonster end
+    local root = monster:FindFirstChild("Root") or monster.PrimaryPart
+    if root then
+        glueToTarget(root)
+    end
+    return monster
+end
+
 -- Fights a specific boss instance until it dies. Teleports onto it once
--- (same one-shot style as the saved-farm-spot TP button) and then attacks it
--- at farm cadence via noxarBossAttackMonster (regular bosses; Ultra fights
--- attack from inside their catch-window camp instead) while watching for it
--- to disappear from ClientMonsters -- the game's own pet auto-combat also
--- contributes damage. "Still present in ClientMonsters" is the same death
--- check used everywhere else in this file. Bails out early (returns false)
--- if bossLoopEnabled goes false mid-fight.
+-- (same one-shot style as the saved-farm-spot TP button), gathers any of your
+-- own equipped pets pulls at least one close (re-mount/unmount cycles),
+-- and then attacks at farm cadence via noxarBossAttackMonster (regular
+-- bosses; Ultra fights attack from inside their catch-window camp instead)
+-- while watching for it to disappear from ClientMonsters -- the game's own
+-- pet auto-combat also contributes damage.
+-- "Still present in ClientMonsters" is the same death check used everywhere
+-- else in this file. A glue-only (no mount/unmount) re-snap runs every 5s as
+-- a wander/glitch failsafe. Bails out early (returns false) if
+-- bossLoopEnabled goes false mid-fight.
 function fightBossUntilDead(monster, isSpecial, bossName)
     local root = monster:FindFirstChild("Root") or monster.PrimaryPart
     if not root then
@@ -3423,6 +3458,27 @@ function fightBossUntilDead(monster, isSpecial, bossName)
         _G.NoxarSetBossMount(false)
     end
 
+    -- Gather check: the snap teleports US, but our own equipped pets can lag
+    -- far behind -- and it only takes ONE of them being close for damage and
+    -- your catch eligibility to actually work. So if NONE of MY equipped pets
+    -- are within 50 studs, re-mount and unmount again (same NoxarSetBossMount
+    -- calls as the snap) to pull them in, then re-check. Capped at 6 cycles
+    -- so lost pets can never hang the fight; if we simply cannot locate any
+    -- equipped pet nodes, we proceed anyway.
+    local gatherCycles = 0
+    while bossLoopEnabled and gatherCycles < 6 do
+        local anyWithin, detected = noxarMyEquippedPetAnyWithin(50)
+        if detected == 0 then break end -- unreadable layout: fight anyway
+        if anyWithin then break end -- at least one pet close enough
+        gatherCycles += 1
+        BossLoopLiveStatusLbl.Text = "Status: Gathering pets (" .. gatherCycles .. "/6)..."
+        BossLoopLiveStatusLbl.TextColor3 = C.gold
+        _G.NoxarSetBossMount(true)
+        task.wait(0.4)
+        _G.NoxarSetBossMount(false)
+        task.wait(0.2) -- let pulled-in positions settle before measuring again
+    end
+
     BossLoopLiveStatusLbl.Text = "Status: Attacking " .. tostring(bossName or "boss") .. "..."
     BossLoopLiveStatusLbl.TextColor3 = C.gold
 
@@ -3445,8 +3501,8 @@ function fightBossUntilDead(monster, isSpecial, bossName)
             1,
             function()
                 noxarBossAttackMonster(monster)
-                -- Ultras wander; keep us glued to it (same failsafe cadence
-                -- the regular-boss path uses) so the attacks actually land.
+                -- 5s glue-only re-snap failsafe (no mount/unmount -- build 25
+                -- took those out; the pre-attack gather settled the pets).
                 if os.clock() - specialSnapAt >= 5 then
                     specialSnapAt = os.clock()
                     monster = resnapToCurrentBoss(bossName, monster) or monster
@@ -3507,7 +3563,7 @@ function fightBossUntilDead(monster, isSpecial, bossName)
 
         -- Teleport/glitch failsafe: if we have been "fighting" the same target
         -- for 5s with no MonsterDead notification, snap directly back onto the
-        -- live boss model again. This does NOT area-teleport, only direct snap.
+        -- live boss model again. Glue-only (no mount/unmount, no area-TP).
         if os.clock() - lastSnapAt >= 5 then
             BossLoopLiveStatusLbl.Text = "Status: Re-snapping to " .. tostring(bossName or "boss") .. "..."
             monster = resnapToCurrentBoss(bossName, monster) or monster
