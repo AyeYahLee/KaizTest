@@ -1682,9 +1682,9 @@ function NoxarAutoCatchWaitProcessed(monster, label, statusFn, keepRunningFn, ca
         end
 
         -- The catch may be started/finished by something other than us --
-        -- the in-game Auto battle feature, or another player. Boss callers
-        -- pass externalDoneFn to notice that (boss gone / death notified);
-        -- rift callers pass nothing and their behavior is unchanged.
+        -- the in-game Auto battle feature, or another player. Boss and rift
+        -- callers pass externalDoneFn to notice that (catch claimed / monster
+        -- gone / death notified) and end the wait instead of camping forever.
         if externalDoneFn then
             local okExt, done, why = pcall(externalDoneFn)
             if okExt and done then
@@ -1694,18 +1694,18 @@ function NoxarAutoCatchWaitProcessed(monster, label, statusFn, keepRunningFn, ca
         end
 
         -- Optional "attack while waiting for the catch window" hook (Ultra
-        -- boss fights). Runs at farm attack cadence until the catch starts;
-        -- rift callers simply don't pass it, so that path is unchanged.
+        -- boss fights and the Rift arena). Runs at farm attack cadence until
+        -- the catch starts.
         if attackFn and os.clock() - lastAttackAt >= math.max(ATTACK_DELAY or 0.15, 0.15) then
             lastAttackAt = os.clock()
             pcall(attackFn)
         end
 
-        -- Optional game-faithful catch-window gate (special boss fights):
-        -- only fire MonsterCatchStartChannel once the boss's ServerNode
-        -- marks us an eligible catcher -- the same gate the in-game Auto
-        -- feature uses -- instead of blind-spamming a remote the server
-        -- keeps rejecting. nil gate = legacy blind attempts (rift path).
+        -- Optional game-faithful catch-window gate (special boss fights and
+        -- the Rift arena): only fire MonsterCatchStartChannel once the
+        -- monster's ServerNode marks us an eligible catcher -- the same gate
+        -- the in-game Auto feature uses -- instead of blind-spamming a remote
+        -- the server keeps rejecting. nil gate = legacy blind attempts.
         local mayStart = true
         if canStartFn then
             local okGate, allowed = pcall(canStartFn)
@@ -1715,7 +1715,7 @@ function NoxarAutoCatchWaitProcessed(monster, label, statusFn, keepRunningFn, ca
             started, monsterId, message = NoxarStartAutoCatchForMonster(monster)
             if started then break end
         else
-            message = "boss not catchable yet"
+            message = "not catchable yet"
         end
 
         if statusFn then
@@ -3096,7 +3096,7 @@ SettingsTabW:Section({ Title = "Hub" })
 
 SettingsTabW:Paragraph({
     Title = "About",
-    Desc = "WindUI build 28 (Auto Rejoin now waits for a clean moment — no rejoining mid-boss-fight, mid-return, pre-resume, or while mounted). The X button minimizes the hub — tap the floating button to reopen it. Unload Hub below fully stops every loop, like the old panel's X did."
+    Desc = "WindUI build 30 (Boss Loop pet gather is patient now — after snapping to the boss it waits a moment for your pets to reappear before deciding there's nothing to pull in, so fights don't start with pets left behind just because they were slow to show up). The X button minimizes the hub — tap the floating button to reopen it. Unload Hub below fully stops every loop, like the old panel's X did."
 })
 
 SettingsTabW:Button({
@@ -3560,10 +3560,30 @@ function fightBossUntilDead(monster, isSpecial, bossName)
     -- calls as the snap) to pull them in, then re-check. Capped at 6 cycles
     -- so lost pets can never hang the fight; if we simply cannot locate any
     -- equipped pet nodes, we proceed anyway.
+    -- Build 30 grace: right after the snap's unmount the game can still be
+    -- re-showing your pets (it hides them while mounted), so an all-zero scan
+    -- now gets up to ~1.5s to become readable BEFORE we conclude there is
+    -- nothing to gather (see inside the loop below).
     local gatherCycles = 0
     while bossLoopEnabled and gatherCycles < 6 do
         local _, anyWithin, detected = noxarScanMyEquippedPets(50)
-        if detected == 0 then break end -- unreadable layout: fight anyway
+        if detected == 0 then
+            -- build 30 grace: pets may still be reappearing after the snap's
+            -- unmount (the game hides them while mounted), so do not conclude
+            -- "nothing to gather" off a single blind scan. Wait up to ~1.5s,
+            -- rescanning every 0.25s and exiting early the moment any pet is
+            -- detectable; a truly pet-less player still skips after grace.
+            -- A mount-blind scan is still never treated as "far".
+            BossLoopLiveStatusLbl.Text = "Status: Waiting for pets to appear..."
+            BossLoopLiveStatusLbl.TextColor3 = C.gold
+            local graceWaited = 0
+            while bossLoopEnabled and detected == 0 and graceWaited < 1.5 do
+                task.wait(0.25)
+                graceWaited += 0.25
+                _, anyWithin, detected = noxarScanMyEquippedPets(50)
+            end
+        end
+        if detected == 0 then break end -- none equipped / unreadable: fight anyway
         if anyWithin then break end -- at least one pet close enough
         gatherCycles += 1
         BossLoopLiveStatusLbl.Text = "Status: Gathering pets (" .. gatherCycles .. "/6)..."
@@ -4926,14 +4946,16 @@ function riftLoop(myGeneration)
             RiftStatusLbl.Text = "\xe2\x9a\xa0 Rift monster not found yet; preparing Auto Catch retry..."
             RiftStatusLbl.TextColor3 = C.red
         else
-            RiftStatusLbl.Text = "\xf0\x9f\x90\x89 Snapped to Rift monster; starting Auto Catch..."
+            RiftStatusLbl.Text = "\xf0\x9f\x90\x89 Snapped to Rift monster; attacking & starting Auto Catch..."
             RiftStatusLbl.TextColor3 = C.green
         end
 
         if not isCurrentRiftLoop(myGeneration) then break end
 
-        -- Rift monsters now finish from the proven Auto Catch start path.
-        -- No boss health/death polling and no fight timeout are used here.
+        -- Rift monsters finish from the proven Auto Catch start path: snap
+        -- -> unmount -> attack at farm cadence -> gated catch start ->
+        -- claimed/gone handling. No boss health/death polling and no fight
+        -- timeout are used here.
         if requestRiftEmergencyLeaveIfAllPetsDead(myGeneration) then
             if not finishRiftCatchEarlyLeave(myGeneration, "\xe2\x9a\xa0 All Rift pets died \xe2\x80\x94 leaving to heal...", C.red) then break end
             continue
@@ -4954,8 +4976,22 @@ function riftLoop(myGeneration)
             continue
         end
 
+        -- Build 29: the Rift fight now mirrors the Special Boss recipe -- same
+        -- scripted attacks while the catch window opens, and the same
+        -- game-faithful ServerNode gates (b23):
+        --   CatchPlayerId_<me> present -> we are eligible -> fire the catch
+        --   CatchTakenPlayerId present -> a catch start was accepted (by us,
+        --                                 in-game Auto, or another player)
+        --   monster gone               -> despawned -> stop waiting
+        -- No re-snap failsafe or pet monitor is added here on purpose: the
+        -- snap already glued us onto the arena target,
+        -- isRiftMonsterFromCurrentArena keeps candidate selection strict, and
+        -- the whole wait below is bounded by the claimed/gone checks -- so
+        -- camping until the arena times out can no longer happen, with zero
+        -- extra loops or connections.
+        local riftCatchMonster = riftArenaMonster
         local riftCatchStarted = NoxarAutoCatchWaitProcessed(
-            riftArenaMonster,
+            riftCatchMonster,
             "Rift monster",
             function(text, color)
                 RiftStatusLbl.Text = text
@@ -4979,7 +5015,44 @@ function riftLoop(myGeneration)
                 return riftArenaActive == true
             end,
             0,
-            1
+            1,
+            function()
+                -- Attack the Rift monster while waiting for the catch window
+                -- (same remote the farm loop and boss fights use). The wait
+                -- loop itself throttles this to farm attack cadence and the
+                -- server rejects attacks it cannot accept, so this is safe.
+                noxarBossAttackMonster(riftCatchMonster)
+            end,
+            function()
+                -- The catch does not have to come from us -- the in-game Auto
+                -- feature (or another player in the arena) can beat us to it.
+                -- CatchTakenPlayerId lands the INSTANT any catch start is
+                -- accepted server-side, long before the model despawns, so
+                -- watching it (plus the gone-from-ClientMonsters fallback)
+                -- ends this wait promptly instead of sitting in the arena.
+                local id = noxarMonsterIdFromModel(riftCatchMonster)
+                local st = id and noxarReadMonsterCatchState(id) or nil
+                if st == "claimed" then
+                    return true, "catch claimed"
+                end
+                if st == "gone"
+                    or (st == nil and not clientMonsters:FindFirstChild(riftCatchMonster.Name)) then
+                    return true, "monster gone"
+                end
+                return false
+            end,
+            function()
+                -- Only burn a MonsterCatchStartChannel invoke once the
+                -- monster's ServerNode marks US as an eligible catcher
+                -- (CatchPlayerId_<me>) -- the same gate the in-game Auto
+                -- feature applies -- instead of blind-spamming a remote the
+                -- server keeps rejecting. If the reader is unavailable, fall
+                -- back to the legacy blind attempt every tick.
+                local id = noxarMonsterIdFromModel(riftCatchMonster)
+                local st = id and noxarReadMonsterCatchState(id) or nil
+                if st == nil then return true end
+                return st == "catchable"
+            end
         )
 
         if not isCurrentRiftLoop(myGeneration) then break end
