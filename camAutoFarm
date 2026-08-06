@@ -691,6 +691,10 @@ function startFarming(statusLbl)
         local label = (nameCache[target.model.Name] and nameCache[target.model.Name].name) or target.model.Name
 
         while farmActive() do
+            -- Yield immediately when a higher-priority feature takes control:
+            -- the boss loop owns the character until its flag clears (build
+            -- 32). The outer loop then parks until control is handed back.
+            if wasFarmingBeforeBossFight then return end
             if not clientMonsters:FindFirstChild(target.model.Name) then
                 statusLbl.Text = "Status: " .. label .. " down (" .. (selectedMonster or "All") .. ")"
                 return
@@ -712,7 +716,7 @@ function startFarming(statusLbl)
                 end
             end
 
-            -- attack cadence (SpamDelay), unchanged
+            -- attack cadence (ATTACK_DELAY), unchanged
             if os.clock() - lastAttackAt >= math.max(ATTACK_DELAY, 0.15) then
                 lastAttackAt = os.clock()
                 attackMonster(target.model)
@@ -761,6 +765,18 @@ function startFarming(statusLbl)
     local lastSeenMode = farmMode
 
     while farmActive() do
+        -- Priority pause (build 32): a higher-priority feature (Boss Loop)
+        -- parks the farm WITHOUT touching the toggle. While parked, NONE of
+        -- the farm's functions run -- no scanning, attacking, catching, or
+        -- movement -- and the SAME thread continues the instant the flag
+        -- clears. The toggle stays ON the whole time, so Auto Farm can never
+        -- "randomly turn off"; it only pauses while something outranks it.
+        if wasFarmingBeforeBossFight then
+            statusLbl.Text = "Status: Paused (Boss Loop in control)..."
+            if not waitChecked(0.25) then break end
+            continue
+        end
+
         -- mode switched mid-run (the Mode dropdown applies live): drop the
         -- stale Spot anchor so the new mode re-anchors/positions cleanly
         if farmMode ~= lastSeenMode then
@@ -809,6 +825,24 @@ function startFarming(statusLbl)
                 continue
             end
             if not anchorCFrame then anchorCFrame = r.CFrame end
+
+            -- Relocation refresh (build 31, restored in build 34): the anchor
+            -- follows the PLAYER's position, captured once per (re)start --
+            -- the saved Farming Spot is only ever Boss Loop's return point.
+            -- If the player ended up far from the anchor (area change / any
+            -- teleport / post-boss return race), every nearby monster reads
+            -- as "beyond SPOT_RADIUS" until a re-toggle -- that was the
+            -- stale-detection bug. Re-anchor here instead; the return-snap below
+            -- then measures against the fresh anchor, so the player is never
+            -- yanked back across the map. 250 studs is far beyond any legit
+            -- spot-fight drift (drift corrects at >12), so it can only fire
+            -- on a real relocation.
+            if (r.Position - anchorCFrame.Position).Magnitude > 250 then
+                anchorCFrame = r.CFrame
+                statusLbl.Text = "Status: New location detected — spot anchor refreshed"
+                -- let the area finish streaming before the next target scan
+                if not waitChecked(0.75) then break end
+            end
 
             -- closest candidate within SPOT_RADIUS of the anchor
             local bestDist = SPOT_RADIUS
@@ -1761,7 +1795,7 @@ function NoxarAutoCatchWaitProcessed(monster, label, statusFn, keepRunningFn, ca
 
     NoxarCleanupAutoCatchState()
     if statusFn then
-        statusFn("Status: " .. label .. " processed.", C.green)
+        statusFn("Status: " .. label .. " processed", C.green)
     end
     return true, "processed", monsterId
 end
@@ -2067,7 +2101,7 @@ end
 
 MonsterDrop = FarmTabW:Dropdown({
     Title = "Target monster",
-    Desc = "Pick what Auto Farm attacks. Scan to read the area.",
+    Desc = "Pick what Auto Farm attacks. Scan to read the area",
     Values = { "All Monsters" },
     Value = 1, -- 1-based index into Values (same as the old Default = 1)
     Multi = false,
@@ -2107,7 +2141,7 @@ function refreshMonsterList()
         MonsterDrop:Select(selectedMonster)
         TargetPara:SetDesc(selectedMonster)
     end
-    MonsterDrop:SetDesc("Scan to read the area. Found " .. tostring(#types) .. " types.")
+    MonsterDrop:SetDesc("Scan to read the area. Found " .. tostring(#types) .. " types")
 end
 
 FarmTabW:Button({
@@ -2119,23 +2153,22 @@ FarmTabW:Button({
     end
 })
 
-FarmTabW:Section({ Title = "Delays" })
-
-NoxarElm.SpamDelay = FarmTabW:Input({
-    Title = "Spam delay",
-    Desc = "Attack tick rate in seconds (minimum effective 0.15)",
-    Value = tostring(ATTACK_DELAY),
-    Placeholder = "0.05",
+NoxarElm.FarmMode = FarmTabW:Dropdown({
+    Title = "Mode",
+    Desc = "TP = teleport between targets. Stay in Spot = hold position, fight and catch everything within 80 studs",
+    Values = { "TP", "Stay in Spot" },
+    Value = (farmMode == "Spot") and "Stay in Spot" or "TP",
+    Multi = false,
     Callback = function(v)
         if noxarCallbackGate() then return end
-        ATTACK_DELAY = tonumber(v) or 0.05
+        farmMode = (v == "Stay in Spot") and "Spot" or "TP"
         saveConfig()
     end
 })
 
 NoxarElm.EquipMode = FarmTabW:Dropdown({
     Title = "Equip mode",
-    Desc = "Which pets to equip after teleporting to each farm target: your strongest pets, or one of your saved Pet Teams. Only used in TP mode.",
+    Desc = "Which pets to equip after teleporting to each farm target: your strongest pets, or one of your saved Pet Teams. Only used in TP mode",
     Values = { "Equip Best", "Pet Team 1", "Pet Team 2", "Pet Team 3" },
     Value = (equipMode == "Team1" and "Pet Team 1")
         or (equipMode == "Team2" and "Pet Team 2")
@@ -2154,7 +2187,7 @@ NoxarElm.EquipMode = FarmTabW:Dropdown({
 
 NoxarElm.EquipDelay = FarmTabW:Input({
     Title = "Equip delay",
-    Desc = "Gap between the unequip/re-equip pet refresh that runs after each teleport.",
+    Desc = "Gap between the unequip/re-equip pet refresh that runs after each teleport",
     Value = tostring(EQUIP_DELAY),
     Placeholder = "0.5",
     Callback = function(v)
@@ -2177,7 +2210,7 @@ NoxarElm.FarmToggle = FarmTabW:Toggle({
 
 NoxarElm.FarmAutoCatch = FarmTabW:Toggle({
     Title = "Auto Catch",
-    Desc = "Instantly catches any nearby filtered monster the moment it turns catchable (no teleporting). Off = attack until dead.",
+    Desc = "Instantly catches any nearby filtered monster the moment it turns catchable (no teleporting). Off = attack until dead",
     Value = farmAutoCatchEnabled,
     Callback = function(v)
         if noxarCallbackGate() then return end
@@ -2186,15 +2219,60 @@ NoxarElm.FarmAutoCatch = FarmTabW:Toggle({
     end
 })
 
-NoxarElm.FarmMode = FarmTabW:Dropdown({
-    Title = "Mode",
-    Desc = "TP = teleport between targets. Stay in Spot = hold position, fight and catch nearby targets.",
-    Values = { "TP", "Stay in Spot" },
-    Value = (farmMode == "Spot") and "Stay in Spot" or "TP",
-    Multi = false,
-    Callback = function(v)
-        if noxarCallbackGate() then return end
-        farmMode = (v == "Stay in Spot") and "Spot" or "TP"
+FarmTabW:Section({ Title = "Farming Spot" })
+
+FarmTabW:Paragraph({
+    Title = "About",
+    Desc = "Save a Farming Spot. Boss Loop will return here after every Boss Loop"
+})
+
+FarmSpotStatusLbl = makeStatusLabel(FarmTabW:Paragraph({
+    Title = "Saved spot",
+    Desc = farmingSpot and ("Saved: " .. farmingSpot.areaName .. " (" .. math.floor(farmingSpot.x or 0) .. ", " .. math.floor(farmingSpot.y or 0) .. ", " .. math.floor(farmingSpot.z or 0) .. ")") or "Saved: None"
+}), farmingSpot and ("Saved: " .. farmingSpot.areaName .. " (" .. math.floor(farmingSpot.x or 0) .. ", " .. math.floor(farmingSpot.y or 0) .. ", " .. math.floor(farmingSpot.z or 0) .. ")") or "Saved: None")
+
+FarmTabW:Button({
+    Title = "Save farming spot",
+    Desc = "Uses your current position + detected area",
+    Callback = function()
+        local r = getRoot()
+        if not r then return end
+        local detectedName, detectedId = detectCurrentArea()
+        if not detectedName or not detectedId then
+            FarmSpotStatusLbl.Text = "Couldn't detect area — not in a known zone!"
+            return
+        end
+        local p = r.CFrame.Position
+        farmingSpot = {
+            areaId = detectedId,
+            areaName = detectedName,
+            x = p.X, y = p.Y, z = p.Z
+        }
+        FarmSpotStatusLbl.Text = farmSpotStatusText()
+        saveConfig()
+    end
+})
+
+FarmTabW:Button({
+    Title = "Teleport to farming spot",
+    Callback = function()
+        if not farmingSpot then
+            FarmSpotStatusLbl.Text = "No Farming Spot saved!"
+            return
+        end
+        FarmSpotStatusLbl.Text = "Teleporting..."
+        task.spawn(function()
+            teleportToAreaFarmSpot(farmingSpot, true, 5)
+            FarmSpotStatusLbl.Text = farmSpotStatusText()
+        end)
+    end
+})
+
+FarmTabW:Button({
+    Title = "Clear farming spot",
+    Callback = function()
+        farmingSpot = nil
+        FarmSpotStatusLbl.Text = farmSpotStatusText()
         saveConfig()
     end
 })
@@ -2237,118 +2315,114 @@ BOSS_LIST = {
     { name = "Venofrog",         area = "Splash Isle",      tier = "Ultra" },
 }
 
-NoxarBossNames = {}
-NoxarBossNameSet = {}
+-- Boss names split by tier (build 32): regular Boss spawns and Ultra rare
+-- Special Monsters get their own checklists so they can be managed and
+-- selected independently. Both write into the single shared selectedBosses
+-- table / boss queue -- the fight/queue logic is unchanged.
+NoxarBossNamesRegular = {}
+NoxarBossNamesSpecial = {}
+NoxarBossRegularSet = {}
+NoxarBossSpecialSet = {}
 for _, boss in ipairs(BOSS_LIST) do
-    table.insert(NoxarBossNames, boss.name)
-    NoxarBossNameSet[boss.name] = true
+    if boss.tier == "Ultra" then
+        table.insert(NoxarBossNamesSpecial, boss.name)
+        NoxarBossSpecialSet[boss.name] = true
+    else
+        table.insert(NoxarBossNamesRegular, boss.name)
+        NoxarBossRegularSet[boss.name] = true
+    end
+end
+
+-- Count of selectedBosses entries that belong to one category set (each
+-- checklist only ever rebuilds its own category inside the shared table).
+function NoxarBossCount(setOf)
+    local n = 0
+    for name in pairs(setOf) do if selectedBosses[name] then n += 1 end end
+    return n
 end
 
 BossesTabW = Window:Tab({ Title = "Bosses", Icon = "skull" })
 
-BossesTabW:Section({ Title = "Farming Spot" })
+BossesTabW:Section({ Title = "Boss" })
 
 BossesTabW:Paragraph({
     Title = "About",
-    Desc = "Saved position to return to after all bosses are defeated"
-})
-
-FarmSpotStatusLbl = makeStatusLabel(BossesTabW:Paragraph({
-    Title = "Saved spot",
-    Desc = farmingSpot and ("Saved: " .. farmingSpot.areaName .. " (" .. math.floor(farmingSpot.x or 0) .. ", " .. math.floor(farmingSpot.y or 0) .. ", " .. math.floor(farmingSpot.z or 0) .. ")") or "Saved: None"
-}), farmingSpot and ("Saved: " .. farmingSpot.areaName .. " (" .. math.floor(farmingSpot.x or 0) .. ", " .. math.floor(farmingSpot.y or 0) .. ", " .. math.floor(farmingSpot.z or 0) .. ")") or "Saved: None")
-
-BossesTabW:Button({
-    Title = "Save farming spot",
-    Desc = "Uses your current position + detected area",
-    Callback = function()
-        local r = getRoot()
-        if not r then return end
-        local detectedName, detectedId = detectCurrentArea()
-        if not detectedName or not detectedId then
-            FarmSpotStatusLbl.Text = "Couldn't detect area — not in a known zone!"
-            return
-        end
-        local p = r.CFrame.Position
-        farmingSpot = {
-            areaId = detectedId,
-            areaName = detectedName,
-            x = p.X, y = p.Y, z = p.Z
-        }
-        FarmSpotStatusLbl.Text = farmSpotStatusText()
-        saveConfig()
-    end
-})
-
-BossesTabW:Button({
-    Title = "Teleport to farming spot",
-    Callback = function()
-        if not farmingSpot then
-            FarmSpotStatusLbl.Text = "No Farming Spot saved!"
-            return
-        end
-        FarmSpotStatusLbl.Text = "Teleporting..."
-        task.spawn(function()
-            teleportToAreaFarmSpot(farmingSpot, true, 5)
-            FarmSpotStatusLbl.Text = farmSpotStatusText()
-        end)
-    end
-})
-
-BossesTabW:Button({
-    Title = "Clear farming spot",
-    Callback = function()
-        farmingSpot = nil
-        FarmSpotStatusLbl.Text = farmSpotStatusText()
-        saveConfig()
-    end
-})
-
-BossesTabW:Section({ Title = "Boss Loop" })
-
-BossesTabW:Paragraph({
-    Title = "About",
-    Desc = "Select Boss/Special Mons to automate. Special Mons are auto-caught."
+    Desc = "Select Boss to automate"
 })
 
 local bossDefaults = {}
 for name, on in pairs(selectedBosses) do
-    if on and NoxarBossNameSet[name] then
+    if on and NoxarBossRegularSet[name] then
         table.insert(bossDefaults, name)
     end
 end
 
 BossDrop = BossesTabW:Dropdown({
-    Title = "Boss checklist",
-    Values = NoxarBossNames,
+    Title = "List",
+    Values = NoxarBossNamesRegular,
     Value = bossDefaults, -- WindUI Multi dropdowns take an array of values
     Multi = true,
     AllowNone = true, -- allow clearing the whole checklist
     SearchBarEnabled = true,
     Callback = function(Value)
         if noxarCallbackGate() then return end
-        selectedBosses = {}
+        -- Rebuild only THIS category inside the shared selectedBosses table:
+        -- regular picks are replaced wholesale, special picks stay untouched.
+        for name in pairs(NoxarBossRegularSet) do selectedBosses[name] = nil end
         for _, name in ipairs(Value) do
-            if NoxarBossNameSet[name] then
+            if NoxarBossRegularSet[name] then
                 selectedBosses[name] = true
             end
         end
-        BossDrop:SetDesc("Selected: " .. tostring(NoxarBossCount(selectedBosses)))
+        BossDrop:SetDesc("Selected: " .. tostring(NoxarBossCount(NoxarBossRegularSet)))
         saveConfig()
     end
 })
 NoxarElm.BossChecklist = BossDrop
 
-function NoxarBossCount(tbl)
-    local n = 0
-    for _, on in pairs(tbl) do if on then n += 1 end end
-    return n
-end
-
 -- Show the saved selection count immediately. Creation-time callbacks are
 -- noxarCallbackGate'd (WindUI's initial Value application fires one), so the
 -- "Selected: X" text would otherwise stay blank until the first manual tap.
-BossDrop:SetDesc("Selected: " .. tostring(NoxarBossCount(selectedBosses)))
+BossDrop:SetDesc("Selected: " .. tostring(NoxarBossCount(NoxarBossRegularSet)))
+
+BossesTabW:Section({ Title = "Special Monsters" })
+
+BossesTabW:Paragraph({
+    Title = "About",
+    Desc = "Select Special Monsters to automate — they're auto-caught for you"
+})
+
+local specialDefaults = {}
+for name, on in pairs(selectedBosses) do
+    if on and NoxarBossSpecialSet[name] then
+        table.insert(specialDefaults, name)
+    end
+end
+
+BossDropSpecial = BossesTabW:Dropdown({
+    Title = "List",
+    Values = NoxarBossNamesSpecial,
+    Value = specialDefaults,
+    Multi = true,
+    AllowNone = true,
+    SearchBarEnabled = true,
+    Callback = function(Value)
+        if noxarCallbackGate() then return end
+        -- Same one-category rebuild for the special picks (regular untouched).
+        for name in pairs(NoxarBossSpecialSet) do selectedBosses[name] = nil end
+        for _, name in ipairs(Value) do
+            if NoxarBossSpecialSet[name] then
+                selectedBosses[name] = true
+            end
+        end
+        BossDropSpecial:SetDesc("Selected: " .. tostring(NoxarBossCount(NoxarBossSpecialSet)))
+        saveConfig()
+    end
+})
+NoxarElm.SpecialChecklist = BossDropSpecial
+BossDropSpecial:SetDesc("Selected: " .. tostring(NoxarBossCount(NoxarBossSpecialSet)))
+
+BossesTabW:Section({ Title = "Boss Loop" })
 
 BossLoopLiveStatusLbl = makeStatusLabel(BossesTabW:Paragraph({ Title = "Boss status", Desc = "Status: Idle" }), "Status: Idle")
 
@@ -2358,7 +2432,15 @@ NoxarElm.BossLoop = BossesTabW:Toggle({
     Callback = function(v)
         if noxarCallbackGate() then return end
         if v and not farmingSpot then
-            BossLoopLiveStatusLbl.Text = "Status: Save a Farming Spot first!"
+            BossLoopLiveStatusLbl.Text = "Status: Save a Farming Spot first (Farm tab)!"
+            syncOption("BossLoop", false)
+            return
+        end
+        -- Nothing opted in anywhere: the dispatcher ignores every spawn, so
+        -- the loop would just idle forever on "Waiting for a boss spawn...".
+        -- Fail loudly and early like the farming-spot gate above (build 36).
+        if v and NoxarBossCount(NoxarBossRegularSet) + NoxarBossCount(NoxarBossSpecialSet) == 0 then
+            BossLoopLiveStatusLbl.Text = "Status: Select at least one Boss / Special Monster in the Lists above first!"
             syncOption("BossLoop", false)
             return
         end
@@ -2369,12 +2451,10 @@ NoxarElm.BossLoop = BossesTabW:Toggle({
             BossLoopLiveStatusLbl.Text = "Status: Disabled"
             table.clear(bossQueue)
             _G.NoxarSetBossMount(false, true)
-            if wasFarmingBeforeBossFight and not running then
-                wasFarmingBeforeBossFight = false
-                toggleFarming(true)
-            end
+            -- Hand control back to a parked farm: it resumes on its own next
+            -- tick; if the user disabled farming mid-fight, nothing to do.
+            wasFarmingBeforeBossFight = false
         end
-        BossDrop:SetDesc("Selected: " .. tostring(NoxarBossCount(selectedBosses)))
         saveConfig()
     end
 })
@@ -2386,7 +2466,7 @@ RiftTabW = Window:Tab({ Title = "Rift", Icon = "gem" })
 
 RiftTabW:Section({ Title = "Auto Rift" })
 
-RiftStatusLbl = makeStatusLabel(RiftTabW:Paragraph({ Title = "Rift status", Desc = "Idle. Toggle to begin." }), "Idle. Toggle to begin.")
+RiftStatusLbl = makeStatusLabel(RiftTabW:Paragraph({ Title = "Rift status", Desc = "Idle. Toggle to begin" }), "Idle. Toggle to begin")
 RiftKillCountLbl = makeStatusLabel(RiftTabW:Paragraph({ Title = "Session", Desc = "💀 Kills this session: " .. tostring(riftKillCount or 0) }), "💀 Kills this session: " .. tostring(riftKillCount or 0))
 
 NoxarElm.AutoRift = RiftTabW:Toggle({
@@ -2401,7 +2481,7 @@ NoxarElm.AutoRift = RiftTabW:Toggle({
             stopRiftLoop()
             deactivateRiftArena()
             _G.NoxarSetBossMount(false, true)
-            RiftStatusLbl.Text = "⏹ Stopped."
+            RiftStatusLbl.Text = "⏹ Stopped"
         end
         saveConfig()
     end
@@ -2545,7 +2625,7 @@ NoxarTalentCats = {"Attack", "HP Boost", "Critical", "Critical Damage", "Shield 
 
 AbyssTabW:Paragraph({
     Title = "How it works",
-    Desc = "Tap to add/remove (first tapped = highest priority, numbered below). Blacklist = never pick. Max = copies per run. Higher quality always wins. Auto-resets each run."
+    Desc = "Tap to add/remove (first tapped = highest priority, numbered below). Blacklist = never pick. Max = copies per run. Higher quality always wins. Auto-resets each run"
 })
 
 -- Whitelist picker: WindUI keeps Multi picks in tap order = the whitelist's
@@ -2985,7 +3065,7 @@ ShopTabW = Window:Tab({ Title = "Shop & Claim", Icon = "shopping-bag" })
 
 ShopTabW:Section({ Title = "Shops" })
 
-ShopTabW:Paragraph({ Title = "About", Desc = "Open shop, pet, and crafting screens." })
+ShopTabW:Paragraph({ Title = "About", Desc = "Open shop, pet, and crafting screens" })
 
 local function addShopButton(title, viewName, arg1)
     ShopTabW:Button({
@@ -3096,7 +3176,7 @@ SettingsTabW:Section({ Title = "Hub" })
 
 SettingsTabW:Paragraph({
     Title = "About",
-    Desc = "WindUI build 30 (Boss Loop pet gather is patient now — after snapping to the boss it waits a moment for your pets to reappear before deciding there's nothing to pull in, so fights don't start with pets left behind just because they were slow to show up). The X button minimizes the hub — tap the floating button to reopen it. Unload Hub below fully stops every loop, like the old panel's X did."
+    Desc = "WindUI build 39 (Boss section header renamed to singular Boss — the tab itself stays Bosses) The X button minimizes the hub — tap the floating button to reopen it. Unload Hub below fully stops every loop, like the old panel's X did"
 })
 
 SettingsTabW:Button({
@@ -3879,8 +3959,12 @@ spawnTracked("bossLoop", function()
         if not currentBossFight and #bossQueue > 0 then
             returnedToFarmSpot = false
             if running then
+                -- Park, do NOT stop (build 32): the Auto Farm toggle stays ON
+                -- the whole time. The farm thread idles at its pause gate --
+                -- NONE of its functions run -- while the boss loop owns the
+                -- character, and the SAME thread continues the moment the
+                -- flag clears. Nothing to stop or respawn here.
                 wasFarmingBeforeBossFight = true
-                toggleFarming(false) -- cleanly stop Auto-Farm (updates its button too), not just flipping `running`
             end
             -- (no else-clear for the flag: if an earlier cycle's resume got
             -- interrupted by a fresh spawn, the intent must survive into
@@ -3889,7 +3973,16 @@ spawnTracked("bossLoop", function()
             local nextEntry = table.remove(bossQueue, 1)
             runBossFight(nextEntry)
 
-        elseif not currentBossFight and #bossQueue == 0 and not returnedToFarmSpot then
+        -- Resume-intent hardening (builds 31/32): gated on the one-shot
+        -- returnedToFarmSpot flag OR on a pending resume intent. If an
+        -- earlier post-boss hand-back got interrupted (a boss queued mid-
+        -- wait, then died before the drain tick saw it), returnedToFarmSpot
+        -- could already be true with the hand-back never having run -- with
+        -- park semantics (build 32) the intent flag itself is the reliable
+        -- signal: re-enter whenever it is pending; the teleport/settle below
+        -- are idempotent.
+        elseif not currentBossFight and #bossQueue == 0
+            and (not returnedToFarmSpot or wasFarmingBeforeBossFight) then
             if farmingSpot then
                 BossLoopLiveStatusLbl.Text = "Status: Queue empty — returning to Farming Spot..."
                 BossLoopLiveStatusLbl.TextColor3 = Color3.fromRGB(205, 215, 245)
@@ -3898,20 +3991,29 @@ spawnTracked("bossLoop", function()
             end
             _G.NoxarSetBossMount(false, true) -- Unmount AFTER travel/teleport back to Farming Spot completes
             if wasFarmingBeforeBossFight then
-                -- Settle before handing control back to Auto-Farm: the area
-                -- and character need a moment to finish streaming in. Bails
-                -- early (keeping the resume intent) if a fresh boss queues
-                -- up or the loop gets toggled off mid-countdown.
-                for settleSec = 4, 1, -1 do
-                    if not bossLoopEnabled or #bossQueue > 0 then break end
-                    BossLoopLiveStatusLbl.Text = "Status: Back at spot — resuming Auto-Farm in " .. settleSec .. "s..."
-                    BossLoopLiveStatusLbl.TextColor3 = Color3.fromRGB(205, 215, 245)
-                    task.wait(1)
-                end
-                if bossLoopEnabled and #bossQueue == 0 then
-                    if not running then
-                        toggleFarming(true) -- cleanly restart Auto-Farm (spawns a fresh farmLoop thread, updates its button)
+                -- Hand control back ~0.5s AFTER arriving at the spot (build 32
+                -- spec): long enough to be safely on the ground, short enough
+                -- that farming feels uninterrupted -- the farm loop's own
+                -- per-cycle scan covers any remaining streaming. Bails early
+                -- (keeping the resume intent) if a fresh boss queues or the
+                -- loop gets toggled off mid-wait.
+                BossLoopLiveStatusLbl.Text = "Status: Back at spot — resuming Auto Farm..."
+                BossLoopLiveStatusLbl.TextColor3 = Color3.fromRGB(205, 215, 245)
+                local settleOk = true
+                local settleWaited = 0
+                while settleWaited < 0.5 do
+                    if not bossLoopEnabled or #bossQueue > 0 then
+                        settleOk = false
+                        break
                     end
+                    task.wait(0.1)
+                    settleWaited += 0.1
+                end
+                if settleOk and bossLoopEnabled and #bossQueue == 0 then
+                    -- Un-park: the farm thread continues instantly on its own
+                    -- gate. If the user manually turned Auto Farm OFF during
+                    -- the fight, running is false now -- the flag clears all
+                    -- the same, so the intent never revives it.
                     wasFarmingBeforeBossFight = false
                 end
             end
@@ -5109,7 +5211,7 @@ function riftLoop(myGeneration)
         setRiftPhase("IDLE", myGeneration)
         deactivateRiftArena()
         _G.NoxarSetBossMount(false, true)
-        RiftStatusLbl.Text = "\xe2\x8f\xB9 Stopped."
+        RiftStatusLbl.Text = "\xe2\x8f\xB9 Stopped"
         RiftStatusLbl.TextColor3 = C.sub
     end
 end
@@ -5948,7 +6050,7 @@ function autoAbyssLoop(myGen)
     end
 
     if myGen == _G.NoxarAbyssLoopGeneration then
-        AbyssStatusLbl.Text = "⏹ Stopped."
+        AbyssStatusLbl.Text = "⏹ Stopped"
         AbyssStatusLbl.TextColor3 = C.sub
     end
 end
@@ -6337,7 +6439,7 @@ spawnTracked("breedingWatcher", function()
                                 BreedStatusLbl.TextColor3 = C.gold
                             end
                         else
-                            BreedStatusLbl.Text = "Slot 1: Collected! Pick pets to breed again."
+                            BreedStatusLbl.Text = "Slot 1: Collected! Pick pets to breed again"
                             BreedStatusLbl.TextColor3 = C.green
                         end
                     else
