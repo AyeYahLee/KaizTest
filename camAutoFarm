@@ -3190,7 +3190,7 @@ SettingsTabW:Section({ Title = "Hub" })
 
 SettingsTabW:Paragraph({
     Title = "About",
-    Desc = "WindUI build 40 (new TP to Spot on Startup toggle in the Farm tab's Farming Spot section — default OFF, so rejoins no longer auto-teleport you to the spot unless you switch it on — the Teleport button and Boss Loop return are unaffected) The X button minimizes the hub — tap the floating button to reopen it. Unload Hub below fully stops every loop, like the old panel's X did"
+    Desc = "WindUI build 41 (Auto Abyss can no longer freeze on the talent screen — if the game only offers blacklisted talents, it now picks the least-bad one so the run always continues, and the status line says when that happened) The X button minimizes the hub — tap the floating button to reopen it. Unload Hub below fully stops every loop, like the old panel's X did"
 })
 
 SettingsTabW:Button({
@@ -5530,20 +5530,23 @@ local function tryAutoSelectTalent(syncKey)
 
     local bestIdx = nil
     local bestScore = -math.huge
+    local bestPass = nil
 
-    -- Two-pass scoring: first with all restrictions, then fallback ignoring max copies
-    -- Blacklist is NEVER ignored
-    for pass = 1, 2 do
+    -- Three-pass scoring: pass 1 respects max copies + blacklist, pass 2 ignores
+    -- max copies, pass 3 (build 41 deadlock fix) also ignores the blacklist.
+    -- Pass 3 only ever runs when EVERY offered talent is blacklisted, so the run
+    -- can never freeze on the talent screen -- a least-bad pick beats a stalled run.
+    for pass = 1, 3 do
         for i, talent in ipairs(talents) do
             local tmpl = talent.TalentTmpl
             local name = tmpl and tmpl.Name or ""
             local cat = getTalentCategory(name)
 
-            if not isTalentBlacklisted(name) then
+            if pass == 3 or not isTalentBlacklisted(name) then
                 local maxCopies = talentMaxCopies[cat] or 99
                 local currentCopies = talentPickHistory[cat] or 0
-                -- Pass 1: respect max copies. Pass 2: ignore max copies.
-                if pass == 2 or currentCopies < maxCopies then
+                -- Pass 1: respect max copies. Passes 2+: ignore max copies.
+                if pass >= 2 or currentCopies < maxCopies then
                     local q = tmpl and tmpl.Quality or 0
                     local qNum = type(q) == "number" and q or (tonumber(q) or 0)
                     local v = (tmpl and tmpl.PlayerProperty and tmpl.PlayerProperty.Value) or 0
@@ -5555,12 +5558,15 @@ local function tryAutoSelectTalent(syncKey)
                     else
                         score = (qNum * 100) + (v * 10)
                     end
-                    -- Pass 2 (fallback) gets a penalty so it only wins if pass 1 found nothing
+                    -- Fallback passes get penalties so they only win if earlier
+                    -- passes found nothing (pass 2: extra copies, pass 3: least-bad)
                     if pass == 2 then score = score - 100000 end
+                    if pass == 3 then score = score - 200000 end
 
                     if score > bestScore then
                         bestScore = score
                         bestIdx = i
+                        bestPass = pass
                     end
                 end
             end
@@ -5578,6 +5584,10 @@ local function tryAutoSelectTalent(syncKey)
     local selectOk = pcall(function()
         PT.AbyssSystem.ClientSelectTalent(bestIdx)
     end)
+    if selectOk and bestPass == 3 then
+        AbyssStatusLbl.Text = "Talent: no allowed options — picking least-bad"
+        AbyssStatusLbl.TextColor3 = C.gold
+    end
     return selectOk
 end
 
