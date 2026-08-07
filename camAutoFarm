@@ -162,6 +162,7 @@ nameCache = {}
 
 -- Auto Farm rework options (see startFarming below)
 farmAutoCatchEnabled = true -- fast-sweep nearby catchable monsters (default ON)
+startupTpToSpotEnabled = false -- teleport to saved spot on execute/rejoin (default OFF, build 40 Farm-tab toggle)
 farmMode = "TP"             -- "TP" teleports between targets; "Spot" holds position and fights nearby
 SPOT_RADIUS = 80            -- Stay-in-Spot engagement radius (studs from the anchor point)
 NEARBY_CATCH_RADIUS = 60    -- fast-catch sweep radius (studs from the PLAYER -- sweep never teleports)
@@ -412,6 +413,7 @@ function saveConfig()
             positions = savedPositions,
             antiAfk = antiAfkEnabled,
             farmAutoCatch = farmAutoCatchEnabled,
+            startupTpToSpot = startupTpToSpotEnabled,
             equipMode = equipMode,
             farmMode = farmMode,
             uiScale = uiScaleValue,
@@ -462,6 +464,7 @@ function loadConfig()
             if data.positions ~= nil then savedPositions = data.positions end
             if data.antiAfk ~= nil then antiAfkEnabled = data.antiAfk end 
             if data.farmAutoCatch ~= nil then farmAutoCatchEnabled = data.farmAutoCatch end
+            if data.startupTpToSpot ~= nil then startupTpToSpotEnabled = data.startupTpToSpot end
             if data.farmMode ~= nil then farmMode = (data.farmMode == "Spot") and "Spot" or "TP" end
             if data.equipMode ~= nil then equipMode = (data.equipMode == "Team1" or data.equipMode == "Team2" or data.equipMode == "Team3") and data.equipMode or "Best" end
             if data.uiScale ~= nil then uiScaleValue = math.clamp(tonumber(data.uiScale) or 1, 0.75, 1.20) end
@@ -2277,6 +2280,17 @@ FarmTabW:Button({
     end
 })
 
+FarmTabW:Toggle({
+    Title = "TP to Spot on Startup",
+    Desc = "Teleports you to your saved Farming Spot every time the hub starts (execute/rejoin). Leave OFF to stay where you spawn. Does not affect the Teleport button or the Boss Loop return",
+    Value = startupTpToSpotEnabled,
+    Callback = function(v)
+        if noxarCallbackGate() then return end
+        startupTpToSpotEnabled = v
+        saveConfig()
+    end
+})
+
 -- ==========================================
 -- TAB 2: BOSSES
 -- ==========================================
@@ -3176,7 +3190,7 @@ SettingsTabW:Section({ Title = "Hub" })
 
 SettingsTabW:Paragraph({
     Title = "About",
-    Desc = "WindUI build 39 (Boss section header renamed to singular Boss — the tab itself stays Bosses) The X button minimizes the hub — tap the floating button to reopen it. Unload Hub below fully stops every loop, like the old panel's X did"
+    Desc = "WindUI build 40 (new TP to Spot on Startup toggle in the Farm tab's Farming Spot section — default OFF, so rejoins no longer auto-teleport you to the spot unless you switch it on — the Teleport button and Boss Loop return are unaffected) The X button minimizes the hub — tap the floating button to reopen it. Unload Hub below fully stops every loop, like the old panel's X did"
 })
 
 SettingsTabW:Button({
@@ -3352,7 +3366,7 @@ task.spawn(function()
     end
     task.wait(3.5) -- Extended initial wait on rejoin so remote channels are ready
 
-    if farmingSpot then
+    if farmingSpot and startupTpToSpotEnabled then
         local r = getRoot()
         if not r then
             local startWait = os.clock()
