@@ -163,6 +163,47 @@ nameCache = {}
 -- Auto Farm rework options (see startFarming below)
 farmAutoCatchEnabled = true -- fast-sweep nearby catchable monsters (default ON)
 startupTpToSpotEnabled = false -- teleport to saved spot on execute/rejoin (default OFF, build 40 Farm-tab toggle)
+
+-- Auto Shard (mutation harvest, b42; per-species allowlist added in b43).
+-- Per-mutation minimum grade to dismantle at: 0 = Off (ignore that mutation),
+-- 1..7 = E,D,C,B,A,S,SS.
+-- Below target: fuse up with unmutated same-species same-grade dupes, staying
+-- locked; at/above target: unlock + dismantle for shards.
+-- b43 allowlist: shardSelectedOnly = true (the default) means ONLY the
+-- species ticked in the Pets tab "Species list" ever become targets —
+-- matched by template display name (e.g. "Dreamtane"). Every other mutated
+-- pet is skipped entirely: never fused, never unlocked, never dismantled,
+-- and never used as fuse fodder either (it keeps its lock and is untouched).
+-- Safe by design: an empty allowlist processes nothing.
+autoShardEnabled = false
+shardRules = { Shiny = 0, Giant = 0, Bloodlit = 0, Fairy = 0, Corrupted = 0 }
+shardRunStats = { fused = 0, dismantled = 0 } -- session-only counters
+NOXAR_SHARD_MUT_ORDER = { "Shiny", "Giant", "Bloodlit", "Fairy", "Corrupted" }
+NOXAR_SHARD_GRADE_LETTERS = { "E", "D", "C", "B", "A", "S", "SS" }
+shardPetState = {} -- petId -> in-flight op marker, purged every scan
+shardEvolvePending = {} -- petId -> grade before fuse verify, purged every scan
+shardSelectedOnly = true -- true = Species-list picks only; false = all mutated pets
+shardPetAllowlist = {} -- ordered array of species display names (config-persisted)
+shardPetAllowSet = {} -- name -> true lookup, rebuilt from the allowlist
+-- b46: fodder ladder — chain-fuse PLAIN same-species dupes up one grade so a
+-- below-target mutated pet always has same-grade material waiting. Demand is
+-- per-target (a pet's need already follows ITS mutations' configured grades),
+-- never builds fodder past the highest grade still needed (need - 1), and
+-- stops per mutation the moment no targets sit below its configured grade.
+shardFodderChainEnabled = true
+function noxarShardAllowSetRebuild()
+    shardPetAllowSet = {}
+    for _, n in ipairs(shardPetAllowlist) do
+        if type(n) == "string" then
+            shardPetAllowSet[n] = true
+        end
+    end
+end
+-- engine lives in §7.8 (bottom); declared now so the UI section can bind it
+autoShardTick = nil
+function noxarShardScanNow()
+    if autoShardTick then pcall(autoShardTick) end
+end
 farmMode = "TP"             -- "TP" teleports between targets; "Spot" holds position and fights nearby
 SPOT_RADIUS = 80            -- Stay-in-Spot engagement radius (studs from the anchor point)
 NEARBY_CATCH_RADIUS = 60    -- fast-catch sweep radius (studs from the PLAYER -- sweep never teleports)
@@ -177,6 +218,22 @@ selectedEggName = "Sprout Egg"
 rejoinTimerEnabled = false
 rejoinMinutes = 60
 rejoinDeadline = nil
+-- Auto Rejoin by Abyss runs (build 48; controls live in the Abyss tab, b49):
+-- a run-based rejoin next to the minute timer. The counter only goes up when
+-- an Abyss win screen shows (a fully finished run -- never mid-run), the
+-- rejoin fires at that same moment once the target is reached, and the
+-- counter resets to 0 for the next round. abyssRunsDone is saved so a
+-- crash/kick does not lose progress. abyssRunCounted = once-per-win-screen
+-- guard (a lingering screen can never count twice). The minute timer stays
+-- fully separate and hops exactly at its deadline (user decision, b49).
+rejoinRunsEnabled = false
+rejoinRunsTarget = 20
+abyssRunsDone = 0
+abyssRunCounted = false
+function noxarRejoinRunsText()
+    return string.format("Abyss runs: %d/%d%s", abyssRunsDone or 0,
+        rejoinRunsTarget or 20, rejoinRunsEnabled and "" or " (off)")
+end
 savedPositions = {} 
 
 -- AreaFarm States (completely separate from savedPositions above)
@@ -398,6 +455,45 @@ end
 
 BreedTimeSeconds = (CfgPetBreed and CfgPetBreed.BreedTime) or 14400 -- fallback if module didn't resolve
 
+-- Auto Shard b43: sorted, deduped species-name catalog for the allowlist
+-- picker. Sources, in order: the game's live CfgPet module
+-- (ReplicatedStorage.CommonConfig.Pet.CfgPet — the same pet config the game
+-- itself reads, so species added by future game updates show up on next
+-- execute), then the current bag (covers anything the config ever misses —
+-- same IterBagItem scan the breeding picker uses), then the saved allowlist
+-- itself so a saved pick never vanishes from the dropdown. Everything is
+-- pcall-guarded; a lookup that fails just yields a smaller catalog.
+function noxarShardSpeciesList()
+    local names, seen = {}, {}
+    local function add(n)
+        if type(n) == "string" and n ~= "" and not seen[n] then
+            seen[n] = true
+            table.insert(names, n)
+        end
+    end
+    local okCfg, cfg = pcall(function()
+        return require(RS.CommonConfig.Pet.CfgPet)
+    end)
+    if okCfg and type(cfg) == "table" and cfg.Tmpls then
+        for _, tmpl in pairs(cfg.Tmpls) do
+            if type(tmpl) == "table" then
+                add(tmpl.Name)
+            end
+        end
+    end
+    local gp = getGamePlayer()
+    if gp and gp.pet and gp.pet.IterBagItem then
+        pcall(function()
+            gp.pet:IterBagItem(function(item)
+                local tmpl = item.GetTmpl and item:GetTmpl() or nil
+                add(tmpl and tmpl.Name or nil)
+            end)
+        end)
+    end
+    for _, n in ipairs(shardPetAllowlist) do add(n) end
+    table.sort(names, function(a, b) return string.lower(a) < string.lower(b) end)
+    return names
+end
 
 configFileName = "NoxarSave.json"
 
@@ -410,10 +506,18 @@ function saveConfig()
             isFarming = running,
             rejoinEnabled = rejoinTimerEnabled,
             rejoinMins = rejoinMinutes,
+            rejoinRunsEnabled = rejoinRunsEnabled,
+            rejoinRunsTarget = rejoinRunsTarget,
+            abyssRunsDone = abyssRunsDone,
             positions = savedPositions,
             antiAfk = antiAfkEnabled,
             farmAutoCatch = farmAutoCatchEnabled,
             startupTpToSpot = startupTpToSpotEnabled,
+            autoShard = autoShardEnabled,
+            shardRules = shardRules,
+            shardSelectedOnly = shardSelectedOnly,
+            shardPetAllowlist = shardPetAllowlist,
+            shardFodderChain = shardFodderChainEnabled,
             equipMode = equipMode,
             farmMode = farmMode,
             uiScale = uiScaleValue,
@@ -461,10 +565,38 @@ function loadConfig()
             if data.isFarming ~= nil then running = data.isFarming end
             if data.rejoinEnabled ~= nil then rejoinTimerEnabled = data.rejoinEnabled end
             if data.rejoinMins ~= nil then rejoinMinutes = data.rejoinMins end
+            -- Auto Rejoin by Abyss runs (b48): toggle, target, and saved
+            -- progress so a crash/kick does not lose the count
+            if data.rejoinRunsEnabled ~= nil then rejoinRunsEnabled = data.rejoinRunsEnabled end
+            if data.rejoinRunsTarget ~= nil then rejoinRunsTarget = math.clamp(math.floor(tonumber(data.rejoinRunsTarget) or 20), 1, 999) end
+            if data.abyssRunsDone ~= nil then abyssRunsDone = math.max(0, math.floor(tonumber(data.abyssRunsDone) or 0)) end
             if data.positions ~= nil then savedPositions = data.positions end
             if data.antiAfk ~= nil then antiAfkEnabled = data.antiAfk end 
             if data.farmAutoCatch ~= nil then farmAutoCatchEnabled = data.farmAutoCatch end
             if data.startupTpToSpot ~= nil then startupTpToSpotEnabled = data.startupTpToSpot end
+            if data.autoShard ~= nil then autoShardEnabled = data.autoShard end
+            if data.shardRules ~= nil and type(data.shardRules) == "table" then
+                for k, v in pairs(data.shardRules) do
+                    if shardRules[k] ~= nil and type(v) == "number" then
+                        shardRules[k] = math.clamp(math.floor(v), 0, 7)
+                    end
+                end
+            end
+            -- b43 allowlist restore; missing keys keep the safe defaults
+            -- (Selected-only + empty list = processes nothing until configured)
+            if data.shardSelectedOnly ~= nil then
+                shardSelectedOnly = data.shardSelectedOnly and true or false
+            end
+            if data.shardPetAllowlist ~= nil and type(data.shardPetAllowlist) == "table" then
+                shardPetAllowlist = {}
+                for _, n in ipairs(data.shardPetAllowlist) do
+                    if type(n) == "string" then table.insert(shardPetAllowlist, n) end
+                end
+            end
+            noxarShardAllowSetRebuild()
+            if data.shardFodderChain ~= nil then
+                shardFodderChainEnabled = data.shardFodderChain and true or false
+            end
             if data.farmMode ~= nil then farmMode = (data.farmMode == "Spot") and "Spot" or "TP" end
             if data.equipMode ~= nil then equipMode = (data.equipMode == "Team1" or data.equipMode == "Team2" or data.equipMode == "Team3") and data.equipMode or "Best" end
             if data.uiScale ~= nil then uiScaleValue = math.clamp(tonumber(data.uiScale) or 1, 0.75, 1.20) end
@@ -2559,7 +2691,7 @@ NoxarAbyssDiffs = {
     {id = 1006, name = "Treasure Vault (EXP)"},
     {id = 1007, name = "Treasure Vault (Mark)"},
     {id = 1008, name = "Treasure Vault"},
-    {id = 1009, name = "Six Day Only"},
+    {id = 1009, name = "Cinderclaw Castle (Cataclysm)"}, -- b47: game update re-purposed 1009 from the old "Six Day Only" event entry into Cinderclaw Master (display "Cataclysm", RequireTmplId 1004)
 }
 NoxarAbyssDiffNames = {}
 NoxarAbyssDiffIdByName = {}
@@ -2623,6 +2755,55 @@ NoxarElm.LegitMode = AbyssTabW:Toggle({
         else
             stopAutoAbyss()
         end
+        saveConfig()
+    end
+})
+
+AbyssTabW:Section({ Title = "Auto Rejoin by Runs" })
+
+-- Build 48/49: run-based auto rejoin (lives in the Abyss tab per user
+-- decision). The counter only goes up when an Abyss win screen shows
+-- (finished run only), the rejoin fires at that same finished-run moment,
+-- and the counter resets to 0.
+function setRejoinRuns(state)
+    rejoinRunsEnabled = state
+    RejoinRunsStatusLbl.Text = noxarRejoinRunsText()
+    saveConfig()
+end
+
+RejoinRunsStatusLbl = makeStatusLabel(AbyssTabW:Paragraph({
+    Title = "Run rejoin status",
+    Desc = noxarRejoinRunsText()
+}), noxarRejoinRunsText())
+
+NoxarElm.RejoinRunsTarget = AbyssTabW:Input({
+    Title = "Rejoin after X runs",
+    Desc = "Counts finished runs only; needs Auto Abyss (or Legit mode) running",
+    Value = tostring(rejoinRunsTarget),
+    Placeholder = "20",
+    Callback = function(v)
+        if noxarCallbackGate() then return end
+        rejoinRunsTarget = math.clamp(math.floor(tonumber(v) or 20), 1, 999)
+        RejoinRunsStatusLbl.Text = noxarRejoinRunsText()
+        saveConfig()
+    end
+})
+
+NoxarElm.AutoRejoinRuns = AbyssTabW:Toggle({
+    Title = "Auto Rejoin by Abyss Runs",
+    Value = rejoinRunsEnabled,
+    Callback = function(v)
+        if noxarCallbackGate() then return end
+        setRejoinRuns(v)
+    end
+})
+
+AbyssTabW:Button({
+    Title = "Reset run counter",
+    Desc = "Sets the completed Abyss runs count back to 0",
+    Callback = function()
+        abyssRunsDone = 0
+        RejoinRunsStatusLbl.Text = noxarRejoinRunsText()
         saveConfig()
     end
 })
@@ -2933,6 +3114,134 @@ NoxarElm.AutoBreedLoop = PetsTabW:Toggle({
     end
 })
 
+PetsTabW:Section({ Title = "Mutation Shards" })
+
+PetsTabW:Paragraph({
+    Title = "About",
+    Desc = "Hunts mutated pets in your bag: fuses them up to the grades you set below using unmutated duplicates, then unlocks and dismantles them for shards. In Selected-pets-only mode only the species you tick in the Species list are ever touched — everything else stays locked"
+})
+
+ShardStatusLbl = makeStatusLabel(PetsTabW:Paragraph({
+    Title = "Auto Shard status",
+    Desc = "Status: Idle"
+}), "Status: Idle")
+
+ShardCountLbl = makeStatusLabel(PetsTabW:Paragraph({
+    Title = "This run",
+    Desc = "This run: 0 fused, 0 dismantled"
+}), "This run: 0 fused, 0 dismantled")
+
+NoxarElm.AutoShard = PetsTabW:Toggle({
+    Title = "Auto Shard",
+    Desc = "Watches your bag and processes pets with the mutations configured below",
+    Value = autoShardEnabled,
+    Callback = function(v)
+        if noxarCallbackGate() then return end
+        autoShardEnabled = v
+        if not v then
+            shardPetState = {}
+            shardEvolvePending = {}
+        end
+        saveConfig()
+    end
+})
+
+-- b46 fodder ladder: chain-fuses plain dupes up one grade so below-target
+-- mutated pets always have same-grade material; self-limits per mutation grade
+NoxarElm.ShardFodder = PetsTabW:Toggle({
+    Title = "Auto Fuse fodder",
+    Desc = "Fuses NON-mutated duplicates up the grade ladder (D -> C -> B ...) so mutated targets always have same-grade fuse material — only for species with a live target below its configured grade, and never past the grade that target needs",
+    Value = shardFodderChainEnabled,
+    Callback = function(v)
+        if noxarCallbackGate() then return end
+        shardFodderChainEnabled = v
+        saveConfig()
+    end
+})
+
+-- b43 species allowlist (protects mutated main pets): Selected-pets-only is
+-- the safe default — with an empty Species list the engine processes nothing
+NoxarElm.ShardMode = PetsTabW:Dropdown({
+    Title = "Pets allowed",
+    Desc = "Selected pets only: only species you tick in the Species list below are ever fused / unlocked / dismantled — every other mutated pet is ignored and stays locked. All mutated pets: the old all-mutants behavior",
+    Values = { "Selected pets only", "All mutated pets" },
+    Value = shardSelectedOnly and "Selected pets only" or "All mutated pets",
+    Callback = function(v)
+        if noxarCallbackGate() then return end
+        shardSelectedOnly = (v ~= "All mutated pets")
+        saveConfig()
+    end
+})
+
+-- Catalog comes from the live CfgPet + current bag + saved picks (helper in
+-- the logic half); rebuilt on demand by the refresh button below
+NoxarShardSpeciesValues = noxarShardSpeciesList()
+
+NoxarElm.ShardPetList = PetsTabW:Dropdown({
+    Title = "Species list",
+    Values = NoxarShardSpeciesValues,
+    Value = shardPetAllowlist, -- saved names array (WindUI Multi format, like the Boss list)
+    Multi = true,
+    AllowNone = true, -- allow clearing the whole list (== nothing gets processed)
+    SearchBarEnabled = true, -- CfgPet holds hundreds of species
+    Callback = function(Value)
+        if noxarCallbackGate() then return end
+        local valid = {}
+        for _, n in ipairs(NoxarShardSpeciesValues) do valid[n] = true end
+        shardPetAllowlist = {}
+        for _, name in ipairs(Value) do
+            if valid[name] then
+                table.insert(shardPetAllowlist, name)
+            end
+        end
+        noxarShardAllowSetRebuild()
+        NoxarElm.ShardPetList:SetDesc("Selected: " .. #shardPetAllowlist)
+        saveConfig()
+    end
+})
+-- show the saved selection count immediately (creation callbacks are gated)
+NoxarElm.ShardPetList:SetDesc("Selected: " .. #shardPetAllowlist)
+
+PetsTabW:Button({
+    Title = "Refresh species list",
+    Desc = "Rebuilds the Species list from the game's config and your current bag — use it after hatching a brand-new species",
+    Callback = function()
+        NoxarShardSpeciesValues = noxarShardSpeciesList()
+        noxarRefreshDropdown(NoxarElm.ShardPetList, NoxarShardSpeciesValues)
+        NoxarElm.ShardPetList:SetDesc("Selected: " .. #shardPetAllowlist .. " — list refreshed")
+    end
+})
+
+local SHARD_GRADE_CHOICES = { "Off", "E", "D", "C", "B", "A", "S", "SS" }
+local SHARD_MUT_LABELS = { Shiny = "Shiny", Giant = "Huge (Giant)", Bloodlit = "Bloodlit", Fairy = "Fairy", Corrupted = "Corrupted" }
+for _, key in ipairs(NOXAR_SHARD_MUT_ORDER) do
+    local g = shardRules[key] or 0
+    PetsTabW:Dropdown({
+        Title = SHARD_MUT_LABELS[key] .. " — dismantle at",
+        Desc = "Minimum grade before this mutation gets dismantled (fused up first if below) — Off ignores it",
+        Values = SHARD_GRADE_CHOICES,
+        Value = SHARD_GRADE_CHOICES[g + 1],
+        Callback = function(v)
+            if noxarCallbackGate() then return end
+            for i, name in ipairs(SHARD_GRADE_CHOICES) do
+                if name == v then
+                    shardRules[key] = i - 1
+                    break
+                end
+            end
+            saveConfig()
+        end
+    })
+end
+
+PetsTabW:Button({
+    Title = "Scan now",
+    Desc = "Runs one harvest pass immediately",
+    Callback = function()
+        noxarShardScanNow()
+    end
+})
+
 -- ==========================================
 -- TAB 6: TELEPORT
 -- ==========================================
@@ -3190,7 +3499,7 @@ SettingsTabW:Section({ Title = "Hub" })
 
 SettingsTabW:Paragraph({
     Title = "About",
-    Desc = "WindUI build 41 (Auto Abyss can no longer freeze on the talent screen — if the game only offers blacklisted talents, it now picks the least-bad one so the run always continues, and the status line says when that happened) The X button minimizes the hub — tap the floating button to reopen it. Unload Hub below fully stops every loop, like the old panel's X did"
+    Desc = "WindUI build 49 (Auto Rejoin by Abyss Runs — now in the Abyss tab: the counter goes up only when an Abyss run fully completes at its win screen, rejoins once the count hits your set amount, then resets to 0. Per your call, the minute-timer rejoin is back to hopping instantly at its deadline — it no longer waits for a run to finish) The X button minimizes the hub — tap the floating button to reopen it. Unload Hub below fully stops every loop, like the old panel's X did"
 })
 
 SettingsTabW:Button({
@@ -3244,6 +3553,7 @@ function shutdownNoxarHub()
     riftRunning = false
     autoAbyssEnabled = false
     legitModeEnabled = false
+    autoShardEnabled = false
     _G.NoxarRiftLoopGeneration = (_G.NoxarRiftLoopGeneration or 0) + 1
     _G.NoxarAbyssLoopGeneration = (_G.NoxarAbyssLoopGeneration or 0) + 1
     riftPhase = "IDLE"
@@ -5236,6 +5546,7 @@ end
 -- ══════════════════════════════════════════════════════════════════
 -- AUTO ABYSS — full automation: create team, fight rooms, select
 -- talents, pick doors by room type preference, win → restart loop.
+-- b48: run counter + run-based rejoin happen at the win screen.
 -- ══════════════════════════════════════════════════════════════════
 _G.NoxarAbyssLoopGeneration = (_G.NoxarAbyssLoopGeneration or 0) + 1
 
@@ -5781,6 +6092,34 @@ function autoAbyssLoop(myGen)
                 AbyssStatusLbl.Text = "🏆 Abyss complete! Restarting..."
                 AbyssStatusLbl.TextColor3 = C.green
 
+                -- Run rejoin (build 48, part 1): count this win exactly once
+                -- per win screen. The guard re-arms below only after the
+                -- screen is gone, so a lingering screen can never count twice.
+                if not abyssRunCounted then
+                    abyssRunCounted = true
+                    abyssRunsDone = (abyssRunsDone or 0) + 1
+                    if RejoinRunsStatusLbl then RejoinRunsStatusLbl.Text = noxarRejoinRunsText() end
+                    saveConfig()
+                end
+
+                -- Run rejoin (build 48/49, part 2): fires only HERE, at a fully
+                -- finished run, when the counter hit the "Rejoin after X runs"
+                -- target. (b49: the minute timer is fully separate again and
+                -- hops exactly at its deadline, like before b48.)
+                local runsDue = rejoinRunsEnabled and (rejoinRunsTarget or 0) > 0
+                    and (abyssRunsDone or 0) >= rejoinRunsTarget
+                if runsDue then
+                    AbyssStatusLbl.Text = string.format("🏁 %d/%d runs done — rejoining!", abyssRunsDone, rejoinRunsTarget)
+                    AbyssStatusLbl.TextColor3 = C.gold
+                    abyssRunsDone = 0 -- counter resets on rejoin, per design
+                    if RejoinRunsStatusLbl then RejoinRunsStatusLbl.Text = noxarRejoinRunsText() end
+                    saveConfig()
+                    -- rejoinSameServer() waits 2-3s before it teleports, so the
+                    -- win/rewards still register before we leave
+                    rejoinSameServer()
+                    return -- teleport is on the way; stop driving this Abyss
+                end
+
                 -- Wait for restart to become available (PlayerId == 0)
                 local restartAttempts = 0
                 while stillRunning() and restartAttempts < 20 do
@@ -5808,6 +6147,12 @@ function autoAbyssLoop(myGen)
                     if not ri2 then break end
                     waitCount = waitCount + 1
                     task.wait(0.5)
+                end
+
+                -- (build 48) re-arm the once-per-screen counter only when the
+                -- win screen is really gone; a stuck screen keeps the guard on
+                if getAbyssSyncValue(syncKey, {"RestartInfo"}) == nil then
+                    abyssRunCounted = false
                 end
 
                 lastStage = nil -- reset so next entry triggers centering
@@ -6113,6 +6458,329 @@ end
 -- Initial monster scan (now populates the WindUI target dropdown)
 task.spawn(function()
     if refreshMonsterList then refreshMonsterList() end
+end)
+
+-- ==========================================
+-- 7.8 AUTO SHARD (mutation harvest: b42 core, b43 allowlist, b44 mask fix,
+-- b45 recycle payload, b46 fodder ladder)
+-- ==========================================
+-- For every bag pet carrying an enabled mutation (shardRules > 0):
+--   below target grade  -> fuse up via PetSystem.ClientEvolve using unmutated
+--                          same-species same-grade dupes (the pet stays locked)
+--   at/above target     -> ClientLockPet(id, false), verified, then
+--                          ClientRecyclePet({id}) for the shard payout (b45:
+--                          single-element array, the channel does ipairs over it)
+-- b43: when shardSelectedOnly is on, a mutated pet only enters the target
+-- list if its species name is ticked in the allowlist — anything else keeps
+-- its lock and is never a target NOR fodder, so main pets are untouchable.
+-- One operation per tick; every action is re-verified against a fresh bag scan
+-- next tick, so state can never double-fire. Server re-validates everything
+-- anyway (locked fodder/equipped pets/battle state are all refused).
+local function shardSpecialPropertyDef()
+    local pt = getPathToolSafe()
+    local util = pt and pt.PetSpecialPropUtil
+    return util and util.SpecialPropertyDef or nil
+end
+
+local function shardPetMutations(item)
+    local def = shardSpecialPropertyDef()
+    if not def then return nil, false end
+    -- b44 fix: GetSpecialProp() has TWO shapes — an integer bitmask, or a
+    -- table whose numeric KEYS are the flags (the game's own collect-score
+    -- code, PetData:SetPetCollect, sums table keys; fresh catches arrive as
+    -- the table). tonumber(table) is nil, which used to collapse every
+    -- table-returning pet to mask 0 = "mutated" never detected = zero
+    -- targets = nothing ever fused or dismantled.
+    local raw = (item.GetSpecialProp and item:GetSpecialProp()) or nil
+    local mask = 0
+    if type(raw) == "number" then
+        mask = raw
+    elseif type(raw) == "table" then
+        for k in pairs(raw) do
+            local f = tonumber(k)
+            if f then mask = bit32.bor(mask, f) end
+        end
+    end
+    local set, found = {}, false
+    if mask ~= 0 then
+        for _, key in ipairs(NOXAR_SHARD_MUT_ORDER) do
+            local flag = def["Tp_" .. key]
+            if type(flag) == "number" and bit32.band(mask, flag) > 0 then
+                set[key] = true
+                found = true
+            end
+        end
+    end
+    return set, found
+end
+
+local function shardTargetGradeFor(mutSet)
+    local best = nil
+    for key in pairs(mutSet) do
+        local g = shardRules[key] or 0
+        if g > 0 and (best == nil or g > best) then best = g end
+    end
+    return best
+end
+
+local function shardStatus(msg)
+    if ShardStatusLbl then ShardStatusLbl.Text = msg end
+end
+
+local function shardCountStatus()
+    if ShardCountLbl then
+        ShardCountLbl.Text = "This run: " .. shardRunStats.fused .. " fused, " .. shardRunStats.dismantled .. " dismantled"
+    end
+end
+
+-- Fresh bag scan -> targets (mutated + enabled) and fodder buckets
+-- keyed "tmplId:grade". Fodder = unmutated, unlocked, not equipped/team/
+-- ride/child/virtual-selected, and never the selected breeding parents.
+local function shardScanBag(gp)
+    local targets, fodder, seen = {}, {}, {}
+    local mutSkipped = 0 -- mutated pets skipped by the b43 allowlist gate
+    local rideItem = (gp.pet.GetRideItem and gp.pet:GetRideItem()) or nil
+    local ok = pcall(function()
+        gp.pet:IterBagItem(function(item)
+            local id = item.GetId and item:GetId() or nil
+            if id == nil then return end
+            seen[id] = true
+            local tmpl = item.GetTmpl and item:GetTmpl() or nil
+            local tmplId = item.GetTmplId and item:GetTmplId() or nil
+            local grade = (item.GetGrade and item:GetGrade()) or 1
+
+            -- fuse-verify bookkeeping from last tick
+            local prevGrade = shardEvolvePending[id]
+            if prevGrade ~= nil then
+                shardEvolvePending[id] = nil
+                if grade > prevGrade then shardRunStats.fused = shardRunStats.fused + 1 end
+            end
+
+            local mutSet, hasMut = shardPetMutations(item)
+            if hasMut then
+                if shardSelectedOnly then
+                    -- b43 allowlist gate: runs BEFORE the target table, so a
+                    -- non-listed species can never be fused/unlocked/recycled;
+                    -- it also returns before the fodder section below, so it
+                    -- can't be consumed as fuse material either. Counted for
+                    -- the idle-status diagnostic (b44) so a species-name
+                    -- mismatch is visible instead of silent idling.
+                    local spn = (tmpl and tmpl.Name) or ""
+                    if not shardPetAllowSet[spn] then
+                        mutSkipped = mutSkipped + 1
+                        return
+                    end
+                end
+                local need = shardTargetGradeFor(mutSet)
+                if need then
+                    -- b45: the server refuses to recycle equipped / team /
+                    -- ride / child / virtual-selected pets (and refuses
+                    -- evolving them too), so they can never be targets — drop
+                    -- them here instead of looping forever on a dismantle the
+                    -- server keeps declining. LOCKED is deliberately NOT in
+                    -- this list: we unlock before dismantling.
+                    if item.GetEquipedIndex and item:GetEquipedIndex() ~= nil then return end
+                    if item.IsInTeam and item:IsInTeam() then return end
+                    if item.IsChildPet and item:IsChildPet() then return end
+                    if item.IsVirtualSelected and item:IsVirtualSelected() then return end
+                    if rideItem ~= nil and item == rideItem then return end
+                    local ladder = tmpl and tmpl.Evolve or nil
+                    local step = ladder and ladder[grade] or nil
+                    table.insert(targets, {
+                        id = id,
+                        grade = grade,
+                        need = need,
+                        fuseCopies = step and step.CostTmplAmount or nil,
+                        tmplId = tmplId,
+                        tmpl = tmpl, -- b46: fodder ladder reads this species' Evolve steps from it
+                        name = (tmpl and tmpl.Name) or ("Pet " .. tostring(id)),
+                        locked = (item.IsLock and item:IsLock()) or false,
+                    })
+                end
+                return -- mutated pets are never fodder
+            end
+
+            if item.IsLock and item:IsLock() then return end
+            if item.GetEquipedIndex and item:GetEquipedIndex() ~= nil then return end
+            if item.IsInTeam and item:IsInTeam() then return end
+            if item.IsChildPet and item:IsChildPet() then return end
+            if item.IsVirtualSelected and item:IsVirtualSelected() then return end
+            if rideItem ~= nil and item == rideItem then return end
+            if breedFatherId ~= nil and id == breedFatherId then return end
+            if breedMotherId ~= nil and id == breedMotherId then return end
+            if tmplId == nil then return end
+            local key = tostring(tmplId) .. ":" .. tostring(grade)
+            fodder[key] = fodder[key] or {}
+            table.insert(fodder[key], id)
+        end)
+    end)
+    -- purge in-flight state for pets that left the bag (completes dismantle count)
+    for pid, st in pairs(shardPetState) do
+        if not seen[pid] then
+            if st == "recycling" then shardRunStats.dismantled = shardRunStats.dismantled + 1 end
+            shardPetState[pid] = nil
+        end
+    end
+    for pid in pairs(shardEvolvePending) do
+        if not seen[pid] then shardEvolvePending[pid] = nil end
+    end
+    if not ok then return false, nil, nil end
+    return true, targets, fodder, mutSkipped
+end
+
+autoShardTick = function()
+    local gp = getGamePlayer and getGamePlayer() or nil
+    if not (gp and gp.pet and gp.pet.IterBagItem) then
+        shardStatus("Status: bag not ready")
+        return
+    end
+    local pt = getPathToolSafe()
+    local PS = pt and pt.PetSystem
+    if not (PS and PS.ClientEvolve and PS.ClientLockPet and PS.ClientRecyclePet) then
+        shardStatus("Status: PetSystem not ready")
+        return
+    end
+    if not shardSpecialPropertyDef() then
+        shardStatus("Status: mutation data not ready")
+        return
+    end
+
+    local ok, targets, fodder, mutSkipped = shardScanBag(gp)
+    if not ok then
+        shardStatus("Status: scan failed, retrying")
+        return
+    end
+
+    -- Phase 1: dismantle targets that reached their grade
+    for _, t in ipairs(targets) do
+        if t.grade >= t.need then
+            local gn = NOXAR_SHARD_GRADE_LETTERS[t.grade] or tostring(t.grade)
+            if t.locked then
+                -- idempotent + retried every tick while locked, so a battle-refused
+                -- unlock can never park the pet forever
+                shardPetState[t.id] = "unlocking"
+                pcall(function() PS.ClientLockPet(t.id, false) end)
+                shardStatus("Status: Unlocking " .. t.name .. " (" .. gn .. ")...")
+                return
+            else
+                local st = shardPetState[t.id]
+                if st ~= "recycling" then
+                    shardPetState[t.id] = "recycling"
+                    -- b45: PetRecycleChannel expects an ID ARRAY — the
+                    -- server's _calcPetRecycle iterates ipairs(payload), so a
+                    -- bare number silently fails validation and the pet never
+                    -- leaves the bag (the old "stuck on Dismantling" loop)
+                    pcall(function() PS.ClientRecyclePet({ t.id }) end)
+                    shardStatus("Status: Dismantling " .. t.name .. " (" .. gn .. ")...")
+                else
+                    -- still here after last attempt (server refused, e.g. in battle):
+                    -- go through one idle unlock cycle then retry next tick
+                    shardPetState[t.id] = "unlocking"
+                end
+                return
+            end
+        end
+    end
+
+    -- Phase 2: fuse one target that has enough fodder
+    for _, t in ipairs(targets) do
+        if t.grade < t.need and t.fuseCopies and t.tmplId then
+            local pool = fodder[tostring(t.tmplId) .. ":" .. tostring(t.grade)]
+            if pool and #pool >= t.fuseCopies then
+                local mats = {}
+                for i = 1, t.fuseCopies do mats[i] = pool[i] end
+                shardEvolvePending[t.id] = t.grade
+                pcall(function() PS.ClientEvolve(t.id, mats) end)
+                local from = NOXAR_SHARD_GRADE_LETTERS[t.grade] or "?"
+                local to = NOXAR_SHARD_GRADE_LETTERS[t.grade + 1] or "?"
+                shardStatus("Status: Fusing " .. t.name .. " " .. from .. " -> " .. to .. "...")
+                return
+            end
+        end
+    end
+
+    -- Phase 3 (b46): fodder ladder — chain-fuse PLAIN same-species dupes up
+    -- one grade so below-target mutated pets always have same-grade material
+    -- waiting. Demand comes only from LIVE below-target pets (allowlist and
+    -- per-mutation grades already applied), stops at the highest fodder grade
+    -- still needed (target.need - 1), and idles per species once nothing sits
+    -- below its configured grade — never builds fodder beyond that.
+    if shardFodderChainEnabled then
+        local demand, dorder = {}, {} -- tmplId -> {maxG=, tmpl=, name=}, in scan order
+        for _, t in ipairs(targets) do
+            if t.grade < t.need and t.tmplId ~= nil then
+                local want = t.need - 1
+                local d = demand[t.tmplId]
+                if d == nil then
+                    d = { maxG = want, tmpl = t.tmpl, name = t.name }
+                    demand[t.tmplId] = d
+                    table.insert(dorder, t.tmplId)
+                elseif want > d.maxG then
+                    d.maxG = want
+                end
+            end
+        end
+        for _, tid in ipairs(dorder) do
+            local d = demand[tid]
+            local ladder = d.tmpl and d.tmpl.Evolve or nil
+            if ladder then
+                for g = 1, d.maxG - 1 do
+                    local step = ladder[g]
+                    local copies = step and step.CostTmplAmount or nil
+                    local pool = fodder[tostring(tid) .. ":" .. tostring(g)]
+                    if copies ~= nil and pool ~= nil and #pool >= copies + 1 then
+                        -- pool holds plain ids: pool[copies+1] becomes the
+                        -- main (upgrades), the first `copies` are consumed, so
+                        -- every op moves exactly one dupe up one grade and the
+                        -- standard fuse-verify bookkeeping covers it
+                        local mainId = pool[copies + 1]
+                        local mats = {}
+                        for i = 1, copies do mats[i] = pool[i] end
+                        shardEvolvePending[mainId] = g
+                        pcall(function() PS.ClientEvolve(mainId, mats) end)
+                        local from = NOXAR_SHARD_GRADE_LETTERS[g] or "?"
+                        local to = NOXAR_SHARD_GRADE_LETTERS[g + 1] or "?"
+                        shardStatus("Status: Building fodder — " .. d.name .. " " .. from .. " -> " .. to .. "...")
+                        return
+                    end
+                end
+            end
+        end
+    end
+
+    -- Phase 4: idle report
+    local waiting = 0
+    for _, t in ipairs(targets) do
+        if t.grade < t.need then waiting = waiting + 1 end
+    end
+    if #targets == 0 then
+        if shardSelectedOnly and #shardPetAllowlist == 0 then
+            -- safe default made visible, so an idle hub is never mysterious
+            shardStatus("Status: Idle — no pets selected (pick species below)")
+        elseif shardSelectedOnly and (mutSkipped or 0) > 0 then
+            -- b44 diagnostic: mutations ARE being detected, just off-list —
+            -- the usual cause is the wrong species ticked in the list
+            shardStatus("Status: Idle — " .. mutSkipped .. " mutated pet(s) off-list, none selected matched")
+        elseif shardSelectedOnly then
+            shardStatus("Status: Idle — watching " .. #shardPetAllowlist .. " selected species only...")
+        else
+            shardStatus("Status: Idle — watching all mutated pets...")
+        end
+    elseif waiting > 0 then
+        shardStatus("Status: Idle — " .. waiting .. " pet(s) waiting for fodder")
+    else
+        shardStatus("Status: Idle")
+    end
+    shardCountStatus()
+end
+
+spawnTracked("autoShardLoop", function()
+    while true do
+        if autoShardEnabled then
+            pcall(autoShardTick)
+        end
+        task.wait(3)
+    end
 end)
 
 spawnTracked("autoClaimLoop", function()
