@@ -1,208 +1,955 @@
--- ═══════════════════════════════════════════════════════════
--- Fast Tick — Standalone Damage Tick Spammer
--- Sends AddPlayerDamageChannel to speed up attack ticks
--- ═══════════════════════════════════════════════════════════
+-- Glory Bound Tools: Auto Ability + Kill Aura + Anti-AFK
+-- Tabbed GUI (Ability | Combat | Misc), floating icon, saved settings, clean unload.
+-- Safe to re-execute: the previous run is fully unloaded first.
 
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
-local LP = Players.LocalPlayer
+local UIS = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
+local RunService = game:GetService("RunService")
+local VirtualUser = game:GetService("VirtualUser")
+local lp = Players.LocalPlayer
+local env = (getgenv and getgenv()) or _G
+local GUI_NAME = "AutoAbilityGui"
+local SAVE_DIR = "GBAutoAbility"
+local SAVE_FILE = SAVE_DIR .. "/settings.json"
 
-local DataPullFunc = RS:WaitForChild("CommonLibrary")
-    :WaitForChild("Tool"):WaitForChild("RemoteManager")
-    :WaitForChild("Funcs"):WaitForChild("DataPullFunc")
+-- ============ unload any previous run ============
+if env.GB_AUTOABILITY_STOP then pcall(env.GB_AUTOABILITY_STOP) end
 
--- ── State ──
-local enabled = false
-local delay = 0.05
-local hits = 0
-
--- ── GUI ──
-local sg = Instance.new("ScreenGui")
-sg.Name = "FastTickGui"
-sg.ResetOnSpawn = false
-sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-sg.Parent = (gethui and gethui()) or game:GetService("CoreGui")
-
-local frame = Instance.new("Frame", sg)
-frame.Size = UDim2.new(0, 200, 0, 120)
-frame.Position = UDim2.new(0.5, -100, 0.5, -60)
-frame.BackgroundColor3 = Color3.fromRGB(18, 12, 14)
-frame.BorderSizePixel = 0
-frame.Active = true
-frame.Draggable = true
-frame.ClipsDescendants = true
-Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
-
--- Border
-local border = Instance.new("Frame", frame)
-border.Size = UDim2.new(1, 4, 1, 4)
-border.Position = UDim2.new(0, -2, 0, -2)
-border.BackgroundColor3 = Color3.fromRGB(70, 30, 35)
-border.BackgroundTransparency = 0.4
-border.BorderSizePixel = 0
-border.ZIndex = 0
-Instance.new("UICorner", border).CornerRadius = UDim.new(0, 10)
-
--- Title bar
-local title = Instance.new("Frame", frame)
-title.Size = UDim2.new(1, 0, 0, 28)
-title.BackgroundColor3 = Color3.fromRGB(28, 16, 18)
-title.BackgroundTransparency = 0.2
-title.BorderSizePixel = 0
-title.ZIndex = 2
-
-local titleLbl = Instance.new("TextLabel", title)
-titleLbl.Size = UDim2.new(1, -50, 1, 0)
-titleLbl.Position = UDim2.new(0, 10, 0, 0)
-titleLbl.BackgroundTransparency = 1
-titleLbl.Text = "⚡ Fast Tick"
-titleLbl.TextColor3 = Color3.fromRGB(255, 80, 85)
-titleLbl.Font = Enum.Font.GothamBold
-titleLbl.TextSize = 12
-titleLbl.TextXAlignment = Enum.TextXAlignment.Left
-titleLbl.ZIndex = 3
-
--- Close
-local closeBtn = Instance.new("TextButton", title)
-closeBtn.Size = UDim2.new(0, 20, 0, 16)
-closeBtn.Position = UDim2.new(1, -26, 0.5, -8)
-closeBtn.BackgroundColor3 = Color3.fromRGB(90, 25, 28)
-closeBtn.BackgroundTransparency = 0.3
-closeBtn.Text = "×"
-closeBtn.TextColor3 = Color3.fromRGB(255, 70, 75)
-closeBtn.Font = Enum.Font.GothamBold
-closeBtn.TextSize = 12
-closeBtn.BorderSizePixel = 0
-closeBtn.ZIndex = 3
-Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 4)
-
-closeBtn.MouseButton1Click:Connect(function()
-    enabled = false
-    sg:Destroy()
-end)
-
--- Toggle
-local toggleBtn = Instance.new("TextButton", frame)
-toggleBtn.Size = UDim2.new(1, -20, 0, 26)
-toggleBtn.Position = UDim2.new(0, 10, 0, 36)
-toggleBtn.BackgroundColor3 = Color3.fromRGB(90, 25, 28)
-toggleBtn.BackgroundTransparency = 0.3
-toggleBtn.BorderSizePixel = 0
-toggleBtn.Text = "OFF"
-toggleBtn.TextColor3 = Color3.fromRGB(160, 140, 145)
-toggleBtn.Font = Enum.Font.GothamBold
-toggleBtn.TextSize = 11
-toggleBtn.ZIndex = 2
-Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(0, 7)
-
-toggleBtn.MouseButton1Click:Connect(function()
-    enabled = not enabled
-    if enabled then
-        toggleBtn.Text = "ON — Ticking"
-        toggleBtn.TextColor3 = Color3.fromRGB(255, 230, 230)
-        toggleBtn.BackgroundColor3 = Color3.fromRGB(180, 45, 50)
-    else
-        toggleBtn.Text = "OFF"
-        toggleBtn.TextColor3 = Color3.fromRGB(160, 140, 145)
-        toggleBtn.BackgroundColor3 = Color3.fromRGB(90, 25, 28)
-    end
-end)
-
--- Delay input
-local delayRow = Instance.new("Frame", frame)
-delayRow.Size = UDim2.new(1, -20, 0, 22)
-delayRow.Position = UDim2.new(0, 10, 0, 68)
-delayRow.BackgroundTransparency = 1
-delayRow.ZIndex = 2
-
-local delayLbl = Instance.new("TextLabel", delayRow)
-delayLbl.Size = UDim2.new(0, 50, 0, 22)
-delayLbl.BackgroundTransparency = 1
-delayLbl.Text = "Delay:"
-delayLbl.TextColor3 = Color3.fromRGB(150, 135, 140)
-delayLbl.Font = Enum.Font.Gotham
-delayLbl.TextSize = 10
-delayLbl.TextXAlignment = Enum.TextXAlignment.Left
-delayLbl.ZIndex = 3
-
-local delayBox = Instance.new("TextBox", delayRow)
-delayBox.Size = UDim2.new(0, 50, 0, 20)
-delayBox.Position = UDim2.new(0, 48, 0.5, -10)
-delayBox.BackgroundColor3 = Color3.fromRGB(25, 16, 18)
-delayBox.BorderSizePixel = 0
-delayBox.Text = tostring(delay)
-delayBox.TextColor3 = Color3.fromRGB(240, 230, 232)
-delayBox.Font = Enum.Font.GothamBold
-delayBox.TextSize = 10
-delayBox.ClearTextOnFocus = false
-delayBox.ZIndex = 3
-Instance.new("UICorner", delayBox).CornerRadius = UDim.new(0, 4)
-
-local secLbl = Instance.new("TextLabel", delayRow)
-secLbl.Size = UDim2.new(0, 30, 0, 22)
-secLbl.Position = UDim2.new(0, 102, 0, 0)
-secLbl.BackgroundTransparency = 1
-secLbl.Text = "sec"
-secLbl.TextColor3 = Color3.fromRGB(120, 108, 112)
-secLbl.Font = Enum.Font.Gotham
-secLbl.TextSize = 10
-secLbl.TextXAlignment = Enum.TextXAlignment.Left
-secLbl.ZIndex = 3
-
-delayBox.FocusLost:Connect(function()
-    local v = tonumber(delayBox.Text)
-    if v and v > 0 then
-        delay = v
-    else
-        delay = 0.05
-    end
-    delayBox.Text = tostring(delay)
-end)
-
--- Stats
-local statsLbl = Instance.new("TextLabel", frame)
-statsLbl.Size = UDim2.new(1, -20, 0, 14)
-statsLbl.Position = UDim2.new(0, 10, 0, 96)
-statsLbl.BackgroundTransparency = 1
-statsLbl.Text = "Hits: 0"
-statsLbl.TextColor3 = Color3.fromRGB(120, 108, 112)
-statsLbl.Font = Enum.Font.Gotham
-statsLbl.TextSize = 9
-statsLbl.TextXAlignment = Enum.TextXAlignment.Left
-statsLbl.ZIndex = 2
-
--- ── Module Loading ──
-local ClickSystem = nil
-pcall(function() ClickSystem = require(RS.CommonLogic.PlayerDamage.ClickSystem) end)
-
-local function doTick()
-    -- Method 1: Game's own module (triggers client-side display update)
-    if ClickSystem and ClickSystem.ClientAddPlayerDamage then
-        local ok = pcall(function() ClickSystem.ClientAddPlayerDamage() end)
-        if ok then return true end
-    end
-    -- Method 2: _G.PathTool (if loaded)
-    if _G.PathTool and _G.PathTool.ClickSystem and _G.PathTool.ClickSystem.ClientAddPlayerDamage then
-        local ok = pcall(function() _G.PathTool.ClickSystem.ClientAddPlayerDamage() end)
-        if ok then return true end
-    end
-    -- Method 3: Raw remote (works but no live display)
-    pcall(function()
-        DataPullFunc:InvokeServer("AddPlayerDamageChannel", true)
-    end)
-    return true
+local function clearOld(p)
+	if p then
+		local o = p:FindFirstChild(GUI_NAME)
+		if o then o:Destroy() end
+	end
+end
+local function getParent()
+	local ok, h = pcall(function() return gethui and gethui() end)
+	if ok and h then return h end
+	return lp:WaitForChild("PlayerGui")
 end
 
--- ── Tick Loop ──
+clearOld(lp:FindFirstChildOfClass("PlayerGui"))
+local parent = getParent()
+clearOld(parent)
+
+-- ============ settings ============
+local cfg = {
+	-- Auto Ability
+	ENABLED = false,
+	MODE = "range",      -- "cooldown" = cast when cooldown ends | "range" = cast only if enemy in range
+	REQUIRE_ARENA = false,
+	RANGE = 60,          -- studs (Range Cast mode)
+	MARGIN = 0.03,       -- seconds past AbilityReadyAt (0 = fastest, may get rejected)
+	-- Kill Aura
+	KILL_AURA = false,
+	AURA_MELEE = 13,     -- studs
+	AURA_ARCHER = 80,    -- studs (used when your Kit attribute is "Archer")
+	-- Misc
+	ANTI_AFK = false,
+	LOCK = false,        -- session-only (never saved): always starts OFF
+	DEBUG = false,
+}
+local LIMITS = {
+	RANGE       = { min = 10, max = 200, step = 5 },
+	MARGIN      = { min = 0,  max = 0.2, step = 0.01 },
+	AURA_MELEE  = { min = 5,  max = 30,  step = 1 },
+	AURA_ARCHER = { min = 20, max = 120, step = 5 },
+}
+local SAVE_KEYS = {
+	"ENABLED", "MODE", "REQUIRE_ARENA", "RANGE", "MARGIN",
+	"KILL_AURA", "AURA_MELEE", "AURA_ARCHER", "ANTI_AFK", "DEBUG",
+}
+
+-- Auto Ability timing
+local LEAD = 0.05
+local RETRY_DELAY = 0.2
+local IDLE_POLL = 0.1
+local MAX_SLEEP = 1
+
+-- Kill Aura (values taken from the reference script)
+local AURA_COOLDOWN = 0.1      -- seconds between swings
+local AURA_DOWNED_PAUSE = 8    -- studs: pause while a downed teammate is this close
+local AURA_MAX_LEAD = 12       -- studs: cap on archer aim-lead
+
+-- Anti-AFK (same 60s interval as the AbyssLooper script)
+local AFK_INTERVAL = 60
+
+-- ============ bookkeeping ============
+-- every handle that stop() must clean up is declared HERE, above stop(),
+-- so stop() sees them as upvalues instead of globals
+local alive = true
+local conns = {}
+local gui, main, icon, wakeNow
+local auraConn, afkThread, idledConn
+local lockConn, lockHrp, lockPos, refreshLock
+local saveThread, dirty = nil, false
+local function track(c) conns[#conns + 1] = c return c end
+
+-- releases the position lock (safe to call any time, even when not locked)
+local function unlock()
+	if lockConn then lockConn:Disconnect() lockConn = nil end
+	if lockHrp then
+		if lockHrp.Parent then lockHrp.Anchored = false end
+		lockHrp = nil
+	end
+	lockPos = nil
+end
+
+local function isNum(v)
+	return type(v) == "number" and v == v and math.abs(v) < 1e5
+end
+
+-- ============ saving (features only) ============
+local canFS = type(writefile) == "function" and type(readfile) == "function" and type(isfile) == "function"
+
+local function save()
+	if not canFS then return end
+	local data = {}
+	for _, k in ipairs(SAVE_KEYS) do data[k] = cfg[k] end
+	pcall(function()
+		if type(isfolder) == "function" and type(makefolder) == "function" and not isfolder(SAVE_DIR) then
+			makefolder(SAVE_DIR)
+		end
+		writefile(SAVE_FILE, HttpService:JSONEncode(data))
+	end)
+end
+
+-- at most one write per second, always saves the latest state
+local function scheduleSave()
+	if not alive then return end
+	dirty = true
+	if saveThread then return end
+	saveThread = task.delay(1, function()
+		saveThread = nil
+		if alive and dirty then
+			dirty = false
+			save()
+		end
+	end)
+end
+
+-- ============ full cleanup ============
+local function stop()
+	if not alive then return end
+	alive = false
+	if saveThread then pcall(task.cancel, saveThread) saveThread = nil end
+	if dirty then dirty = false save() end
+	if auraConn then auraConn:Disconnect() auraConn = nil end
+	if afkThread then pcall(task.cancel, afkThread) afkThread = nil end
+	if idledConn then idledConn:Disconnect() idledConn = nil end
+	unlock()
+	for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
+	table.clear(conns)
+	if wakeNow then pcall(wakeNow) end
+	if gui then gui:Destroy() end
+	if env.GB_AUTOABILITY_STOP == stop then env.GB_AUTOABILITY_STOP = nil end
+end
+-- registered BEFORE anything can yield, so a fast re-execute always finds it
+env.GB_AUTOABILITY_STOP = stop
+
+-- ============ load saved settings ============
+local saved
+if canFS then
+	local ok, data = pcall(function()
+		if isfile(SAVE_FILE) then return HttpService:JSONDecode(readfile(SAVE_FILE)) end
+		return nil
+	end)
+	if ok and type(data) == "table" then saved = data end
+end
+
+local function clampNum(v, lim, def)
+	if isNum(v) then return math.clamp(v, lim.min, lim.max) end
+	return def
+end
+if saved then
+	cfg.ENABLED = saved.ENABLED == true
+	if saved.MODE == "cooldown" or saved.MODE == "range" then cfg.MODE = saved.MODE end
+	cfg.REQUIRE_ARENA = saved.REQUIRE_ARENA == true
+	cfg.RANGE = clampNum(saved.RANGE, LIMITS.RANGE, cfg.RANGE)
+	cfg.MARGIN = clampNum(saved.MARGIN, LIMITS.MARGIN, cfg.MARGIN)
+	cfg.KILL_AURA = saved.KILL_AURA == true
+	cfg.AURA_MELEE = clampNum(saved.AURA_MELEE, LIMITS.AURA_MELEE, cfg.AURA_MELEE)
+	cfg.AURA_ARCHER = clampNum(saved.AURA_ARCHER, LIMITS.AURA_ARCHER, cfg.AURA_ARCHER)
+	cfg.ANTI_AFK = saved.ANTI_AFK == true
+	cfg.DEBUG = saved.DEBUG == true
+end
+
+-- ============ remotes (with timeout so it can't hang) ============
+local remotes = RS:WaitForChild("Remotes", 10)
+local remote = remotes and remotes:WaitForChild("AbilityCast", 10)
+if not remote or not alive then
+	stop()
+	if not remote then warn("[GB] Remotes.AbilityCast not found, aborting") end
+	return
+end
+-- Kill Aura remotes: looked up without waiting; if they are missing, Kill Aura
+-- just reports it (debug) and retries once a second, nothing else is affected
+local attackRemote = remotes:FindFirstChild("Attack")
+local releaseRemote = remotes:FindFirstChild("AttackRelease")
+
+-- ============ Auto Ability logic ============
+local lastReason
+local function why(fmt, ...)
+	if not cfg.DEBUG then return end
+	local msg = (select("#", ...) > 0) and string.format(fmt, ...) or fmt
+	if msg ~= lastReason then
+		lastReason = msg
+		print("[AA] " .. msg)
+	end
+end
+
+-- sleeps up to t seconds; wakeNow() ends it early (timer is cancelled, nothing piles up)
+local function sleep(t)
+	local th = coroutine.running()
+	local done = false
+	local timer
+	local function wake(fromTimer)
+		if done then return end
+		done = true
+		wakeNow = nil
+		if not fromTimer and timer then pcall(task.cancel, timer) end
+		task.defer(th)
+	end
+	wakeNow = function() wake(false) end
+	timer = task.delay(t, wake, true)
+	coroutine.yield()
+end
+
+-- one permanent connection: cooldown changed -> wake the loop
+track(lp:GetAttributeChangedSignal("AbilityReadyAt"):Connect(function()
+	if wakeNow then wakeNow() end
+end))
+
+local function enemyInRange(origin)
+	local folder = workspace:FindFirstChild("ActiveEnemies")
+	if not folder then return false end
+	for _, e in ipairs(folder:GetChildren()) do
+		if e:GetAttribute("AIState") ~= "Dead" then
+			local hrp = e:FindFirstChild("HumanoidRootPart")
+			if hrp and (hrp.Position - origin).Magnitude <= cfg.RANGE then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+local function secondsUntilReady()
+	local at = lp:GetAttribute("AbilityReadyAt")
+	if type(at) ~= "number" then return 0 end
+	return at + cfg.MARGIN - workspace:GetServerTimeNow()
+end
+
+local function tryCast()
+	if cfg.REQUIRE_ARENA and lp:GetAttribute("InArena") ~= true then
+		why("InArena = %s (Require Arena is on)", lp:GetAttribute("InArena"))
+		return false
+	end
+	local ch = lp.Character
+	local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+	if not hrp then why("no character / HumanoidRootPart") return false end
+	if ch:GetAttribute("Downed") == true then why("character is Downed") return false end
+
+	if cfg.MODE == "range" and not enemyInRange(hrp.Position) then
+		why("no enemy within %d studs", cfg.RANGE)
+		return false
+	end
+
+	-- no aiming: send the direction you are already facing
+	local lv = hrp.CFrame.LookVector
+	local flat = Vector3.new(lv.X, 0, lv.Z)
+	if flat.Magnitude < 0.001 then flat = Vector3.new(0, 0, -1) end
+
+	remote:FireServer(flat.Unit)
+	lastReason = nil
+	why("CAST (%s)", cfg.MODE)
+	return true
+end
+
+local fails = 0 -- consecutive casts that did not change AbilityReadyAt (rejected?)
+
 task.spawn(function()
-    while sg.Parent do
-        if enabled then
-            doTick()
-            hits += 1
-            statsLbl.Text = "Hits: " .. hits
-        end
-        task.wait(delay)
-    end
+	while alive do
+		if not cfg.ENABLED then
+			lastReason = nil
+			sleep(1) -- idle: no polling, toggling wakes it instantly
+		else
+			local remaining = secondsUntilReady()
+			if remaining > LEAD then
+				why("ability on cooldown (waiting for AbilityReadyAt)")
+				sleep(math.min(remaining - LEAD, MAX_SLEEP))
+			elseif remaining > 0 then
+				task.wait()
+			else
+				local before = lp:GetAttribute("AbilityReadyAt")
+				local ok, casted = pcall(tryCast)
+				if not ok then why("error: %s", casted) casted = false end
+				if casted then
+					sleep(RETRY_DELAY) -- woken early if the server starts the cooldown
+					if lp:GetAttribute("AbilityReadyAt") == before then
+						fails = math.min(fails + 1, 8)
+						sleep(math.min(RETRY_DELAY * 2 ^ fails, 2)) -- back off, don't spam
+					else
+						fails = 0
+					end
+				else
+					fails = 0
+					sleep(IDLE_POLL)
+				end
+			end
+		end
+	end
 end)
 
-print("[FastTick] Loaded — toggle ON to start ticking")
+-- ============ Kill Aura logic ============
+-- Runs only while the toggle is on: the Heartbeat connection is created on
+-- enable and disconnected on disable. Inside it, every step costs one os.clock()
+-- compare; the real work (scan + swing) happens once per AURA_COOLDOWN.
+local lastAuraReason
+local function whyAura(msg)
+	if not cfg.DEBUG or msg == lastAuraReason then return end
+	lastAuraReason = msg
+	print("[KA] " .. msg)
+end
+
+local nextSwing = 0
+local attackSeq = 0
+
+-- nearest living enemy HumanoidRootPart within range, or nil
+local function nearestEnemy(origin, range)
+	local folder = workspace:FindFirstChild("ActiveEnemies")
+	if not folder then return nil end
+	local best, bestDist = nil, range
+	for _, e in ipairs(folder:GetChildren()) do
+		if e:GetAttribute("AIState") ~= "Dead" then
+			local hrp = e:FindFirstChild("HumanoidRootPart")
+			if hrp then
+				local d = (hrp.Position - origin).Magnitude
+				if d <= bestDist then
+					best, bestDist = hrp, d
+				end
+			end
+		end
+	end
+	return best
+end
+
+-- true if another player is downed within AURA_DOWNED_PAUSE studs of origin
+local function downedNearby(origin)
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= lp then
+			local ch = p.Character
+			if ch and ch:GetAttribute("Downed") == true then
+				local hrp = ch:FindFirstChild("HumanoidRootPart")
+				if hrp and (hrp.Position - origin).Magnitude <= AURA_DOWNED_PAUSE then
+					return true
+				end
+			end
+		end
+	end
+	return false
+end
+
+-- archers lead a moving target: offset the aim by the target's sideways
+-- velocity (perpendicular to the line of sight), scaled by distance, capped
+local function leadAim(target, origin)
+	local pos = target.Position
+	local vel = target.AssemblyLinearVelocity
+	local flatVel = Vector3.new(vel.X, 0, vel.Z)
+	local toTarget = pos - origin
+	local flatTo = Vector3.new(toTarget.X, 0, toTarget.Z)
+	if flatTo.Magnitude > 0 and flatVel.Magnitude > 1.5 then
+		local dir = flatTo.Unit
+		local lateral = flatVel - dir * flatVel:Dot(dir)
+		if lateral.Magnitude > 1 then
+			local offset = lateral * (toTarget.Magnitude / 180)
+			if offset.Magnitude > AURA_MAX_LEAD then
+				offset = offset.Unit * AURA_MAX_LEAD
+			end
+			pos = pos + offset
+		end
+	end
+	return pos
+end
+
+local function auraTick()
+	local now = os.clock()
+	if now < nextSwing then return end
+	nextSwing = now + AURA_COOLDOWN
+
+	if lp:GetAttribute("InArena") == false then return end
+	local ch = lp.Character
+	if not ch or ch:GetAttribute("Downed") == true then return end
+	local hrp = ch:FindFirstChild("HumanoidRootPart")
+	if not hrp then return end
+
+	if not attackRemote then
+		attackRemote = remotes:FindFirstChild("Attack")
+		releaseRemote = remotes:FindFirstChild("AttackRelease")
+		if not attackRemote then
+			whyAura("Remotes.Attack not found (retrying every 1s)")
+			nextSwing = now + 1
+			return
+		end
+	end
+
+	local origin = hrp.Position
+	local isArcher = lp:GetAttribute("Kit") == "Archer"
+	local range = isArcher and cfg.AURA_ARCHER or cfg.AURA_MELEE
+	local target = nearestEnemy(origin, range)
+	if not target then return end
+	if downedNearby(origin) then return end
+
+	local aim = isArcher and leadAim(target, origin) or target.Position
+	local toAim = aim - origin
+	if toAim.Magnitude < 0.001 then return end
+	local dir = toAim.Unit
+
+	-- face the target (flat), as the reference script does
+	if Vector3.new(toAim.X, 0, toAim.Z).Magnitude > 0.01 then
+		hrp.CFrame = CFrame.lookAt(origin, Vector3.new(aim.X, origin.Y, aim.Z))
+	end
+
+	attackSeq += 1
+	if isArcher then
+		attackRemote:FireServer(attackSeq, dir)
+		if releaseRemote then releaseRemote:FireServer(attackSeq, 0, dir) end
+	else
+		attackRemote:FireServer(attackSeq, dir, false)
+	end
+end
+
+local function auraStep()
+	local ok, err = pcall(auraTick)
+	if not ok then whyAura("error: " .. tostring(err)) end
+end
+
+-- idempotent: safe to call any time, never creates a second connection
+local function applyKillAura()
+	if cfg.KILL_AURA and alive then
+		if not auraConn then
+			nextSwing = 0
+			auraConn = RunService.Heartbeat:Connect(auraStep)
+		end
+	elseif auraConn then
+		auraConn:Disconnect()
+		auraConn = nil
+		lastAuraReason = nil
+	end
+end
+
+-- ============ Anti-AFK logic ============
+-- Same method as the AbyssLooper script: a VirtualUser click every
+-- AFK_INTERVAL seconds, far inside the ~20 min kick window. The thread only
+-- exists while the toggle is on (handle stored, so no duplicates are possible).
+local function afkClick()
+	pcall(function()
+		VirtualUser:CaptureController()
+		VirtualUser:ClickButton2(Vector2.new(0, 0))
+	end)
+end
+
+-- idempotent: the timer thread and the Idled hook exist only while the toggle is on
+local function applyAntiAfk()
+	if cfg.ANTI_AFK and alive then
+		if not afkThread then
+			afkThread = task.spawn(function()
+				while alive do
+					task.wait(AFK_INTERVAL)
+					afkClick()
+				end
+			end)
+		end
+		if not idledConn then idledConn = lp.Idled:Connect(afkClick) end
+	else
+		if afkThread then pcall(task.cancel, afkThread) afkThread = nil end
+		if idledConn then idledConn:Disconnect() idledConn = nil end
+	end
+end
+
+-- ============ Position Lock logic ============
+-- Anchors your root part where it is. Only the POSITION is held, so Kill Aura can
+-- still turn your avatar. The Heartbeat step is one distance compare per frame and
+-- only moves you back if something (server teleport, knockback) displaced you.
+local function releaseLock()
+	cfg.LOCK = false
+	unlock()
+	if refreshLock then refreshLock() end
+end
+
+local function lockStep()
+	local hrp = lockHrp
+	if not hrp or not hrp.Parent then releaseLock() return end
+	if (hrp.Position - lockPos).Magnitude > 0.05 then
+		hrp.CFrame = CFrame.new(lockPos) * hrp.CFrame.Rotation
+	end
+end
+
+-- idempotent: never creates a second connection
+local function applyLock()
+	if cfg.LOCK and alive then
+		if lockConn then return end
+		local ch = lp.Character
+		local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+		if not hrp then releaseLock() return end
+		lockHrp, lockPos = hrp, hrp.Position
+		hrp.AssemblyLinearVelocity = Vector3.zero
+		hrp.Anchored = true
+		lockConn = RunService.Heartbeat:Connect(lockStep)
+	elseif lockConn or lockHrp then
+		unlock()
+	end
+end
+
+-- new character (respawn) -> lock is released, you choose when to lock again
+track(lp.CharacterAdded:Connect(function()
+	if lockConn then releaseLock() end
+end))
+
+-- ============ GUI ============
+local BG      = Color3.fromRGB(18, 18, 24)
+local ROW     = Color3.fromRGB(28, 28, 38)
+local ACCENT  = Color3.fromRGB(60, 170, 90)
+local OFFCOL  = Color3.fromRGB(60, 60, 72)
+local TEXT    = Color3.fromRGB(220, 220, 230)
+local DIM     = Color3.fromRGB(150, 150, 165)
+
+local FULL_H, TITLE_H, TAB_H, WIN_W = 340, 36, 28, 250
+
+gui = Instance.new("ScreenGui")
+gui.Name = GUI_NAME
+gui.ResetOnSpawn = false
+gui.DisplayOrder = 10
+gui.Parent = parent
+
+main = Instance.new("Frame")
+main.Size = UDim2.fromOffset(WIN_W, FULL_H)
+main.Position = UDim2.new(0, 20, 0.5, -FULL_H / 2)
+main.BackgroundColor3 = BG
+main.BorderSizePixel = 0
+main.ClipsDescendants = true
+main.Parent = gui
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 12)
+local stroke = Instance.new("UIStroke", main)
+stroke.Color = ACCENT
+stroke.Thickness = 1.5
+
+local titleBar = Instance.new("Frame")
+titleBar.Size = UDim2.new(1, 0, 0, TITLE_H)
+titleBar.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
+titleBar.BorderSizePixel = 0
+titleBar.Active = true
+titleBar.Parent = main
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -50, 1, 0)
+title.Position = UDim2.fromOffset(12, 0)
+title.BackgroundTransparency = 1
+title.Text = "⚔ Glory Bound"
+title.TextColor3 = ACCENT
+title.Font = Enum.Font.GothamBold
+title.TextSize = 14
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent = titleBar
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.fromOffset(28, 24)
+closeBtn.Position = UDim2.new(1, -34, 0.5, -12)
+closeBtn.BackgroundColor3 = Color3.fromRGB(190, 50, 50)
+closeBtn.Text = "✕"
+closeBtn.TextColor3 = Color3.new(1, 1, 1)
+closeBtn.Font = Enum.Font.GothamBold
+closeBtn.TextSize = 13
+closeBtn.BorderSizePixel = 0
+closeBtn.Parent = titleBar
+Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 6)
+
+-- ---- tabs: a button bar plus one scrolling page per tab ----
+local tabBar = Instance.new("Frame")
+tabBar.Size = UDim2.new(1, -12, 0, TAB_H)
+tabBar.Position = UDim2.fromOffset(6, TITLE_H + 4)
+tabBar.BackgroundTransparency = 1
+tabBar.Parent = main
+local tabLayout = Instance.new("UIListLayout", tabBar)
+tabLayout.FillDirection = Enum.FillDirection.Horizontal
+tabLayout.Padding = UDim.new(0, 4)
+tabLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+local tabs = {}      -- name -> { page = ScrollingFrame, button = TextButton }
+local tabCount = 0
+
+local function selectTab(name)
+	for n, t in pairs(tabs) do
+		local on = (n == name)
+		t.page.Visible = on
+		t.button.BackgroundColor3 = on and ACCENT or OFFCOL
+	end
+end
+
+local function addTab(name)
+	tabCount += 1
+
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.new(1 / 3, -3, 1, 0)
+	btn.LayoutOrder = tabCount
+	btn.BackgroundColor3 = OFFCOL
+	btn.Text = name
+	btn.TextColor3 = Color3.new(1, 1, 1)
+	btn.Font = Enum.Font.GothamBold
+	btn.TextSize = 12
+	btn.BorderSizePixel = 0
+	btn.AutoButtonColor = false
+	btn.Parent = tabBar
+	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+
+	local page = Instance.new("ScrollingFrame")
+	page.Size = UDim2.new(1, -12, 1, -(TITLE_H + TAB_H) - 12)
+	page.Position = UDim2.fromOffset(6, TITLE_H + TAB_H + 8)
+	page.BackgroundTransparency = 1
+	page.BorderSizePixel = 0
+	page.ScrollBarThickness = 3
+	page.CanvasSize = UDim2.new()
+	page.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	page.Visible = false
+	page.Parent = main
+	local list = Instance.new("UIListLayout", page)
+	list.Padding = UDim.new(0, 6)
+	list.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	list.SortOrder = Enum.SortOrder.LayoutOrder
+	local pad = Instance.new("UIPadding", page)
+	pad.PaddingTop = UDim.new(0, 2)
+	pad.PaddingBottom = UDim.new(0, 6)
+
+	tabs[name] = { page = page, button = btn }
+	track(btn.MouseButton1Click:Connect(function() selectTab(name) end))
+	return page
+end
+
+-- floating icon (shown when the GUI is hidden)
+icon = Instance.new("TextButton")
+icon.Size = UDim2.fromOffset(46, 46)
+icon.Position = UDim2.new(0, 16, 0.5, -23)
+icon.BackgroundColor3 = BG
+icon.Text = "⚔"
+icon.TextColor3 = ACCENT
+icon.TextSize = 22
+icon.Font = Enum.Font.GothamBold
+icon.BorderSizePixel = 0
+icon.AutoButtonColor = true
+icon.Visible = false
+icon.Parent = gui
+Instance.new("UICorner", icon).CornerRadius = UDim.new(1, 0)
+local iconStroke = Instance.new("UIStroke", icon)
+iconStroke.Thickness = 2.5
+iconStroke.Color = OFFCOL
+
+-- icon ring is green when Auto Ability or Kill Aura is on
+local function updateIcon()
+	iconStroke.Color = (cfg.ENABLED or cfg.KILL_AURA) and ACCENT or OFFCOL
+end
+
+-- one shared drag system (window + icon + sliders), one pair of connections total
+local active, lockedPage
+local function beginDrag(input, moveFn) active = { input = input, move = moveFn } end
+local function endDrag()
+	active = nil
+	if lockedPage then
+		lockedPage.ScrollingEnabled = true
+		lockedPage = nil
+	end
+end
+
+track(UIS.InputChanged:Connect(function(i)
+	if active and (i == active.input or i.UserInputType == Enum.UserInputType.MouseMovement) then
+		active.move(i.Position)
+	end
+end))
+track(UIS.InputEnded:Connect(function(i)
+	if active and (i == active.input or (i.UserInputType == Enum.UserInputType.MouseButton1
+		and active.input.UserInputType == Enum.UserInputType.MouseButton1)) then
+		endDrag()
+	end
+end))
+
+track(UIS.WindowFocusReleased:Connect(endDrag))
+
+local function isPress(i)
+	return i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1
+end
+
+-- drag window by title bar
+track(titleBar.InputBegan:Connect(function(i)
+	if not isPress(i) then return end
+	local startPos, origin = i.Position, main.Position
+	beginDrag(i, function(pos)
+		local d = pos - startPos
+		main.Position = UDim2.new(origin.X.Scale, origin.X.Offset + d.X, origin.Y.Scale, origin.Y.Offset + d.Y)
+	end)
+end))
+
+-- drag icon (a short tap opens the GUI, a drag only moves the icon)
+local iconMoved = false
+track(icon.InputBegan:Connect(function(i)
+	if not isPress(i) then return end
+	iconMoved = false
+	local startPos, origin = i.Position, icon.Position
+	beginDrag(i, function(pos)
+		local d = pos - startPos
+		if d.Magnitude > 8 then iconMoved = true end
+		if iconMoved then
+			icon.Position = UDim2.new(origin.X.Scale, origin.X.Offset + d.X, origin.Y.Scale, origin.Y.Offset + d.Y)
+		end
+	end)
+end))
+track(icon.MouseButton1Click:Connect(function()
+	if iconMoved then return end
+	icon.Visible = false
+	main.Visible = true
+end))
+
+-- X = hide GUI into the icon (script keeps running)
+track(closeBtn.MouseButton1Click:Connect(function()
+	icon.Position = main.Position
+	main.Visible = false
+	icon.Visible = true
+	updateIcon()
+end))
+
+-- ---- row helpers (every helper takes the page it should add to) ----
+local order = 0
+local function newRow(page, h, class)
+	order += 1
+	local r = Instance.new(class or "Frame")
+	r.Size = UDim2.new(1, -8, 0, h)
+	r.BackgroundColor3 = ROW
+	r.BorderSizePixel = 0
+	r.LayoutOrder = order
+	r.Parent = page
+	Instance.new("UICorner", r).CornerRadius = UDim.new(0, 8)
+	return r
+end
+
+local function makeNote(page, text, h)
+	local row = newRow(page, h or 40)
+	local lbl = Instance.new("TextLabel")
+	lbl.Size = UDim2.new(1, -16, 1, 0)
+	lbl.Position = UDim2.fromOffset(8, 0)
+	lbl.BackgroundTransparency = 1
+	lbl.Text = text
+	lbl.TextColor3 = DIM
+	lbl.Font = Enum.Font.Gotham
+	lbl.TextSize = 11
+	lbl.TextWrapped = true
+	lbl.TextXAlignment = Enum.TextXAlignment.Left
+	lbl.TextYAlignment = Enum.TextYAlignment.Center
+	lbl.Parent = row
+end
+
+local function makeToggle(page, labelTxt, key, onChange)
+	local row = newRow(page, 34, "TextButton")
+	row.Text = ""
+	row.AutoButtonColor = false
+
+	local lbl = Instance.new("TextLabel")
+	lbl.Size = UDim2.new(1, -60, 1, 0)
+	lbl.Position = UDim2.fromOffset(10, 0)
+	lbl.BackgroundTransparency = 1
+	lbl.Text = labelTxt
+	lbl.TextColor3 = TEXT
+	lbl.Font = Enum.Font.Gotham
+	lbl.TextSize = 13
+	lbl.TextXAlignment = Enum.TextXAlignment.Left
+	lbl.Parent = row
+
+	local pill = Instance.new("Frame")
+	pill.Size = UDim2.fromOffset(40, 20)
+	pill.Position = UDim2.new(1, -48, 0.5, -10)
+	pill.BorderSizePixel = 0
+	pill.Parent = row
+	Instance.new("UICorner", pill).CornerRadius = UDim.new(1, 0)
+
+	local knob = Instance.new("Frame")
+	knob.Size = UDim2.fromOffset(16, 16)
+	knob.BackgroundColor3 = Color3.new(1, 1, 1)
+	knob.BorderSizePixel = 0
+	knob.Parent = pill
+	Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
+
+	local function render()
+		local v = cfg[key]
+		pill.BackgroundColor3 = v and ACCENT or OFFCOL
+		knob.Position = v and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8)
+	end
+	render()
+
+	track(row.MouseButton1Click:Connect(function()
+		cfg[key] = not cfg[key]
+		render()
+		scheduleSave()
+		if onChange then onChange() end
+	end))
+	return render
+end
+
+local function makeModeSelector(page)
+	local row = newRow(page, 42)
+	local buttons = {}
+
+	local function render()
+		for mode, b in pairs(buttons) do
+			b.BackgroundColor3 = (cfg.MODE == mode) and ACCENT or OFFCOL
+		end
+	end
+
+	local function mk(txt, mode, left)
+		local b = Instance.new("TextButton")
+		b.Size = UDim2.new(0.5, -8, 1, -10)
+		b.Position = left and UDim2.new(0, 5, 0, 5) or UDim2.new(0.5, 3, 0, 5)
+		b.Text = txt
+		b.TextColor3 = Color3.new(1, 1, 1)
+		b.Font = Enum.Font.GothamBold
+		b.TextSize = 12
+		b.BorderSizePixel = 0
+		b.AutoButtonColor = false
+		b.Parent = row
+		Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+		buttons[mode] = b
+		track(b.MouseButton1Click:Connect(function()
+			cfg.MODE = mode
+			render()
+			lastReason = nil
+			scheduleSave()
+			if wakeNow then wakeNow() end
+		end))
+	end
+
+	mk("On Cooldown", "cooldown", true)
+	mk("Range Cast", "range", false)
+	render()
+end
+
+local function makeSlider(page, labelTxt, key, fmt)
+	local lim = LIMITS[key]
+	local minV, maxV, step = lim.min, lim.max, lim.step
+	local row = newRow(page, 54)
+
+	local lbl = Instance.new("TextLabel")
+	lbl.Size = UDim2.new(1, -80, 0, 22)
+	lbl.Position = UDim2.fromOffset(10, 4)
+	lbl.BackgroundTransparency = 1
+	lbl.Text = labelTxt
+	lbl.TextColor3 = TEXT
+	lbl.Font = Enum.Font.Gotham
+	lbl.TextSize = 13
+	lbl.TextXAlignment = Enum.TextXAlignment.Left
+	lbl.Parent = row
+
+	local box = Instance.new("TextBox")
+	box.Size = UDim2.fromOffset(58, 22)
+	box.Position = UDim2.new(1, -66, 0, 4)
+	box.BackgroundColor3 = Color3.fromRGB(14, 14, 20)
+	box.TextColor3 = ACCENT
+	box.Font = Enum.Font.GothamBold
+	box.TextSize = 13
+	box.ClearTextOnFocus = true
+	box.BorderSizePixel = 0
+	box.Parent = row
+	Instance.new("UICorner", box).CornerRadius = UDim.new(0, 6)
+
+	local hit = Instance.new("Frame")
+	hit.Size = UDim2.new(1, -20, 0, 24)
+	hit.Position = UDim2.fromOffset(10, 28)
+	hit.BackgroundTransparency = 1
+	hit.Active = true
+	hit.Parent = row
+
+	local track_ = Instance.new("Frame")
+	track_.Size = UDim2.new(1, 0, 0, 6)
+	track_.Position = UDim2.new(0, 0, 0.5, -3)
+	track_.BackgroundColor3 = OFFCOL
+	track_.BorderSizePixel = 0
+	track_.Parent = hit
+	Instance.new("UICorner", track_).CornerRadius = UDim.new(1, 0)
+
+	local fill = Instance.new("Frame")
+	fill.BackgroundColor3 = ACCENT
+	fill.BorderSizePixel = 0
+	fill.Parent = track_
+	Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
+
+	local function apply(v, silent)
+		v = math.clamp(v, minV, maxV)
+		v = math.floor(v / step + 0.5) * step
+		v = math.clamp(v, minV, maxV)
+		cfg[key] = v
+		fill.Size = UDim2.new((v - minV) / (maxV - minV), 0, 1, 0)
+		box.Text = string.format(fmt, v)
+		if not silent then scheduleSave() end
+	end
+	apply(cfg[key], true)
+
+	local function fromX(x)
+		local pct = math.clamp((x - hit.AbsolutePosition.X) / math.max(hit.AbsoluteSize.X, 1), 0, 1)
+		apply(minV + pct * (maxV - minV))
+	end
+
+	track(hit.InputBegan:Connect(function(i)
+		if not isPress(i) then return end
+		page.ScrollingEnabled = false
+		lockedPage = page
+		fromX(i.Position.X)
+		beginDrag(i, function(pos) fromX(pos.X) end)
+	end))
+
+	track(box.FocusLost:Connect(function()
+		local v = tonumber(box.Text)
+		if v then apply(v) else box.Text = string.format(fmt, cfg[key]) end
+	end))
+end
+
+-- ============ controls ============
+local abilityPage = addTab("Ability")
+local combatPage = addTab("Combat")
+local miscPage = addTab("Misc")
+
+-- Ability tab
+makeToggle(abilityPage, "Auto Ability", "ENABLED", function()
+	lastReason = nil
+	updateIcon()
+	if wakeNow then wakeNow() end
+end)
+makeModeSelector(abilityPage)
+makeSlider(abilityPage, "Range (Range Cast)", "RANGE", "%d")
+makeSlider(abilityPage, "Ready margin (s)", "MARGIN", "%.2f")
+makeToggle(abilityPage, "Require arena", "REQUIRE_ARENA")
+
+-- Combat tab
+makeToggle(combatPage, "Kill Aura", "KILL_AURA", function()
+	applyKillAura()
+	updateIcon()
+end)
+makeSlider(combatPage, "Melee range", "AURA_MELEE", "%d")
+makeSlider(combatPage, "Archer range", "AURA_ARCHER", "%d")
+makeNote(combatPage, "Swings at the nearest enemy, 10 times a second. Pauses while a downed teammate is within 8 studs, and outside the arena.", 52)
+
+-- Misc tab
+makeToggle(miscPage, "Anti-AFK", "ANTI_AFK", applyAntiAfk)
+refreshLock = makeToggle(miscPage, "Lock Position", "LOCK", applyLock)
+makeToggle(miscPage, "Debug prints", "DEBUG")
+makeNote(miscPage, "Lock holds your avatar in place and releases on respawn. Use it on solid ground.", 40)
+
+-- clean everything
+local cleanRow = newRow(miscPage, 36, "TextButton")
+cleanRow.BackgroundColor3 = Color3.fromRGB(150, 45, 45)
+cleanRow.Text = "🧹 Clean & Unload"
+cleanRow.TextColor3 = Color3.new(1, 1, 1)
+cleanRow.Font = Enum.Font.GothamBold
+cleanRow.TextSize = 13
+track(cleanRow.MouseButton1Click:Connect(stop))
+
+-- ============ start ============
+selectTab("Ability")
+updateIcon()
+applyKillAura()  -- resumes Kill Aura if it was saved ON
+applyAntiAfk()   -- resumes Anti-AFK if it was saved ON
