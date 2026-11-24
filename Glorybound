@@ -303,7 +303,7 @@ task.spawn(function()
 end)
 
 -- ============ Kill Aura logic ============
--- Runs only while the toggle is on: the Heartbeat connection is created on
+-- Runs only while the toggle is on: the RenderStepped connection is created on
 -- enable and disconnected on disable. Inside it, every step costs one os.clock()
 -- compare; the real work (scan + swing) happens once per AURA_COOLDOWN.
 local lastAuraReason
@@ -315,6 +315,9 @@ end
 
 local nextSwing = 0
 local attackSeq = 0
+local SCAN_INTERVAL = 0.1 -- enemy search runs ~10x/sec; facing still updates every frame
+local nextScan = 0
+local curTarget
 
 -- nearest living enemy HumanoidRootPart within range, or nil
 local function nearestEnemy(origin, range)
@@ -374,17 +377,15 @@ local function leadAim(target, origin)
 end
 
 local function auraTick()
-	local now = os.clock()
-	if now < nextSwing then return end
-	nextSwing = now + AURA_COOLDOWN
-
 	if lp:GetAttribute("InArena") == false then return end
 	local ch = lp.Character
 	if not ch or ch:GetAttribute("Downed") == true then return end
 	local hrp = ch:FindFirstChild("HumanoidRootPart")
 	if not hrp then return end
 
+	local now = os.clock()
 	if not attackRemote then
+		if now < nextSwing then return end
 		attackRemote = remotes:FindFirstChild("Attack")
 		releaseRemote = remotes:FindFirstChild("AttackRelease")
 		if not attackRemote then
@@ -396,21 +397,41 @@ local function auraTick()
 
 	local origin = hrp.Position
 	local isArcher = lp:GetAttribute("Kit") == "Archer"
-	local range = isArcher and cfg.AURA_ARCHER or cfg.AURA_MELEE
-	local target = nearestEnemy(origin, range)
+
+	-- search only ~10x/sec and remember the result
+	if now >= nextScan then
+		nextScan = now + SCAN_INTERVAL
+		local range = isArcher and cfg.AURA_ARCHER or cfg.AURA_MELEE
+		curTarget = nearestEnemy(origin, range)
+	end
+
+	-- every frame: keep using the remembered target while it is still alive
+	local target = curTarget
 	if not target then return end
+	local model = target.Parent
+	if not model or model:GetAttribute("AIState") == "Dead" then
+		curTarget = nil
+		nextScan = 0
+		return
+	end
+
+	-- every frame: pause instantly while a downed player is close (revive window)
 	if downedNearby(origin) then return end
 
 	local aim = isArcher and leadAim(target, origin) or target.Position
 	local toAim = aim - origin
 	if toAim.Magnitude < 0.001 then return end
-	local dir = toAim.Unit
 
-	-- face the target (flat), as the reference script does
+	-- face the target EVERY frame (smooth, like the reference script)
 	if Vector3.new(toAim.X, 0, toAim.Z).Magnitude > 0.01 then
 		hrp.CFrame = CFrame.lookAt(origin, Vector3.new(aim.X, origin.Y, aim.Z))
 	end
 
+	-- only the attack itself is throttled
+	if now < nextSwing then return end
+	nextSwing = now + AURA_COOLDOWN
+
+	local dir = toAim.Unit
 	attackSeq += 1
 	if isArcher then
 		attackRemote:FireServer(attackSeq, dir)
@@ -429,13 +450,14 @@ end
 local function applyKillAura()
 	if cfg.KILL_AURA and alive then
 		if not auraConn then
-			nextSwing = 0
-			auraConn = RunService.Heartbeat:Connect(auraStep)
+			nextSwing, nextScan, curTarget = 0, 0, nil
+			auraConn = RunService.RenderStepped:Connect(auraStep)
 		end
 	elseif auraConn then
 		auraConn:Disconnect()
 		auraConn = nil
 		lastAuraReason = nil
+		curTarget = nil
 	end
 end
 
