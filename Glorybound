@@ -1077,6 +1077,7 @@ do
 	local tracked, seenOffers = {}, {} -- tracked = fallback stack counter
 	local handledFrames = setmetatable({}, { __mode = "k" })
 	local pickRemote
+	local pickGen = 0 -- bumped on every toggle, so a queued pick can detect it is stale
 	local lastFire, remoteSeenAt = 0, -1000
 
 	-- how many of each boon you already own
@@ -1206,8 +1207,9 @@ do
 		local fireAt = math.max(os.clock() + delay, lastFire + 1.5) -- never two picks at once
 		lastFire = fireAt
 
+		local gen = pickGen
 		task.delay(fireAt - os.clock(), function()
-			if not alive or not cfg.BOON_ENABLED then return end
+			if not alive or not cfg.BOON_ENABLED or gen ~= pickGen then return end
 			local r = getRemote()
 			if not r then
 				bdbg("Remotes.BoonPick not found")
@@ -1219,20 +1221,8 @@ do
 	end
 
 	-- ---- detect offers: server -> client events ----
-	local budget = 0
 	local EVENTS = { boonOffer = true, boonPicked = true, matchStart = true,
 		arenaWaiting = true, entryCinematic = true, matchEnd = true }
-
-	local function walk(v, d)
-		if type(v) ~= "table" or d > 3 or budget <= 0 then return nil end
-		budget = budget - 1
-		if EVENTS[v.type] then return v end
-		for _, x in pairs(v) do
-			local r = walk(x, d + 1)
-			if r then return r end
-		end
-		return nil
-	end
 
 	local function handleEvent(ev)
 		if ev.type == "matchStart" or ev.type == "arenaWaiting" or ev.type == "entryCinematic" or ev.type == "matchEnd" then
@@ -1280,22 +1270,28 @@ do
 		handleOffer(list, "remote")
 	end
 
-	local function onRemote(...)
-		for i = 1, select("#", ...) do
-			budget = 120
-			local ev = walk((select(i, ...)), 0)
-			if ev then
-				handleEvent(ev)
-				return
-			end
-		end
+	-- ---- detect offers: the game's own MatchEvent remote, the same one
+	-- ClientState connects to. It hands the event table over directly (type at the
+	-- top level), so no digging through nested tables is needed.
+	local function onMatchEvent(ev)
+		if type(ev) ~= "table" or not EVENTS[ev.type] then return end
+		local ok, err = pcall(handleEvent, ev)
+		if not ok then bdbg("event error: " .. tostring(err)) end
 	end
 
-	local function watch(r)
-		if not r:IsA("RemoteEvent") then return end
-		boonConns[#boonConns + 1] = r.OnClientEvent:Connect(function(...)
-			pcall(onRemote, ...)
-		end)
+	local function hookMatchEvent()
+		local r = remotes and remotes:FindFirstChild("MatchEvent")
+		if not r then
+			-- runs inside boonThread, so stop()/unload cancels this wait cleanly
+			r = remotes and remotes:WaitForChild("MatchEvent", 30)
+		end
+		if not alive or not cfg.BOON_ENABLED then return end
+		if r and r:IsA("RemoteEvent") then
+			boonConns[#boonConns + 1] = r.OnClientEvent:Connect(onMatchEvent)
+			bdbg("hooked Remotes.MatchEvent")
+		else
+			bdbg("Remotes.MatchEvent not found; screen fallback only")
+		end
 	end
 
 	-- ---- fallback: read the choice screen if no offer event was ever seen ----
@@ -1321,17 +1317,17 @@ do
 
 	-- idempotent: safe to call any number of times, never creates duplicates
 	applyBoon = function()
+		pickGen += 1 -- a pick queued before this toggle is now stale and will be skipped
+		if boonThread then pcall(task.cancel, boonThread) boonThread = nil end
 		for _, c in ipairs(boonConns) do pcall(function() c:Disconnect() end) end
 		table.clear(boonConns)
-		if boonThread then pcall(task.cancel, boonThread) boonThread = nil end
 		if not (alive and cfg.BOON_ENABLED) then return end
 
-		for _, o in ipairs(RS:GetDescendants()) do watch(o) end
-		boonConns[#boonConns + 1] = RS.DescendantAdded:Connect(watch)
 		boonThread = task.spawn(function()
+			hookMatchEvent()
 			while alive and cfg.BOON_ENABLED do
-				task.wait(0.5)
 				pcall(guiPoll)
+				task.wait(0.5)
 			end
 		end)
 	end
