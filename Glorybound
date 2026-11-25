@@ -1,5 +1,5 @@
--- Glory Bound Tools: Auto Ability + Kill Aura + Anti-AFK
--- Tabbed GUI (Ability | Combat | Misc), floating icon, saved settings, clean unload.
+-- Glory Bound Tools: Auto Ability + Kill Aura + Anti-AFK + Auto Boon
+-- Tabbed GUI (Ability | Combat | Misc | Boons), floating icon, saved settings, clean unload.
 -- Safe to re-execute: the previous run is fully unloaded first.
 
 local Players = game:GetService("Players")
@@ -45,11 +45,18 @@ local cfg = {
 	KILL_AURA = false,
 	AURA_MELEE = 13,     -- studs
 	AURA_ARCHER = 80,    -- studs (used when your Kit attribute is "Archer")
+	-- Auto Boon
+	BOON_ENABLED = false,
+	BOON_BUILD = "Smart",
+	BOON_INSTANT = false,
+	BOON_LEGENDARY = false,
+	BOON_PRIORITY = {},  -- boon ids, first = most wanted
 	-- Misc
 	ANTI_AFK = false,
 	LOCK = false,        -- session-only (never saved): always starts OFF
 	DEBUG = false,
 }
+local BOON_BUILDS = { "Smart", "Offense", "Sustain", "Farm Cash", "Support" }
 local LIMITS = {
 	RANGE       = { min = 10, max = 200, step = 5 },
 	MARGIN      = { min = 0,  max = 0.2, step = 0.01 },
@@ -59,6 +66,7 @@ local LIMITS = {
 local SAVE_KEYS = {
 	"ENABLED", "MODE", "REQUIRE_ARENA", "RANGE", "MARGIN",
 	"KILL_AURA", "AURA_MELEE", "AURA_ARCHER", "ANTI_AFK", "DEBUG",
+	"BOON_ENABLED", "BOON_BUILD", "BOON_INSTANT", "BOON_LEGENDARY", "BOON_PRIORITY",
 }
 
 -- Auto Ability timing
@@ -69,7 +77,7 @@ local MAX_SLEEP = 1
 
 -- Kill Aura (values taken from the reference script)
 local AURA_COOLDOWN = 0.1      -- seconds between swings
-local AURA_DOWNED_PAUSE = 8    -- studs: pause while a downed teammate is this close
+local AURA_DOWNED_PAUSE = 15   -- studs: pause while a downed teammate is this close
 local AURA_MAX_LEAD = 12       -- studs: cap on archer aim-lead
 
 -- Anti-AFK (same 60s interval as the AbyssLooper script)
@@ -82,6 +90,8 @@ local alive = true
 local conns = {}
 local gui, main, icon, wakeNow
 local auraConn, afkThread, idledConn
+local boonThread, applyBoon
+local boonConns = {}
 local lockConn, lockHrp, lockPos, refreshLock
 local saveThread, dirty = nil, false
 local function track(c) conns[#conns + 1] = c return c end
@@ -138,6 +148,9 @@ local function stop()
 	if auraConn then auraConn:Disconnect() auraConn = nil end
 	if afkThread then pcall(task.cancel, afkThread) afkThread = nil end
 	if idledConn then idledConn:Disconnect() idledConn = nil end
+	if boonThread then pcall(task.cancel, boonThread) boonThread = nil end
+	for _, c in ipairs(boonConns) do pcall(function() c:Disconnect() end) end
+	table.clear(boonConns)
 	unlock()
 	for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
 	table.clear(conns)
@@ -173,6 +186,18 @@ if saved then
 	cfg.AURA_ARCHER = clampNum(saved.AURA_ARCHER, LIMITS.AURA_ARCHER, cfg.AURA_ARCHER)
 	cfg.ANTI_AFK = saved.ANTI_AFK == true
 	cfg.DEBUG = saved.DEBUG == true
+	cfg.BOON_ENABLED = saved.BOON_ENABLED == true
+	if table.find(BOON_BUILDS, saved.BOON_BUILD) then cfg.BOON_BUILD = saved.BOON_BUILD end
+	cfg.BOON_INSTANT = saved.BOON_INSTANT == true
+	cfg.BOON_LEGENDARY = saved.BOON_LEGENDARY == true
+	if type(saved.BOON_PRIORITY) == "table" then
+		for _, id in ipairs(saved.BOON_PRIORITY) do
+			if type(id) == "string" and #id < 40 and #cfg.BOON_PRIORITY < 30
+				and not table.find(cfg.BOON_PRIORITY, id) then
+				table.insert(cfg.BOON_PRIORITY, id)
+			end
+		end
+	end
 end
 
 -- ============ remotes (with timeout so it can't hang) ============
@@ -613,13 +638,13 @@ local function addTab(name)
 	tabCount += 1
 
 	local btn = Instance.new("TextButton")
-	btn.Size = UDim2.new(1 / 3, -3, 1, 0)
+	btn.Size = UDim2.new(1 / 4, -3, 1, 0)
 	btn.LayoutOrder = tabCount
 	btn.BackgroundColor3 = OFFCOL
 	btn.Text = name
 	btn.TextColor3 = Color3.new(1, 1, 1)
 	btn.Font = Enum.Font.GothamBold
-	btn.TextSize = 12
+	btn.TextSize = 11
 	btn.BorderSizePixel = 0
 	btn.AutoButtonColor = false
 	btn.Parent = tabBar
@@ -934,6 +959,7 @@ end
 local abilityPage = addTab("Ability")
 local combatPage = addTab("Combat")
 local miscPage = addTab("Misc")
+local boonsPage = addTab("Boons")
 
 -- Ability tab
 makeToggle(abilityPage, "Auto Ability", "ENABLED", function()
@@ -953,7 +979,7 @@ makeToggle(combatPage, "Kill Aura", "KILL_AURA", function()
 end)
 makeSlider(combatPage, "Melee range", "AURA_MELEE", "%d")
 makeSlider(combatPage, "Archer range", "AURA_ARCHER", "%d")
-makeNote(combatPage, "Swings at the nearest enemy, 10 times a second. Pauses while a downed teammate is within 8 studs, and outside the arena.", 52)
+makeNote(combatPage, "Swings at the nearest enemy, 10 times a second. Pauses while a downed teammate is within 15 studs, and outside the arena.", 52)
 
 -- Misc tab
 makeToggle(miscPage, "Anti-AFK", "ANTI_AFK", applyAntiAfk)
@@ -970,8 +996,499 @@ cleanRow.Font = Enum.Font.GothamBold
 cleanRow.TextSize = 13
 track(cleanRow.MouseButton1Click:Connect(stop))
 
+-- ============ Auto Boon (logic + Boons tab) ============
+-- Picks a boon for you when the boon choice screen opens. It sends the same message the
+-- game's own pick button sends: Remotes.BoonPick:FireServer(<boon id>). If you do nothing,
+-- the game still auto-picks a random boon when the timer runs out.
+-- Split into two do-blocks (logic, then tab) so it adds almost no top-level variables
+-- and stays well under Lua's limit of 200 local variables.
+local boonInfo = {}
+do
+	local PICK_DELAY_MIN, PICK_DELAY_MAX = 1.2, 2.2 -- normal pick delay (seconds), randomised
+	local LOW_HEALTH = 30   -- "Smart" build switches to Sustain below this health %
+	local FALLOFF = 0.6     -- each extra stack is worth about this much of the one before it
+
+	local BOONS = {
+		{ id = "fury_of_mars",      name = "Fury of Mars",       kind = "offense", score = 5,  rarity = "Common" },
+		{ id = "dianas_eye",        name = "Diana's Eye",        kind = "offense", score = 4,  rarity = "Common" },
+		{ id = "mercurys_sandals",  name = "Mercury's Sandals",  kind = "utility", score = 3,  rarity = "Common" },
+		{ id = "medicus",           name = "Medicus",            kind = "utility", score = 3,  rarity = "Common" },
+		{ id = "windstep",          name = "Windstep",           kind = "utility", score = 3,  rarity = "Common" },
+		{ id = "apollos_light",     name = "Apollo's Light",     kind = "defense", score = 5,  rarity = "Rare" },
+		{ id = "vulcans_brand",     name = "Vulcan's Brand",     kind = "offense", score = 5,  rarity = "Rare" },
+		{ id = "minervas_aegis",    name = "Minerva's Aegis",    kind = "defense", score = 6,  rarity = "Rare" },
+		{ id = "junos_grace",       name = "Juno's Grace",       kind = "utility", score = 3,  rarity = "Rare" },
+		{ id = "lupas_hunger",      name = "Lupa's Hunger",      kind = "defense", score = 5,  rarity = "Rare" },
+		{ id = "crowds_favor",      name = "Crowd's Favor",      kind = "utility", score = 5,  rarity = "Rare" },
+		{ id = "keen_edge",         name = "Keen Edge",          kind = "offense", score = 6,  rarity = "Rare" },
+		{ id = "testudo",           name = "Testudo",            kind = "defense", score = 4,  rarity = "Rare" },
+		{ id = "atlas_burden",      name = "Atlas' Burden",      kind = "defense", score = 6,  rarity = "Rare" },
+		{ id = "vestas_hearth",     name = "Vesta's Hearth",     kind = "defense", score = 4,  rarity = "Rare" },
+		{ id = "orions_reach",      name = "Orion's Reach",      kind = "offense", score = 6,  rarity = "Rare" },
+		{ id = "hecates_torch",     name = "Hecate's Torch",     kind = "utility", score = 4,  rarity = "Rare" },
+		{ id = "twin_fates",        name = "Twin Fates",         kind = "offense", score = 7,  rarity = "Epic" },
+		{ id = "bloodthirst",       name = "Victor's Vigor",     kind = "defense", score = 7,  rarity = "Epic" },
+		{ id = "hercules_club",     name = "Hercules' Club",     kind = "offense", score = 9,  rarity = "Epic" },
+		{ id = "saturns_hourglass", name = "Saturn's Hourglass", kind = "utility", score = 5,  rarity = "Epic" },
+		{ id = "nemesis_verdict",   name = "Nemesis' Verdict",   kind = "offense", score = 7,  rarity = "Epic" },
+		{ id = "achilles_heel",     name = "Achilles' Heel",     kind = "offense", score = 6,  rarity = "Epic" },
+		{ id = "jupiters_thunder",  name = "Jupiter's Thunder",  kind = "offense", score = 9,  rarity = "Legendary" },
+		{ id = "plutos_pardon",     name = "Pluto's Pardon",     kind = "defense", score = 10, rarity = "Legendary" },
+	}
+	local MAXSTACK = { fury_of_mars = 3, dianas_eye = 3, jupiters_thunder = 1, plutos_pardon = 1 } -- default 2
+	local WEIGHTS = {
+		damage   = { offense = 1.3, defense = 0.9, utility = 0.7 },
+		survival = { offense = 0.8, defense = 1.3, utility = 0.9 },
+	}
+	local BUILD_WEIGHTS = { Smart = "damage", Offense = "damage", Sustain = "survival",
+		["Farm Cash"] = "damage", Support = "survival" }
+	local BUILD_BOOST = {
+		["Farm Cash"] = { crowds_favor = 20 },
+		Support = { junos_grace = 20, medicus = 18, apollos_light = 12 },
+	}
+	local BUILD_DESC = {
+		Smart = "Offense, but switches to Sustain when your health is low.",
+		Offense = "Damage, crits, double strikes and execute.",
+		Sustain = "Kill heals, regen, defense and Pluto's Pardon.",
+		["Farm Cash"] = "Crowd's Favor first, then damage.",
+		Support = "Faster revives, stronger revived allies, regen.",
+	}
+	local RARITY_SCORE = { Common = 2, Rare = 4, Epic = 6, Legendary = 8 }
+
+	local BY_ID, BY_NAME = {}, {}
+	local function norm(s)
+		return (string.gsub(string.lower(tostring(s)), "[^%a]", ""))
+	end
+	for _, b in ipairs(BOONS) do
+		BY_ID[b.id] = b
+		BY_NAME[norm(b.name)] = b
+	end
+	-- drop saved ids that no longer exist
+	for i = #cfg.BOON_PRIORITY, 1, -1 do
+		if not BY_ID[cfg.BOON_PRIORITY[i]] then table.remove(cfg.BOON_PRIORITY, i) end
+	end
+
+	boonInfo.BOONS, boonInfo.MAXSTACK, boonInfo.BY_ID, boonInfo.BUILD_DESC = BOONS, MAXSTACK, BY_ID, BUILD_DESC
+
+	local function bdbg(...)
+		if cfg.DEBUG then print("[Boon]", ...) end
+	end
+
+	local tracked, seenOffers = {}, {} -- tracked = fallback stack counter
+	local handledFrames = setmetatable({}, { __mode = "k" })
+	local pickRemote
+	local lastFire, remoteSeenAt = 0, -1000
+
+	-- how many of each boon you already own
+	local function ownedStacks()
+		local out = {}
+		local raw = lp:GetAttribute("Boons")
+		if type(raw) == "string" and raw ~= "" then
+			local c = string.sub(raw, 1, 1)
+			if c == "{" or c == "[" then
+				local ok, t = pcall(HttpService.JSONDecode, HttpService, raw)
+				if ok and type(t) == "table" then
+					if #t > 0 then
+						for _, id in ipairs(t) do
+							if type(id) == "string" then out[id] = (out[id] or 0) + 1 end
+						end
+					else
+						for id, n in pairs(t) do
+							n = tonumber(n)
+							if type(id) == "string" and n then out[id] = math.floor(n) end
+						end
+					end
+				end
+			else
+				for part in string.gmatch(raw, "[^,;]+") do
+					local id, n = string.match(part, "^%s*([%w_%-']+)%s*:?%s*(%d*)%s*$")
+					if id then out[id] = (out[id] or 0) + math.max(1, tonumber(n) or 1) end
+				end
+			end
+			if next(out) ~= nil then return out end
+		end
+		return tracked
+	end
+
+	local function currentWeights()
+		local name = BUILD_WEIGHTS[cfg.BOON_BUILD] or "damage"
+		if cfg.BOON_BUILD == "Smart" then
+			local ch = lp.Character
+			local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+			if hum and hum.MaxHealth > 0 and (hum.Health / hum.MaxHealth) * 100 < LOW_HEALTH then
+				name = "survival"
+			end
+		end
+		return WEIGHTS[name] or WEIGHTS.damage
+	end
+
+	local function isMaxed(e, owned)
+		return (owned[e.id] or 0) >= (MAXSTACK[e.id] or 2)
+	end
+
+	local function scoreOf(e, owned, w)
+		local b = BY_ID[e.id]
+		local base
+		if b then
+			base = b.score * (w[b.kind] or 1)
+		else
+			base = RARITY_SCORE[e.rarity] or 1 -- boon added in a later update: rank by rarity
+		end
+		local boost = BUILD_BOOST[cfg.BOON_BUILD]
+		if boost and boost[e.id] then base = base + boost[e.id] end
+		if isMaxed(e, owned) then return base * 0.01 end
+		return base * (FALLOFF ^ (owned[e.id] or 0)) -- a second copy is worth less than a first
+	end
+
+	local function choose(list, owned)
+		local w = currentWeights()
+
+		-- 1) Prefer Legendary
+		if cfg.BOON_LEGENDARY then
+			local bestL, bs
+			for _, e in ipairs(list) do
+				local b = BY_ID[e.id]
+				local isLeg = (b and b.rarity == "Legendary") or e.rarity == "Legendary"
+				if isLeg and not isMaxed(e, owned) then
+					local sc = scoreOf(e, owned, w)
+					if not bs or sc > bs then bestL, bs = e, sc end
+				end
+			end
+			if bestL then return bestL, "legendary" end
+		end
+
+		-- 2) your priority list: the first listed boon that is offered (until its stack limit)
+		for _, id in ipairs(cfg.BOON_PRIORITY) do
+			for _, e in ipairs(list) do
+				if e.id == id and not isMaxed(e, owned) then return e, "priority" end
+			end
+		end
+
+		-- 3) the build's scores
+		local best, bs
+		for _, e in ipairs(list) do
+			local sc = scoreOf(e, owned, w)
+			if not bs or sc > bs then best, bs = e, sc end
+		end
+		return best, "build"
+	end
+
+	local function getRemote()
+		if pickRemote and pickRemote.Parent then return pickRemote end
+		local r = remotes and remotes:FindFirstChild("BoonPick")
+		if not r then
+			for _, o in ipairs(RS:GetDescendants()) do
+				if o.Name == "BoonPick" and o:IsA("RemoteEvent") then
+					r = o
+					break
+				end
+			end
+		end
+		pickRemote = r
+		return r
+	end
+
+	local function handleOffer(list, source)
+		if not cfg.BOON_ENABLED or #list == 0 then return end
+
+		local owned = ownedStacks()
+		local best, why = choose(list, owned)
+		if not best then return end
+
+		local shown = {}
+		for _, e in ipairs(list) do
+			local have = owned[e.id] or 0
+			shown[#shown + 1] = e.id .. (have > 0 and ("(have " .. have .. ")") or "")
+		end
+		bdbg(source, "offer:", table.concat(shown, ", "), "->", best.id, "[" .. why .. "]")
+
+		local delay = cfg.BOON_INSTANT and 0.05 or (PICK_DELAY_MIN + math.random() * (PICK_DELAY_MAX - PICK_DELAY_MIN))
+		local fireAt = math.max(os.clock() + delay, lastFire + 1.5) -- never two picks at once
+		lastFire = fireAt
+
+		task.delay(fireAt - os.clock(), function()
+			if not alive or not cfg.BOON_ENABLED then return end
+			local r = getRemote()
+			if not r then
+				bdbg("Remotes.BoonPick not found")
+				return
+			end
+			local ok, err = pcall(function() r:FireServer(best.id) end)
+			if not ok then bdbg("pick failed: " .. tostring(err)) end
+		end)
+	end
+
+	-- ---- detect offers: server -> client events ----
+	local budget = 0
+	local EVENTS = { boonOffer = true, boonPicked = true, matchStart = true,
+		arenaWaiting = true, entryCinematic = true, matchEnd = true }
+
+	local function walk(v, d)
+		if type(v) ~= "table" or d > 3 or budget <= 0 then return nil end
+		budget = budget - 1
+		if EVENTS[v.type] then return v end
+		for _, x in pairs(v) do
+			local r = walk(x, d + 1)
+			if r then return r end
+		end
+		return nil
+	end
+
+	local function handleEvent(ev)
+		if ev.type == "matchStart" or ev.type == "arenaWaiting" or ev.type == "entryCinematic" or ev.type == "matchEnd" then
+			table.clear(tracked) -- new run: your boons reset
+			return
+		end
+
+		local uid = tonumber(ev.userId)
+		if uid ~= nil and uid ~= lp.UserId then return end
+
+		if ev.type == "boonPicked" then
+			local id = ev.boonId or ev.id
+			if type(id) == "string" then tracked[id] = (tracked[id] or 0) + 1 end
+			bdbg("server confirmed:", tostring(id), ev.auto and "(auto pick)" or "")
+			return
+		end
+
+		local src = ev.boons or ev.choices or ev.options or ev.offer or ev.ids
+		if type(src) ~= "table" then return end
+
+		local list, keys = {}, {}
+		for _, e in ipairs(src) do
+			local id
+			if type(e) == "string" then
+				id = e
+			elseif type(e) == "table" then
+				id = e.id or e.boonId
+			end
+			if type(id) == "string" then
+				list[#list + 1] = { id = id, rarity = type(e) == "table" and e.rarity or nil }
+				keys[#keys + 1] = id
+			end
+		end
+		if #list == 0 then return end
+
+		-- ignore the same offer if it is replayed
+		local key = tostring(ev.endsAt) .. "|" .. table.concat(keys, ",")
+		if seenOffers[key] and os.clock() - seenOffers[key] < 30 then return end
+		seenOffers[key] = os.clock()
+		for k, t in pairs(seenOffers) do -- keep this table small on long grinds
+			if os.clock() - t > 60 then seenOffers[k] = nil end
+		end
+
+		remoteSeenAt = os.clock()
+		handleOffer(list, "remote")
+	end
+
+	local function onRemote(...)
+		for i = 1, select("#", ...) do
+			budget = 120
+			local ev = walk((select(i, ...)), 0)
+			if ev then
+				handleEvent(ev)
+				return
+			end
+		end
+	end
+
+	local function watch(r)
+		if not r:IsA("RemoteEvent") then return end
+		boonConns[#boonConns + 1] = r.OnClientEvent:Connect(function(...)
+			pcall(onRemote, ...)
+		end)
+	end
+
+	-- ---- fallback: read the choice screen if no offer event was ever seen ----
+	local function guiPoll()
+		if os.clock() - remoteSeenAt < 40 then return end
+		local pg = lp:FindFirstChild("PlayerGui")
+		local fr = pg and pg:FindFirstChild("BoonChoice", true)
+		if not fr or handledFrames[fr] then return end
+
+		local list = {}
+		for _, d in ipairs(fr:GetDescendants()) do
+			if d:IsA("TextButton") and string.match(d.Name, "^Card%d+$") then
+				local lbl = d:FindFirstChild("Name", true)
+				local b = lbl and lbl:IsA("TextLabel") and BY_NAME[norm(lbl.Text)]
+				if b then list[#list + 1] = { id = b.id, rarity = b.rarity } end
+			end
+		end
+		if #list == 0 then return end
+
+		handledFrames[fr] = true
+		handleOffer(list, "screen")
+	end
+
+	-- idempotent: safe to call any number of times, never creates duplicates
+	applyBoon = function()
+		for _, c in ipairs(boonConns) do pcall(function() c:Disconnect() end) end
+		table.clear(boonConns)
+		if boonThread then pcall(task.cancel, boonThread) boonThread = nil end
+		if not (alive and cfg.BOON_ENABLED) then return end
+
+		for _, o in ipairs(RS:GetDescendants()) do watch(o) end
+		boonConns[#boonConns + 1] = RS.DescendantAdded:Connect(watch)
+		boonThread = task.spawn(function()
+			while alive and cfg.BOON_ENABLED do
+				task.wait(0.5)
+				pcall(guiPoll)
+			end
+		end)
+	end
+
+end
+
+-- ---- Boons tab ----
+do
+	local BOONS, MAXSTACK, BY_ID, BUILD_DESC = boonInfo.BOONS, boonInfo.MAXSTACK, boonInfo.BY_ID, boonInfo.BUILD_DESC
+	local SELROW = Color3.fromRGB(40, 95, 62)
+	local GOLD = Color3.fromRGB(255, 205, 120)
+	local RARITY_COLOR = {
+		Legendary = Color3.fromRGB(255, 170, 40),
+		Epic = Color3.fromRGB(190, 120, 255),
+		Rare = Color3.fromRGB(100, 165, 255),
+		Common = Color3.fromRGB(205, 205, 205),
+	}
+
+	local function addLabel(parent, props)
+		local l = Instance.new("TextLabel")
+		l.BackgroundTransparency = 1
+		l.Font = Enum.Font.Gotham
+		l.TextSize = 13
+		l.TextColor3 = TEXT
+		for k, v in pairs(props) do l[k] = v end
+		l.Parent = parent
+		return l
+	end
+
+	makeToggle(boonsPage, "Auto Boon", "BOON_ENABLED", applyBoon)
+
+	-- build selector: tap to cycle
+	local buildRow = newRow(boonsPage, 34, "TextButton")
+	buildRow.Text = ""
+	buildRow.AutoButtonColor = false
+	addLabel(buildRow, { Size = UDim2.new(0.5, 0, 1, 0), Position = UDim2.fromOffset(10, 0),
+		Text = "Boon build", TextXAlignment = Enum.TextXAlignment.Left })
+	local buildVal = addLabel(buildRow, { Size = UDim2.new(0.5, -10, 1, 0), Position = UDim2.new(0.5, 0, 0, 0),
+		TextColor3 = ACCENT, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Right })
+
+	local descRow = newRow(boonsPage, 34)
+	local descLbl = addLabel(descRow, { Size = UDim2.new(1, -16, 1, 0), Position = UDim2.fromOffset(8, 0),
+		TextColor3 = DIM, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left })
+
+	makeToggle(boonsPage, "Pick instantly", "BOON_INSTANT")
+	makeToggle(boonsPage, "Prefer Legendary", "BOON_LEGENDARY")
+
+	-- collapsible priority section
+	local expanded = true
+	local group = {}   -- rows hidden when the section is collapsed
+	local headRow = newRow(boonsPage, 34, "TextButton")
+	headRow.Text = ""
+	headRow.AutoButtonColor = false
+	local headLbl = addLabel(headRow, { Size = UDim2.new(0.65, 0, 1, 0), Position = UDim2.fromOffset(10, 0),
+		Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left })
+	local headCount = addLabel(headRow, { Size = UDim2.new(0.35, -10, 1, 0), Position = UDim2.new(0.65, 0, 0, 0),
+		TextColor3 = DIM, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Right })
+
+	local sumRow = newRow(boonsPage, 40)
+	local sumLbl = addLabel(sumRow, { Size = UDim2.new(1, -16, 1, 0), Position = UDim2.fromOffset(8, 0),
+		TextColor3 = GOLD, TextSize = 11, TextWrapped = true, TextTruncate = Enum.TextTruncate.AtEnd,
+		TextXAlignment = Enum.TextXAlignment.Left })
+
+	local hintRow = newRow(boonsPage, 52)
+	addLabel(hintRow, { Size = UDim2.new(1, -16, 1, 0), Position = UDim2.fromOffset(8, 0),
+		Text = "Tap boons in the order you want them (1 = most wanted). Tap again to remove. If none of the offered boons are listed, the build decides.",
+		TextColor3 = DIM, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left })
+	group[#group + 1] = hintRow
+
+	local clearRow = newRow(boonsPage, 30, "TextButton")
+	clearRow.Text = "Clear priority list"
+	clearRow.TextColor3 = TEXT
+	clearRow.Font = Enum.Font.GothamBold
+	clearRow.TextSize = 12
+	clearRow.AutoButtonColor = false
+	group[#group + 1] = clearRow
+
+	local refresh
+	local rowRefs = {}
+	local sorted = {}
+	for _, b in ipairs(BOONS) do sorted[#sorted + 1] = b end
+	local RANK = { Legendary = 1, Epic = 2, Rare = 3, Common = 4 }
+	table.sort(sorted, function(a, b)
+		if RANK[a.rarity] ~= RANK[b.rarity] then return RANK[a.rarity] < RANK[b.rarity] end
+		return a.name < b.name
+	end)
+
+	for _, b in ipairs(sorted) do
+		local row = newRow(boonsPage, 28, "TextButton")
+		row.Text = ""
+		row.AutoButtonColor = false
+		addLabel(row, { Size = UDim2.new(1, -40, 1, 0), Position = UDim2.fromOffset(10, 0),
+			Text = b.name .. "  (max " .. (MAXSTACK[b.id] or 2) .. ")", TextSize = 12,
+			TextColor3 = RARITY_COLOR[b.rarity] or TEXT, TextXAlignment = Enum.TextXAlignment.Left })
+		local badge = addLabel(row, { Size = UDim2.fromOffset(26, 28), Position = UDim2.new(1, -30, 0, 0),
+			Font = Enum.Font.GothamBold, TextSize = 14 })
+		rowRefs[b.id] = { row = row, badge = badge }
+		group[#group + 1] = row
+
+		track(row.MouseButton1Click:Connect(function()
+			local idx = table.find(cfg.BOON_PRIORITY, b.id)
+			if idx then
+				table.remove(cfg.BOON_PRIORITY, idx)
+			else
+				table.insert(cfg.BOON_PRIORITY, b.id)
+			end
+			scheduleSave()
+			refresh()
+		end))
+	end
+
+	local function setExpanded(v)
+		expanded = v
+		for _, r in ipairs(group) do r.Visible = v end
+		headLbl.Text = (v and "▼  " or "▶  ") .. "Priority list"
+	end
+
+	refresh = function()
+		buildVal.Text = cfg.BOON_BUILD .. "  ▸"
+		descLbl.Text = BUILD_DESC[cfg.BOON_BUILD] or ""
+		headCount.Text = #cfg.BOON_PRIORITY .. " picked  (tap to " .. (expanded and "hide)" or "show)")
+		local parts = {}
+		for i, id in ipairs(cfg.BOON_PRIORITY) do
+			local b = BY_ID[id]
+			parts[#parts + 1] = i .. ". " .. (b and b.name or id)
+		end
+		sumLbl.Text = #parts > 0 and ("Order: " .. table.concat(parts, ", ")) or "Order: none (the build decides)"
+		for id, r in pairs(rowRefs) do
+			local idx = table.find(cfg.BOON_PRIORITY, id)
+			r.badge.Text = idx and tostring(idx) or ""
+			r.row.BackgroundColor3 = idx and SELROW or ROW
+		end
+	end
+
+	track(buildRow.MouseButton1Click:Connect(function()
+		local i = table.find(BOON_BUILDS, cfg.BOON_BUILD) or 1
+		cfg.BOON_BUILD = BOON_BUILDS[(i % #BOON_BUILDS) + 1]
+		scheduleSave()
+		refresh()
+	end))
+	track(headRow.MouseButton1Click:Connect(function()
+		setExpanded(not expanded)
+		refresh()
+	end))
+	track(clearRow.MouseButton1Click:Connect(function()
+		table.clear(cfg.BOON_PRIORITY)
+		scheduleSave()
+		refresh()
+	end))
+
+	setExpanded(true)
+	refresh()
+end
+
 -- ============ start ============
 selectTab("Ability")
 updateIcon()
 applyKillAura()  -- resumes Kill Aura if it was saved ON
 applyAntiAfk()   -- resumes Anti-AFK if it was saved ON
+applyBoon()      -- resumes Auto Boon if it was saved ON
